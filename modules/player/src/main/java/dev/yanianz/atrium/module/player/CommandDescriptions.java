@@ -9,7 +9,6 @@ final class CommandDescriptions {
             Map.entry("god", "Toggle god mode (no damage) for yourself or another player"),
             Map.entry("extinguish", "Put out the fire on yourself or another player"),
             Map.entry("suicide", "Kill yourself or another player"),
-            Map.entry("ping", "Show the connection latency of yourself or another player"),
             Map.entry("hat", "Wear the held item as a hat"),
             Map.entry("lightning", "Strike lightning at your location or at another player"),
             Map.entry("gamemode", "Change the game mode of yourself or another player"),

@@ -51,10 +51,10 @@ final class PlayerCommands implements Listener, TaskHandle {
 
     void register() {
         for (String name : List.of("feed", "god", "gamemode", "speed", "hat", "repair",
-                "extinguish", "suicide", "ping", "burn", "lightning", "exp")) {
-            ctx.permission("atrium." + name, name.equals("ping") ? PermissionDefault.TRUE : PermissionDefault.OP,
+                "extinguish", "suicide", "burn", "lightning", "exp")) {
+            ctx.permission("atrium." + name, PermissionDefault.OP,
                     "Use /" + name);
-            ctx.permission("atrium." + name + ".others", name.equals("ping") ? PermissionDefault.TRUE : PermissionDefault.OP,
+            ctx.permission("atrium." + name + ".others", PermissionDefault.OP,
                     "Use /" + name + " on other players");
         }
         for (GameMode mode : GameMode.values()) {
@@ -84,7 +84,6 @@ final class PlayerCommands implements Listener, TaskHandle {
             if (!p.isDead()) { reply(s, "cancelled"); return; }
             done(s, p, "suicide");
         });
-        simple("ping", (s, p) -> reply(s, "ping", Msg.unparsed("player", p.getName()), Msg.number("ping", p.getPing())));
         simple("hat", this::hat);
         simple("lightning", (s, p) -> {
             var location = p.getLocation();

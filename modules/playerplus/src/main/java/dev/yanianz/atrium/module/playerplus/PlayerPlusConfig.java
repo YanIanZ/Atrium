@@ -88,7 +88,7 @@ public class PlayerPlusConfig {
                 + "/minecraft:msg but not /msgtoggle; 'mail send' allows that sub command only. A leading\n"
                 + "slash and upper case are ignored.")
         public List<String> allowedCommands = new ArrayList<>(List.of(
-                "msg", "tell", "w", "whisper", "m", "t", "pm", "r", "reply", "help", "helpop", "rules", "ping"));
+                "msg", "tell", "w", "whisper", "m", "t", "pm", "r", "reply", "help", "helpop", "rules"));
 
         @Comment("Minimum milliseconds between two 'you are cuffed' notices, so movement spam cannot flood chat.")
         public long noticeCooldownMillis = 2_000;

@@ -28,7 +28,6 @@ burn: "<prefix><success>Kamu akan terbakar selama <highlight><seconds></highligh
 burn-other: "<prefix><success><highlight><player></highlight> akan terbakar selama <highlight><seconds></highlight> detik."
 exp-changed: "<prefix><success>Pengalaman diperbarui: <highlight><levels></highlight> level, <highlight><points></highlight> poin."
 exp-changed-other: "<prefix><success>Pengalaman <highlight><player></highlight>: <highlight><levels></highlight> level, <highlight><points></highlight> poin."
-ping: "<prefix><muted>Ping <highlight><player></highlight>: <highlight><ping> ms</highlight>."
 exp-show: "<prefix><muted>Pengalaman <highlight><player></highlight>: <highlight><levels></highlight> level, <highlight><points></highlight> poin."
 failed: "<prefix><error>Perintah gagal. Kesalahannya sudah dicatat untuk staf server."
 target-left: "<prefix><error>Pemain tujuan keluar sebelum perintah dijalankan."

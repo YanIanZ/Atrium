@@ -28,7 +28,6 @@ burn: "<prefix><success>You will burn for <highlight><seconds></highlight> secon
 burn-other: "<prefix><success><highlight><player></highlight> will burn for <highlight><seconds></highlight> seconds."
 exp-changed: "<prefix><success>Experience updated: <highlight><levels></highlight> levels, <highlight><points></highlight> points."
 exp-changed-other: "<prefix><success>Experience of <highlight><player></highlight>: <highlight><levels></highlight> levels, <highlight><points></highlight> points."
-ping: "<prefix><muted>Ping of <highlight><player></highlight>: <highlight><ping> ms</highlight>."
 exp-show: "<prefix><muted>Experience of <highlight><player></highlight>: <highlight><levels></highlight> levels, <highlight><points></highlight> points."
 failed: "<prefix><error>The command failed. The error was logged for the server staff."
 target-left: "<prefix><error>The target player disconnected before the command ran."

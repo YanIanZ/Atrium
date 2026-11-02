@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class CommandDescriptionsTest {
     @Test
     void everyCommandOfTheModuleIsDescribed() {
-        for (String command : List.of("feed", "god", "extinguish", "suicide", "ping", "hat", "lightning", "gamemode",
+        for (String command : List.of("feed", "god", "extinguish", "suicide", "hat", "lightning", "gamemode",
                 "gmc", "gms", "gma", "gmsp", "speed", "repair", "burn", "exp", "workbench", "anvil", "grindstone",
                 "stonecutter", "loom", "cartographytable", "smithingtable", "clear", "near", "skull", "more",
                 "itemname", "lore", "enderchest", "invsee")) {
