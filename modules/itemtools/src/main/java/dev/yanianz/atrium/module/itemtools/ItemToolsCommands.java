@@ -16,12 +16,16 @@ import dev.yanianz.atrium.core.scheduler.Scheduler;
 import dev.yanianz.atrium.core.scheduler.TaskHandle;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
+import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.datacomponent.DataComponentTypes;
 import io.papermc.paper.datacomponent.item.CustomModelData;
 import io.papermc.paper.datacomponent.item.TooltipDisplay;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -47,21 +51,27 @@ import org.bukkit.util.RayTraceResult;
 
 /** /itemcmdata, /hideflags, /glow, /condense, /dispose, /giveall, /getbook, /itemframe and /repaircost. */
 final class ItemToolsCommands implements Listener, TaskHandle {
-    private record GiveAllConfirmation(Material material, int amount, long expires) { }
+    /** A confirmed /giveall: only the fingerprint and the expiry, the item is rebuilt from the command. */
+    private record GiveAllConfirmation(String fingerprint, long expires) { }
 
     private final ModuleContext ctx;
     private final Cmds cmds;
     private final ConfigHandle<ItemToolsConfig> config;
+    private final ItemSupport support;
+    private final GiveAllQueue giveAllQueue;
     private final DisposeGui dispose;
     private final DonateService donate;
     /** Sender key (UUID or "console") -> pending /giveall confirmation. */
     private final Map<String, GiveAllConfirmation> giveAllConfirmations = new ConcurrentHashMap<>();
     private volatile boolean cancelled;
 
-    ItemToolsCommands(ModuleContext ctx, ConfigHandle<ItemToolsConfig> config) {
+    ItemToolsCommands(ModuleContext ctx, ConfigHandle<ItemToolsConfig> config, ItemSupport support,
+            GiveAllQueue giveAllQueue) {
         this.ctx = ctx;
         this.cmds = ctx.commands();
         this.config = config;
+        this.support = support;
+        this.giveAllQueue = giveAllQueue;
         this.dispose = new DisposeGui(ctx);
         this.donate = new DonateService(ctx, config);
     }
@@ -84,46 +94,23 @@ final class ItemToolsCommands implements Listener, TaskHandle {
     }
 
     private void register(LiteralArgumentBuilder<CommandSourceStack> node, String description) {
-        ctx.command(CommandSpec.of(node.build(), description));
+        support.register(node, description);
     }
 
     private int usage(CommandContext<CommandSourceStack> c, String key) throws CommandSyntaxException {
-        throw cmds.fail(c.getSource(), "itemtools." + key);
+        return support.usage(c, key);
     }
 
     private void onPlayer(Player player, Runnable action) {
-        ctx.scheduler().entity(player, () -> {
-            if (cancelled) {
-                return;
-            }
-            try {
-                action.run();
-            } catch (RuntimeException e) {
-                ctx.logger().error("Item command failed for {}", player.getUniqueId(), e);
-                replyNow(player, "failed");
-            }
-        }, null);
+        support.onPlayer(player, action);
     }
 
     private void reply(CommandSender sender, String key, TagResolver... tags) {
-        if (cancelled) {
-            return;
-        }
-        if (sender instanceof Player player) {
-            ctx.scheduler().entity(player, () -> {
-                if (!cancelled) {
-                    ctx.messages().send(player, "itemtools." + key, tags);
-                }
-            }, null);
-        } else {
-            ctx.messages().send(sender, "itemtools." + key, tags);
-        }
+        support.reply(sender, key, tags);
     }
 
     private void replyNow(Player player, String key, TagResolver... tags) {
-        if (!cancelled) {
-            ctx.messages().send(player, "itemtools." + key, tags);
-        }
+        support.replyNow(player, key, tags);
     }
 
     private void sendTo(Player player, String key, TagResolver... tags) {
@@ -369,67 +356,141 @@ final class ItemToolsCommands implements Listener, TaskHandle {
     }
 
     private void registerGiveall() {
+        var amount = Commands.argument("amount", IntegerArgumentType.integer(1));
+        var offline = Cmds.literal("offline", "atrium.giveall.offline");
+        var hand = Cmds.literal("hand", "atrium.giveall")
+                .executes(c -> giveallHand(c, 1, false))
+                .then(amount
+                        .executes(c -> giveallHand(c, IntegerArgumentType.getInteger(c, "amount"), false))
+                        .then(offline.executes(c -> giveallHand(c,
+                                IntegerArgumentType.getInteger(c, "amount"), true))))
+                .then(offline.executes(c -> giveallHand(c, 1, true)));
+        var from = Cmds.literal("from", "atrium.giveall")
+                .then(Commands.argument("target", ArgumentTypes.player())
+                        .executes(c -> giveallFrom(c, 1, false))
+                        .then(amount
+                                .executes(c -> giveallFrom(c, IntegerArgumentType.getInteger(c, "amount"), false))
+                                .then(offline.executes(c -> giveallFrom(c,
+                                        IntegerArgumentType.getInteger(c, "amount"), true)))));
         var item = Commands.argument("item", StringArgumentType.word()).suggests(itemSuggestions());
         register(Cmds.literal("giveall", "atrium.giveall")
                         .executes(c -> usage(c, "usage.giveall"))
-                        .then(item.executes(c -> giveall(c, 1))
-                                .then(Commands.argument("amount", IntegerArgumentType.integer(1))
-                                        .executes(c -> giveall(c, IntegerArgumentType.getInteger(c, "amount"))))),
-                "Give an item to every online player");
+                        .then(hand)
+                        .then(from)
+                        .then(item
+                                .executes(c -> giveallItem(c, 1, false))
+                                .then(amount
+                                        .executes(c -> giveallItem(c, IntegerArgumentType.getInteger(c, "amount"),
+                                                false))
+                                        .then(offline.executes(c -> giveallItem(c,
+                                                IntegerArgumentType.getInteger(c, "amount"), true))))
+                                .then(offline.executes(c -> giveallItem(c, 1, true)))),
+                "Give an item to every online player, or queue it for offline players");
     }
 
     private static SuggestionProvider<CommandSourceStack> itemSuggestions() {
         return Cmds.suggest(ItemValues::itemNames);
     }
 
-    private int giveall(CommandContext<CommandSourceStack> c, int amount) throws CommandSyntaxException {
+    private int giveallItem(CommandContext<CommandSourceStack> c, int amount, boolean offline)
+            throws CommandSyntaxException {
         String itemName = StringArgumentType.getString(c, "item");
         Material material = Material.matchMaterial(itemName);
-        if (material == null || !material.isItem()) {
+        if (material == null) {
             throw cmds.fail(c.getSource(), "itemtools.giveall-invalid-item", Msg.unparsed("item", itemName));
+        }
+        giveallTemplate(c.getSource().getSender(), new ItemStack(material), amount, offline);
+        return Cmds.OK;
+    }
+
+    /** {@code /giveall hand}: copies the sender's own held stack (read on the sender's thread). */
+    private int giveallHand(CommandContext<CommandSourceStack> c, int amount, boolean offline)
+            throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        giveallTemplate(player, player.getInventory().getItemInMainHand().clone(), amount, offline);
+        return Cmds.OK;
+    }
+
+    /** {@code /giveall from <player>}: copies another player's held stack on their own thread. */
+    private int giveallFrom(CommandContext<CommandSourceStack> c, int amount, boolean offline)
+            throws CommandSyntaxException {
+        Player target = cmds.argPlayer(c, "target");
+        CommandSender sender = c.getSource().getSender();
+        ctx.scheduler().supplyOnEntity(target, () -> target.getInventory().getItemInMainHand().clone())
+                .whenComplete((item, error) -> {
+                    if (error != null) {
+                        if (!isRetired(error)) {
+                            support.failed(sender, "Reading the hand of " + target.getName(), error);
+                        }
+                        return;
+                    }
+                    giveallTemplate(sender, item, amount, offline);
+                });
+        return Cmds.OK;
+    }
+
+    /** Validates, asks for confirmation when needed, then hands the stack (or the queue) on. */
+    private void giveallTemplate(CommandSender sender, ItemStack template, int amount, boolean offline) {
+        if (template == null || template.isEmpty()) {
+            reply(sender, "giveall-empty-hand");
+            return;
         }
         int maximum = config.get().maxGiveallAmount();
         if (amount < 1 || amount > maximum) {
-            throw cmds.fail(c.getSource(), "itemtools.giveall-invalid-amount", Msg.number("max", maximum));
+            reply(sender, "giveall-invalid-amount", Msg.number("max", maximum));
+            return;
         }
-        CommandSender sender = c.getSource().getSender();
+        if (offline && !sender.hasPermission("atrium.giveall.offline")) {
+            reply(sender, "giveall-no-offline");
+            return;
+        }
+        String fingerprint;
+        try {
+            fingerprint = Base64.getEncoder()
+                    .encodeToString(ItemStack.serializeItemsAsBytes(ItemValues.copies(template, amount)));
+        } catch (RuntimeException e) {
+            support.failed(sender, "Fingerprinting the /giveall item", e);
+            return;
+        }
         String key = sender instanceof Player player ? player.getUniqueId().toString() : "console";
         int seconds = config.get().confirmationSeconds();
         if (amount > config.get().confirmAbove()) {
             long now = System.nanoTime();
             GiveAllConfirmation old = giveAllConfirmations.remove(key);
-            if (old == null || old.material() != material || old.amount() != amount || now - old.expires() >= 0) {
-                GiveAllConfirmation pending = new GiveAllConfirmation(material, amount,
+            if (old == null || !old.fingerprint().equals(fingerprint) || now - old.expires() >= 0) {
+                GiveAllConfirmation pending = new GiveAllConfirmation(fingerprint,
                         now + TimeUnit.SECONDS.toNanos(seconds));
                 giveAllConfirmations.put(key, pending);
                 ctx.track(ctx.scheduler().globalLater(() -> giveAllConfirmations.remove(key, pending), seconds * 20L));
-                reply(sender, "giveall-confirm", Msg.number("amount", amount), Msg.component("item", itemName(material)),
-                        Msg.number("seconds", seconds));
-                return Cmds.OK;
+                reply(sender, "giveall-confirm", Msg.number("amount", amount),
+                        Msg.component("item", template.effectiveName()), Msg.number("seconds", seconds),
+                        Msg.component("scope", scope(sender, offline)));
+                return;
             }
         } else {
             giveAllConfirmations.remove(key);
         }
-        executeGiveall(sender, material, amount);
-        return Cmds.OK;
+        executeGiveall(sender, template, amount, offline);
     }
 
-    private void executeGiveall(CommandSender sender, Material material, int amount) {
+    private Component scope(CommandSender sender, boolean offline) {
+        return ctx.messages().render(sender, offline ? "itemtools.giveall-scope-offline"
+                : "itemtools.giveall-scope-online");
+    }
+
+    private void executeGiveall(CommandSender sender, ItemStack template, int amount, boolean offline) {
+        List<ItemStack> perPlayer = ItemValues.copies(template, amount);
         List<Player> players = List.copyOf(Bukkit.getOnlinePlayers());
-        if (players.isEmpty()) {
-            reply(sender, "giveall-none");
-            return;
-        }
         List<CompletableFuture<Boolean>> futures = players.stream()
                 .map(player -> ctx.scheduler().supplyOnEntity(player, () -> {
                     if (cancelled || !player.isOnline()) {
                         return false;
                     }
-                    ItemValues.giveOrDrop(player, ItemValues.stacks(material, amount));
+                    ItemValues.giveOrDrop(player, copyOf(perPlayer));
                     return true;
                 }).exceptionally(error -> {
                     if (!isRetired(error)) {
-                        ctx.logger().warn("Giving {} x{} to {} failed", material, amount, player.getUniqueId(), error);
+                        ctx.logger().warn("Giving the /giveall item to {} failed", player.getUniqueId(), error);
                     }
                     return false;
                 }))
@@ -438,9 +499,48 @@ final class ItemToolsCommands implements Listener, TaskHandle {
             if (error != null) {
                 ctx.logger().error("Giveall task failed", error);
             }
-            int delivered = (int) futures.stream().filter(CompletableFuture::join).count();
-            reply(sender, "giveall-sent", Msg.number("players", delivered), Msg.number("amount", amount),
-                    Msg.component("item", itemName(material)));
+            long delivered = futures.stream().filter(CompletableFuture::join).count();
+            if (players.isEmpty()) {
+                reply(sender, "giveall-none");
+            } else {
+                reply(sender, "giveall-sent", Msg.number("players", delivered), Msg.number("amount", amount),
+                        Msg.component("item", template.effectiveName()));
+            }
+            if (offline) {
+                queueOffline(sender, template, amount, players);
+            }
+        });
+    }
+
+    /** Fresh copies for one recipient: never share a stack instance between two players. */
+    private static List<ItemStack> copyOf(List<ItemStack> stacks) {
+        return stacks.stream().map(ItemStack::clone).toList();
+    }
+
+    private void queueOffline(CommandSender sender, ItemStack template, int amount, List<Player> online) {
+        Set<UUID> onlineIds = online.stream().map(Player::getUniqueId).collect(java.util.stream.Collectors.toSet());
+        int limit = config.get().offlineLimit();
+        var known = ctx.users().knownAccounts(limit + onlineIds.size());
+        List<UUID> ids = known.stream().map(dev.yanianz.atrium.api.user.PlayerRef::uuid).toList();
+        List<UUID> targets = GiveAllTargets.offlineRecipients(ids, onlineIds, limit);
+        if (targets.isEmpty()) {
+            reply(sender, "giveall-offline-none");
+            return;
+        }
+        byte[] blob;
+        try {
+            blob = ItemStack.serializeItemsAsBytes(ItemValues.copies(template, amount));
+        } catch (RuntimeException e) {
+            support.failed(sender, "Serializing the /giveall item for offline players", e);
+            return;
+        }
+        giveAllQueue.enqueue(targets, blob).whenComplete((count, error) -> {
+            if (error != null) {
+                support.failed(sender, "Queuing the /giveall item for offline players", error);
+                return;
+            }
+            reply(sender, "giveall-queued", Msg.number("players", count), Msg.number("amount", amount),
+                    Msg.component("item", template.effectiveName()));
         });
     }
 
@@ -633,10 +733,6 @@ final class ItemToolsCommands implements Listener, TaskHandle {
             throw new IllegalArgumentException(what + " cannot be negative");
         }
         return value;
-    }
-
-    private static Component itemName(Material material) {
-        return Component.translatable(material);
     }
 
     @EventHandler

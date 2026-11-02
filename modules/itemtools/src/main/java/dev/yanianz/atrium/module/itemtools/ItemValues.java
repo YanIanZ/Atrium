@@ -68,15 +68,25 @@ final class ItemValues {
 
     /** Splits an amount into stacks that respect the material's maximum stack size. */
     static List<ItemStack> stacks(Material material, int amount) {
-        if (amount <= 0) {
+        return copies(new ItemStack(material), amount);
+    }
+
+    /**
+     * Splits {@code amount} copies of a template into stacks that respect its maximum stack size. Every
+     * stack is a fresh clone, so the template and the recipients never share an instance.
+     */
+    static List<ItemStack> copies(ItemStack template, int amount) {
+        if (template == null || template.isEmpty() || amount <= 0) {
             return List.of();
         }
-        int max = Math.max(1, material.getMaxStackSize());
+        int max = Math.max(1, template.getMaxStackSize());
         java.util.ArrayList<ItemStack> stacks = new java.util.ArrayList<>();
         int remaining = amount;
         while (remaining > 0) {
             int size = Math.min(max, remaining);
-            stacks.add(new ItemStack(material, size));
+            ItemStack copy = template.clone();
+            copy.setAmount(size);
+            stacks.add(copy);
             remaining -= size;
         }
         return stacks;

@@ -62,6 +62,40 @@ class CondenseTableTest {
     }
 
     @Test
+    void reversePlanSplitsEveryWholeBlock() {
+        for (int ratio : new int[] {4, 9}) {
+            for (int available = 0; available <= 500; available++) {
+                CondenseTable.Plan plan = CondenseTable.reversePlan(available, ratio);
+                assertEquals(available, plan.consumed(), "every block is a complete group");
+                assertEquals((long) available * ratio, plan.produced(), "one block yields exactly one recipe");
+            }
+        }
+        assertEquals(new CondenseTable.Plan(0, 0), CondenseTable.reversePlan(-3, 9));
+        assertEquals(new CondenseTable.Plan(0, 0), CondenseTable.reversePlan(5, 7));
+    }
+
+    @Test
+    void reversePlanRejectsAmountsThatWouldOverflow() {
+        assertEquals(new CondenseTable.Plan(0, 0), CondenseTable.reversePlan(Integer.MAX_VALUE, 9));
+        assertEquals(new CondenseTable.Plan(0, 0), CondenseTable.reversePlan(Integer.MAX_VALUE / 4 + 1, 4));
+    }
+
+    @Test
+    void reverseLookupOnlyFindsWhitelistedBlocks() {
+        assertEquals(new CondenseTable.Recipe(Material.IRON_INGOT, Material.IRON_BLOCK, 9),
+                CondenseTable.reverseRecipeFor(Material.IRON_BLOCK).orElseThrow());
+        assertEquals(new CondenseTable.Recipe(Material.AMETHYST_SHARD, Material.AMETHYST_BLOCK, 4),
+                CondenseTable.reverseRecipeFor(Material.AMETHYST_BLOCK).orElseThrow());
+        // A condense input that is not a whitelisted block has no reverse recipe.
+        assertFalse(CondenseTable.reverseRecipeFor(Material.IRON_NUGGET).isPresent());
+        assertFalse(CondenseTable.reverseRecipeFor(Material.DIRT).isPresent());
+        assertEquals(CondenseTable.recipes().size(), CondenseTable.outputs().size());
+        for (Material output : CondenseTable.outputs()) {
+            assertTrue(CondenseTable.reverseRecipeFor(output).isPresent());
+        }
+    }
+
+    @Test
     void planRejectsInvalidConstruction() {
         assertThrows(IllegalArgumentException.class, () -> new CondenseTable.Recipe(Material.STONE, Material.STONE, 9));
         assertThrows(IllegalArgumentException.class, () -> new CondenseTable.Recipe(Material.STONE, Material.DIRT, 5));

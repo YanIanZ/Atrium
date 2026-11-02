@@ -74,17 +74,29 @@ final class CondenseTable {
             new Recipe(Material.HONEYCOMB, Material.HONEYCOMB_BLOCK, 4),
             new Recipe(Material.QUARTZ, Material.QUARTZ_BLOCK, 4));
 
-    private static final Map<Material, Recipe> BY_INPUT = index();
+    private static final Map<Material, Recipe> BY_INPUT = indexInput();
+    private static final Map<Material, Recipe> BY_OUTPUT = indexOutput();
 
     private CondenseTable() {
     }
 
-    private static Map<Material, Recipe> index() {
+    private static Map<Material, Recipe> indexInput() {
         Map<Material, Recipe> index = new LinkedHashMap<>();
         for (Recipe recipe : RECIPES) {
             Recipe previous = index.put(recipe.from(), recipe);
             if (previous != null) {
                 throw new IllegalStateException("Duplicate condense input: " + recipe.from());
+            }
+        }
+        return Map.copyOf(index);
+    }
+
+    private static Map<Material, Recipe> indexOutput() {
+        Map<Material, Recipe> index = new LinkedHashMap<>();
+        for (Recipe recipe : RECIPES) {
+            Recipe previous = index.put(recipe.to(), recipe);
+            if (previous != null) {
+                throw new IllegalStateException("Duplicate condense output: " + recipe.to());
             }
         }
         return Map.copyOf(index);
@@ -109,5 +121,31 @@ final class CondenseTable {
         }
         int consumed = (available / ratio) * ratio;
         return new Plan(consumed, consumed / ratio);
+    }
+
+    /** The recipe that turns a block back into the loose material (/uncondense). */
+    static Optional<Recipe> reverseRecipeFor(Material output) {
+        return Optional.ofNullable(BY_OUTPUT.get(output));
+    }
+
+    /** Every material /uncondense accepts, in whitelist order. */
+    static List<Material> outputs() {
+        return new ArrayList<>(BY_OUTPUT.keySet());
+    }
+
+    /**
+     * Splits whole blocks back into loose materials. Every single block is a complete group, so nothing is
+     * ever left over: {@code available} blocks become {@code available * ratio} items. Rejects an available
+     * amount that would overflow and never reports negative output.
+     */
+    static Plan reversePlan(int available, int ratio) {
+        if (available <= 0 || (ratio != 4 && ratio != 9)) {
+            return new Plan(0, 0);
+        }
+        long produced = (long) available * ratio;
+        if (produced > Integer.MAX_VALUE) {
+            return new Plan(0, 0);
+        }
+        return new Plan(available, (int) produced);
     }
 }
