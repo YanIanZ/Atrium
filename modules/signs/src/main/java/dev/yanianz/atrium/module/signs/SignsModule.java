@@ -12,16 +12,21 @@ import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import io.papermc.paper.command.brigadier.Commands;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.Bukkit;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
+import org.bukkit.Location;
 import org.bukkit.block.Sign;
 import org.bukkit.block.sign.Side;
 import org.bukkit.block.sign.SignSide;
@@ -49,11 +54,13 @@ public final class SignsModule implements AtriumModule, Listener {
     static final String PERM_COLOR = "atrium.signs.color";
     static final String PERM_FORMAT = "atrium.signs.format";
     static final String PERM_WAXED = "atrium.signs.waxed";
+    static final String PERM_DYNAMIC = "atrium.dsign";
 
     private ModuleContext ctx;
     private Cmds cmds;
     private ConfigHandle<SignsConfig> config;
     private final Map<UUID, SignClipboard> clipboards = new ConcurrentHashMap<>();
+    private DynamicSigns dynamicSigns;
 
     @Override
     public String id() {
@@ -78,6 +85,7 @@ public final class SignsModule implements AtriumModule, Listener {
         ctx.permission(PERM_COLOR, PermissionDefault.TRUE, "Use colour tags on signs");
         ctx.permission(PERM_FORMAT, PermissionDefault.TRUE, "Use decoration tags on signs");
         ctx.permission(PERM_WAXED, PermissionDefault.OP, "Edit or paste onto waxed signs");
+        ctx.permission(PERM_DYNAMIC, PermissionDefault.OP, "Create and change dynamic scrolling signs");
 
         ctx.command(CommandSpec.of(Cmds.literal("signedit", PERM_EDIT)
                 .executes(this::editUsage)
@@ -92,11 +100,36 @@ public final class SignsModule implements AtriumModule, Listener {
         ctx.command(CommandSpec.of(Cmds.literal("signpaste", PERM_PASTE)
                 .executes(this::paste)
                 .build(), "Paste a copied sign onto the sign you are looking at"));
+
+        Path dynamicFile = ctx.plugin().getDataPath().resolve("modules").resolve("signs")
+                .resolve("dynamic-signs.yml");
+        this.dynamicSigns = new DynamicSigns(ctx, config, dynamicFile);
+        try {
+            dynamicSigns.start();
+        } catch (java.io.IOException e) {
+            ctx.logger().warn("Dynamic signs could not be read; starting with none", e);
+        }
+        ctx.listen(dynamicSigns);
+        registerDynamicCommands();
+    }
+
+    @Override
+    public void reload() {
+        if (dynamicSigns != null) {
+            try {
+                dynamicSigns.start();
+            } catch (java.io.IOException e) {
+                ctx.logger().warn("Dynamic signs could not be re-read; keeping the previous ones", e);
+            }
+        }
     }
 
     @Override
     public void disable() {
         clipboards.clear();
+        if (dynamicSigns != null) {
+            dynamicSigns.stop();
+        }
     }
 
     // ---- formatting on placement ----
@@ -373,6 +406,231 @@ public final class SignsModule implements AtriumModule, Listener {
 
     private static boolean tooLong(List<Component> lines, int max) {
         return lines.stream().anyMatch(line -> SignText.exceeds(line, max));
+    }
+
+    // ---- dynamic signs (/dsign) ----
+
+    private void registerDynamicCommands() {
+        SuggestionProvider<CommandSourceStack> names = Cmds.suggest(() -> dynamicSigns == null
+                ? List.of() : dynamicSigns.store().names());
+        ctx.command(CommandSpec.of(Cmds.literal("dsign", PERM_DYNAMIC)
+                .executes(this::dynamicUsage)
+                .then(Cmds.literal("list").executes(this::dynamicList))
+                .then(Cmds.literal("info").then(Commands.argument("name", StringArgumentType.word())
+                        .suggests(names).executes(this::dynamicInfo)))
+                .then(Cmds.literal("create").then(Commands.argument("name", StringArgumentType.word())
+                        .executes(this::dynamicCreate)))
+                .then(Cmds.literal("remove").then(Commands.argument("name", StringArgumentType.word())
+                        .suggests(names).executes(this::dynamicRemove)))
+                .then(Cmds.literal("lines").then(Commands.argument("name", StringArgumentType.word())
+                        .suggests(names)
+                        .then(Commands.argument("lines", StringArgumentType.greedyString())
+                                .executes(this::dynamicLines))))
+                .then(Cmds.literal("interval").then(Commands.argument("name", StringArgumentType.word())
+                        .suggests(names)
+                        .then(Commands.argument("duration", StringArgumentType.word())
+                                .suggests(Cmds.suggest(() -> List.of("500ms", "1s", "2s", "5s")))
+                                .executes(this::dynamicInterval))))
+                .then(Cmds.literal("range").then(Commands.argument("name", StringArgumentType.word())
+                        .suggests(names)
+                        .then(Commands.argument("blocks", IntegerArgumentType.integer(1, 64))
+                                .suggests(Cmds.suggest(() -> List.of("8", "16", "24", "32")))
+                                .executes(this::dynamicRange))))
+                .then(Cmds.literal("personal").then(Commands.argument("name", StringArgumentType.word())
+                        .suggests(names)
+                        .then(Commands.argument("value", com.mojang.brigadier.arguments.BoolArgumentType.bool())
+                                .executes(this::dynamicPersonal))))
+                .then(Cmds.literal("reload").executes(this::dynamicReload))
+                .build(), "Create scrolling signs that only send packets to the players near them", "dynamicsigns"));
+    }
+
+    private int dynamicUsage(CommandContext<CommandSourceStack> c) {
+        ctx.messages().send(c.getSource().getSender(), "signs.dynamic-usage");
+        return Cmds.OK;
+    }
+
+    private int dynamicList(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        List<String> names = dynamicSigns.store().names();
+        if (names.isEmpty()) {
+            ctx.messages().send(sender, "signs.dynamic-list-empty");
+        } else {
+            ctx.messages().send(sender, "signs.dynamic-list", Msg.number("count", names.size()),
+                    Msg.unparsed("signs", String.join(", ", names)));
+        }
+        return Cmds.OK;
+    }
+
+    private int dynamicInfo(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        DynamicSignStore.DynamicSign sign = dynamicSigns.store().get(name).orElseThrow(() ->
+                cmds.fail(c.getSource(), "signs.dynamic-unknown", Msg.unparsed("name", name)));
+        ctx.messages().send(sender, "signs.dynamic-info", Msg.unparsed("name", sign.name()),
+                Msg.unparsed("location", sign.location()), Msg.number("range", sign.range()),
+                Msg.number("interval", sign.intervalMillis()),
+                Msg.unparsed("personal", Boolean.toString(sign.personal())),
+                Msg.number("lines", sign.lines().size()));
+        ctx.messages().send(sender, "signs.dynamic-info-lines",
+                Msg.unparsed("lines", SignScroll.join(sign.lines())));
+        return Cmds.OK;
+    }
+
+    private int dynamicCreate(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        if (!DynamicSignStore.validName(name)) {
+            throw cmds.fail(c.getSource(), "signs.dynamic-invalid-name");
+        }
+        if (dynamicSigns.store().get(name).isPresent()) {
+            throw cmds.fail(c.getSource(), "signs.dynamic-exists", Msg.unparsed("name", name));
+        }
+        if (dynamicSigns.store().all().size() >= config.get().dynamicSignsMax()) {
+            throw cmds.fail(c.getSource(), "signs.dynamic-limit", Msg.number("max", config.get().dynamicSignsMax()));
+        }
+        Block block = targetBlock(player);
+        if (block == null) {
+            throw cmds.fail(c.getSource(), "signs.no-sign", Msg.number("reach", reach()));
+        }
+        Location location = block.getLocation();
+        if (dynamicSigns.store().at(location.getWorld().getName(), location.getBlockX(), location.getBlockY(),
+                location.getBlockZ()).isPresent()) {
+            throw cmds.fail(c.getSource(), "signs.dynamic-occupied");
+        }
+        if (!(block.getState() instanceof Sign sign)) {
+            throw cmds.fail(c.getSource(), "signs.no-sign", Msg.number("reach", reach()));
+        }
+        DynamicSigns.SignSnapshot snapshot = DynamicSigns.snapshot(sign);
+        long interval = DynamicSigns.parseInterval(config.get().dynamicSignsDefaultInterval, config)
+                .orElse(1000L);
+        DynamicSignStore.DynamicSign created = new DynamicSignStore.DynamicSign(name, location.getWorld().getName(),
+                location.getBlockX(), location.getBlockY(), location.getBlockZ(),
+                SignScroll.sanitize(snapshot.lines()), interval, config.get().dynamicSignsDefaultRange(), true,
+                snapshot.color(), snapshot.glowing());
+        ctx.scheduler().supplyIo(() -> {
+            dynamicSigns.store().put(created);
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                ctx.logger().error("Dynamic sign '{}' could not be saved", name, error);
+                replyLater(player, "signs.dynamic-save-failed");
+                return;
+            }
+            dynamicSigns.restart();
+            replyLater(player, "signs.dynamic-created", Msg.unparsed("name", name),
+                    Msg.number("lines", created.lines().size()));
+        });
+        return Cmds.OK;
+    }
+
+    private int dynamicRemove(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        if (dynamicSigns.store().get(name).isEmpty()) {
+            throw cmds.fail(c.getSource(), "signs.dynamic-unknown", Msg.unparsed("name", name));
+        }
+        ctx.scheduler().supplyIo(() -> dynamicSigns.store().remove(name)).whenComplete((removed, error) -> {
+            if (error != null) {
+                ctx.logger().error("Dynamic sign '{}' could not be removed", name, error);
+                replyNow(sender, "signs.dynamic-save-failed");
+                return;
+            }
+            dynamicSigns.restart();
+            replyNow(sender, "signs.dynamic-removed", Msg.unparsed("name", name));
+        });
+        return Cmds.OK;
+    }
+
+    private int dynamicLines(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        DynamicSignStore.DynamicSign sign = dynamicSigns.store().get(name).orElseThrow(() ->
+                cmds.fail(c.getSource(), "signs.dynamic-unknown", Msg.unparsed("name", name)));
+        List<String> lines = SignScroll.sanitize(SignScroll.split(StringArgumentType.getString(c, "lines")));
+        if (lines.isEmpty() || lines.stream().allMatch(String::isBlank)) {
+            throw cmds.fail(c.getSource(), "signs.dynamic-empty-lines");
+        }
+        updateDynamic(sender, sign.withLines(lines), "signs.dynamic-lines-set", Msg.number("lines", lines.size()));
+        return Cmds.OK;
+    }
+
+    private int dynamicInterval(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        DynamicSignStore.DynamicSign sign = dynamicSigns.store().get(name).orElseThrow(() ->
+                cmds.fail(c.getSource(), "signs.dynamic-unknown", Msg.unparsed("name", name)));
+        String text = StringArgumentType.getString(c, "duration");
+        long interval = DynamicSigns.parseInterval(text, config).orElseThrow(() ->
+                cmds.fail(c.getSource(), "signs.dynamic-bad-interval", Msg.unparsed("value", text)));
+        updateDynamic(sender, sign.withInterval(interval), "signs.dynamic-interval-set",
+                Msg.number("interval", interval));
+        return Cmds.OK;
+    }
+
+    private int dynamicRange(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        DynamicSignStore.DynamicSign sign = dynamicSigns.store().get(name).orElseThrow(() ->
+                cmds.fail(c.getSource(), "signs.dynamic-unknown", Msg.unparsed("name", name)));
+        int range = IntegerArgumentType.getInteger(c, "blocks");
+        updateDynamic(sender, sign.withRange(range), "signs.dynamic-range-set", Msg.number("range", range));
+        return Cmds.OK;
+    }
+
+    private int dynamicPersonal(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        DynamicSignStore.DynamicSign sign = dynamicSigns.store().get(name).orElseThrow(() ->
+                cmds.fail(c.getSource(), "signs.dynamic-unknown", Msg.unparsed("name", name)));
+        boolean personal = com.mojang.brigadier.arguments.BoolArgumentType.getBool(c, "value");
+        updateDynamic(sender, sign.withPersonal(personal), "signs.dynamic-personal-set",
+                Msg.unparsed("value", Boolean.toString(personal)));
+        return Cmds.OK;
+    }
+
+    private int dynamicReload(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ctx.scheduler().supplyIo(() -> {
+            dynamicSigns.store().load();
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                ctx.logger().warn("Dynamic signs could not be reloaded", error);
+                replyNow(sender, "core.error");
+                return;
+            }
+            dynamicSigns.restart();
+            replyNow(sender, "signs.dynamic-reloaded", Msg.number("count", dynamicSigns.store().all().size()));
+        });
+        return Cmds.OK;
+    }
+
+    /** Saves a changed sign and replies only after the write succeeded. */
+    private void updateDynamic(CommandSender sender, DynamicSignStore.DynamicSign sign, String key, TagResolver... tags) {
+        ctx.scheduler().supplyIo(() -> {
+            dynamicSigns.store().put(sign);
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                ctx.logger().error("Dynamic sign '{}' could not be saved", sign.name(), error);
+                replyNow(sender, "signs.dynamic-save-failed");
+                return;
+            }
+            dynamicSigns.restart();
+            replyNow(sender, key, tags);
+        });
+    }
+
+    private void replyNow(CommandSender sender, String key, TagResolver... tags) {
+        if (sender instanceof Player player) {
+            replyLater(player, key, tags);
+        } else {
+            ctx.messages().send(sender, key, tags);
+        }
+    }
+
+    private void replyLater(Player player, String key, TagResolver... tags) {
+        ctx.scheduler().entity(player, () -> ctx.messages().send(player, key, tags), null);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

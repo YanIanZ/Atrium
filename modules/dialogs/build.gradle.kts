@@ -9,4 +9,6 @@ dependencies {
     // hook is instantiated only when the floodgate plugin is enabled (see FloodgateDialogs).
     compileOnly("org.geysermc.floodgate:api:2.2.5-SNAPSHOT") { isTransitive = false }
     compileOnly("org.geysermc.cumulus:cumulus:1.1.2")
+    // Optional: %placeholder% dialog conditions. Loaded only when PlaceholderAPI is enabled at runtime.
+    compileOnly(libs.placeholderapi) { isTransitive = false }
 }

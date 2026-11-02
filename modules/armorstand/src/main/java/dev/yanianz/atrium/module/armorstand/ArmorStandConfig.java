@@ -28,6 +28,17 @@ public class ArmorStandConfig {
     @Comment("Allow swapping a stand's equipment slot with the item in the player's main hand.")
     public boolean equipmentSwap = true;
 
+    @Comment("Enable placement templates: /astand template save|give tags an armor stand item, and placing that\n"
+            + "item creates a stand with the saved pose, flags, name and equipment. Off by default.")
+    public boolean templatesEnabled = false;
+
+    @Comment("How many placement templates may exist (1-500). atrium.armorstand.templates.<n> raises it.")
+    public int maxTemplates = 50;
+
+    @Comment("Give arms to an armor stand a player just placed (needs atrium.armorstand.arms).\n"
+            + "Off by default, because vanilla stands have no arms.")
+    public boolean autoArmsOnPlace = false;
+
     double reach() {
         return Math.max(1.0, Math.min(8.0, Double.isFinite(reach) ? reach : 5.0));
     }

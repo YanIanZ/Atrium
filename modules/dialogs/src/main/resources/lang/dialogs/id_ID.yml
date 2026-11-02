@@ -3,6 +3,7 @@ build-failed: "<prefix><error>Dialog <highlight><name></highlight> tidak bisa di
 outdated: "<prefix><error>Dialog ini sudah dimuat ulang. Silakan buka lagi."
 cooldown: "<prefix><error>Tunggu <highlight><time></highlight> sebelum membuka dialog ini lagi."
 no-permission-button: "<prefix><error>Kamu tidak diizinkan memakai tombol itu."
+condition-failed: "<prefix><error>Kamu belum memenuhi syarat untuk dialog ini."
 no-permission-dialog: "<prefix><error>Kamu tidak diizinkan membuka dialog itu."
 invalid-missing: "<prefix><error>Silakan isi <highlight><input></highlight>."
 invalid-too-long: "<prefix><error><highlight><input></highlight> paling banyak <max> karakter."

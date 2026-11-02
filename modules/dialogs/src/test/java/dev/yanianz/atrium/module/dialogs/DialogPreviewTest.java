@@ -10,12 +10,12 @@ import static org.junit.jupiter.api.Assertions.*;
 /** A preview must look like the dialog but never run anything. */
 class DialogPreviewTest {
     static final DialogDefinition DIALOG = new DialogDefinition("example", "<gold>Hello", "external",
-            "atrium.dialog.example", true, 2,
+            "atrium.dialog.example", List.of(), true, 2,
             List.of(new BodyLine("<gray>Body", 200)),
             List.of(),
             List.of(new ButtonSpec("<green>Give", "tooltip", 150, "atrium.dialog.example.give",
-                    List.of("console: give {player} diamond", "msg: <green>Done"), "thanks")),
-            new ButtonSpec("<red>Cancel", "", 150, "", List.of("msg: bye"), null),
+                    List.of("console: give {player} diamond", "msg: <green>Done"), "thanks", List.of())),
+            new ButtonSpec("<red>Cancel", "", 150, "", List.of("msg: bye"), null, List.of()),
             List.of("msg: opened {player}"),
             Duration.ofMinutes(5));
 

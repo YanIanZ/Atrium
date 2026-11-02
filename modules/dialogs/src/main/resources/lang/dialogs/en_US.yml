@@ -3,6 +3,7 @@ build-failed: "<prefix><error>Dialog <highlight><name></highlight> could not be 
 outdated: "<prefix><error>This dialog was reloaded meanwhile. Please open it again."
 cooldown: "<prefix><error>Please wait <highlight><time></highlight> before opening this dialog again."
 no-permission-button: "<prefix><error>You are not allowed to use that button."
+condition-failed: "<prefix><error>You do not meet the requirements for this dialog."
 no-permission-dialog: "<prefix><error>You are not allowed to open that dialog."
 invalid-missing: "<prefix><error>Please fill in <highlight><input></highlight>."
 invalid-too-long: "<prefix><error><highlight><input></highlight> may be at most <max> characters long."

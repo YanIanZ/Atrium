@@ -46,10 +46,11 @@ final class DialogParser {
     static final Duration MAX_COOLDOWN = Duration.ofDays(30);
 
     private static final Set<String> ROOT_KEYS = Set.of("extends", "title", "external-title", "permission",
-            "can-close-with-escape", "columns", "body", "inputs", "buttons", "exit", "on-open", "cooldown");
+            "conditions", "can-close-with-escape", "columns", "body", "inputs", "buttons", "exit", "on-open",
+            "cooldown");
     private static final Set<String> BODY_KEYS = Set.of("text", "width");
-    private static final Set<String> BUTTON_KEYS = Set.of("label", "tooltip", "width", "permission", "actions",
-            "open");
+    private static final Set<String> BUTTON_KEYS = Set.of("label", "tooltip", "width", "permission", "conditions",
+            "actions", "open");
     private static final Set<String> TEXT_KEYS = Set.of("type", "key", "label", "width", "label-visible", "initial",
             "max-length", "multiline-lines", "multiline-height", "pattern");
     private static final Set<String> OPTION_INPUT_KEYS = Set.of("type", "key", "label", "width", "label-visible",
@@ -110,6 +111,7 @@ final class DialogParser {
         }
         String externalTitle = string(root.node("external-title"), "external-title", "");
         String permission = permissionNode(root.node("permission"), "permission");
+        List<Condition> conditions = conditions(root.node("conditions"), "conditions");
         boolean escape = bool(root.node("can-close-with-escape"), "can-close-with-escape", true);
         int columns = integer(root.node("columns"), "columns", 2, 1, 16);
         List<BodyLine> body = body(root.node("body"));
@@ -144,8 +146,8 @@ final class DialogParser {
             errors.add("on-open: unknown variable {" + unknown + "} (no input exists when the dialog opens)");
         }
         Duration cooldown = cooldown(root.node("cooldown"));
-        return new DialogDefinition(id, title, externalTitle, permission, escape, columns, body, inputs, buttons,
-                exit, onOpen, cooldown);
+        return new DialogDefinition(id, title, externalTitle, permission, conditions, escape, columns, body, inputs,
+                buttons, exit, onOpen, cooldown);
     }
 
     /** {@code cooldown: 30s} (or a bare number of seconds); absent/0 means no cooldown. */
@@ -386,6 +388,7 @@ final class DialogParser {
         String tooltip = string(node.node("tooltip"), path + ".tooltip", "");
         int width = integer(node.node("width"), path + ".width", 150, 1, MAX_WIDTH);
         String permission = permissionNode(node.node("permission"), path + ".permission");
+        List<Condition> conditions = conditions(node.node("conditions"), path + ".conditions");
         List<String> actions = stringList(node.node("actions"), path + ".actions");
         for (String unknown : unknownVariables(actions, inputKeys)) {
             errors.add(path + ".actions: unknown variable {" + unknown + "} (not an input key or built-in)");
@@ -398,7 +401,20 @@ final class DialogParser {
                 open = null;
             }
         }
-        return new ButtonSpec(label, tooltip, width, permission, actions, open);
+        return new ButtonSpec(label, tooltip, width, permission, actions, open, conditions);
+    }
+
+    /** Parses a {@code conditions:} list; every entry is validated here, not at render time. */
+    private List<Condition> conditions(ConfigurationNode node, String path) {
+        List<Condition> conditions = new ArrayList<>();
+        for (String text : stringList(node, path)) {
+            try {
+                conditions.add(Condition.parse(text));
+            } catch (IllegalArgumentException e) {
+                errors.add(path + ": " + e.getMessage());
+            }
+        }
+        return conditions;
     }
 
     // ---- typed readers -------------------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -780,6 +781,13 @@ public final class CommandRulesModule implements AtriumModule, Listener {
     public void onTeleport(PlayerTeleportEvent event) {
         if (config.get().cancelWarmupOnMove) {
             cancelWarmup(event.getPlayer(), "warmup-cancelled-move");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryOpen(InventoryOpenEvent event) {
+        if (config.get().cancelWarmupOnInventoryOpen && event.getPlayer() instanceof Player player) {
+            cancelWarmup(player, "warmup-cancelled-inventory");
         }
     }
 

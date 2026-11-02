@@ -23,6 +23,10 @@ public class CommandRulesConfig {
     @Comment("Cancel a running command warmup when the player takes damage.")
     public boolean cancelWarmupOnDamage = true;
 
+    @Comment("Cancel a running command warmup when the player opens an inventory (chest, own inventory,\n"
+            + "shulker box, ...). Keeps a jump that was started in a menu from firing later.")
+    public boolean cancelWarmupOnInventoryOpen = true;
+
     @Comment("Tell the player when a charged command refused to run and the cost was refunded.\n"
             + "A command that starts but fails internally cannot be detected; use charge-after for that.")
     public boolean refundOnFailureMessage = true;

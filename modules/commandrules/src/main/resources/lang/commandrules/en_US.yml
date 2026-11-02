@@ -29,6 +29,7 @@ warmup-started: "<prefix><muted>Using <highlight>/<command></highlight> in <high
 warmup-countdown: "<muted>/<command> in <highlight><seconds></highlight>s"
 warmup-cancelled: "<prefix><error>The warmup for <highlight>/<command></highlight> was cancelled by another command."
 warmup-cancelled-move: "<prefix><error>The warmup for <highlight>/<command></highlight> was cancelled: you moved."
+warmup-cancelled-inventory: "<prefix><error>The warmup for <highlight>/<command></highlight> was cancelled: you opened an inventory."
 warmup-cancelled-damage: "<prefix><error>The warmup for <highlight>/<command></highlight> was cancelled: you took damage."
 value-none: "none"
 value-all: "all"

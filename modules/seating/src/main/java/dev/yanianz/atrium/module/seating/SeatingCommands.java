@@ -1,10 +1,12 @@
 package dev.yanianz.atrium.module.seating;
 
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.message.Msg;
+import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import dev.yanianz.atrium.core.scheduler.Scheduler;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -12,20 +14,27 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.jspecify.annotations.Nullable;
 
-/** /sit, /lay, /crawl and the small /seating admin command. */
+/** /sit, /lay, /crawl, /ride and the small /seating admin command. */
 final class SeatingCommands {
     private final ModuleContext ctx;
     private final Cmds cmds;
     private final SeatManager seats;
     private final CrawlManager crawl;
+    private final RideManager ride;
+    private final ConfigHandle<SeatingConfig> config;
 
-    SeatingCommands(ModuleContext ctx, SeatManager seats, CrawlManager crawl) {
+    SeatingCommands(ModuleContext ctx, SeatManager seats, CrawlManager crawl, RideManager ride,
+            ConfigHandle<SeatingConfig> config) {
         this.ctx = ctx;
         this.cmds = ctx.commands();
         this.seats = seats;
         this.crawl = crawl;
+        this.ride = ride;
+        this.config = config;
     }
 
     void register() {
@@ -37,9 +46,26 @@ final class SeatingCommands {
                 .executes(this::crawl)
                 .then(Commands.argument("target", ArgumentTypes.player()).executes(this::crawl))
                 .build(), "Crawl with the swimming pose, or stop crawling"));
+        ctx.command(CommandSpec.of(Cmds.literal("ride", SeatingModule.PERM_RIDE)
+                .executes(this::rideAimed)
+                .then(Cmds.literal("stop")
+                        .executes(this::rideStop)
+                        .then(Commands.argument("target", ArgumentTypes.player())
+                                .requires(Cmds.permission(SeatingModule.PERM_RIDE_OFF))
+                                .executes(this::rideStopOther)))
+                .then(Cmds.literal("launch", SeatingModule.PERM_LAUNCH)
+                        .executes(this::launch)
+                        .then(Commands.argument("power", DoubleArgumentType.doubleArg())
+                                .suggests(Cmds.suggest(() -> java.util.List.of("0.5", "1.0", "1.5", "2.0")))
+                                .executes(this::launch)))
+                .then(Commands.argument("target", ArgumentTypes.player())
+                        .requires(Cmds.permission(SeatingModule.PERM_RIDE_PLAYERS))
+                        .executes(this::ridePlayer))
+                .build(), "Ride the entity you look at, another player, or stop riding",
+                "riding"));
         ctx.command(CommandSpec.of(Cmds.literal("seating", SeatingModule.PERM_ADMIN)
                 .executes(this::help)
-                .then(Commands.literal("help").executes(this::help))
+                .then(Cmds.literal("help").executes(this::help))
                 .then(Cmds.literal("sweep", SeatingModule.PERM_SWEEP).executes(this::sweep))
                 .build(), "Show seating help or remove stale seat records"));
     }
@@ -73,6 +99,98 @@ final class SeatingCommands {
         });
         return Cmds.OK;
     }
+
+    // ---- /ride ----
+
+    private int rideAimed(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (!configRideEnabled()) {
+            ctx.messages().send(player, "seating.ride-disabled");
+            return Cmds.OK;
+        }
+        if (player.getVehicle() != null) {
+            dismount(player);
+            return Cmds.OK;
+        }
+        Entity target = ride.aimed(player);
+        if (target == null) {
+            ctx.messages().send(player, "seating.ride-no-target");
+            return Cmds.OK;
+        }
+        if (target instanceof Player && !player.hasPermission(SeatingModule.PERM_RIDE_PLAYERS)) {
+            ctx.messages().send(player, "seating.no-permission");
+            return Cmds.OK;
+        }
+        RideRules.Verdict verdict = ride.mount(player, target);
+        ride.report(player, verdict, RideManager.describe(target));
+        return Cmds.OK;
+    }
+
+    private int ridePlayer(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (!configRideEnabled()) {
+            ctx.messages().send(player, "seating.ride-disabled");
+            return Cmds.OK;
+        }
+        Player target = cmds.argPlayer(c, "target");
+        if (target.equals(player)) {
+            ctx.messages().send(player, "seating.ride-self");
+            return Cmds.OK;
+        }
+        RideRules.Verdict verdict = ride.mount(player, target);
+        ride.report(player, verdict, target.getName());
+        return Cmds.OK;
+    }
+
+    private int rideStop(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (player.getVehicle() == null) {
+            ctx.messages().send(player, "seating.ride-not-riding");
+            return Cmds.OK;
+        }
+        dismount(player);
+        return Cmds.OK;
+    }
+
+    private int rideStopOther(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player target = cmds.argPlayer(c, "target");
+        CommandSender sender = c.getSource().getSender();
+        if (target.getVehicle() == null) {
+            ctx.messages().send(sender, "seating.ride-not-riding-other", Msg.unparsed("player", target.getName()));
+            return Cmds.OK;
+        }
+        onPlayer(target, sender, () -> dismount(target));
+        if (!target.equals(sender)) {
+            ctx.messages().send(sender, "seating.ride-stopped-other", Msg.unparsed("player", target.getName()));
+        }
+        return Cmds.OK;
+    }
+
+    private int launch(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (player.getVehicle() == null) {
+            ctx.messages().send(player, "seating.ride-not-riding");
+            return Cmds.OK;
+        }
+        double power = Cmds.hasArgument(c, "power") ? DoubleArgumentType.getDouble(c, "power") : 1.0;
+        ride.launch(player, power);
+        if (!config.get().ride.launchFallDamage) {
+            player.setFallDistance(0);
+        }
+        ctx.messages().send(player, "seating.ride-launched", Msg.number("power", RideRules.launchPower(power)));
+        return Cmds.OK;
+    }
+
+    private void dismount(Player player) {
+        ride.dismount(player);
+        ctx.messages().send(player, "seating.ride-stopped");
+    }
+
+    private boolean configRideEnabled() {
+        return config.get().ride.enabled;
+    }
+
+    // ---- /seating ----
 
     private int help(CommandContext<CommandSourceStack> c) {
         ctx.messages().send(c.getSource().getSender(), "seating.help");

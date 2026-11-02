@@ -33,9 +33,9 @@ class BedrockResponsesTest {
     static final NumberInput AMOUNT = new NumberInput("amount", "Amount", 200, 1, 64, 1f, null, null);
     static final List<InputSpec> INPUTS = List.of(NAME, COLOUR, LOUD, AMOUNT);
 
-    static final Model MODEL = BedrockForm.build(new DialogDefinition("x", "T", "", "", true, 2, List.of(),
-                    INPUTS, List.of(new ButtonSpec("Send", "", 150, "", List.of("msg: hi"), null),
-                            new ButtonSpec("Other", "", 150, "", List.of("msg: hi"), null)),
+    static final Model MODEL = BedrockForm.build(new DialogDefinition("x", "T", "", "", List.of(), true, 2, List.of(),
+                    INPUTS, List.of(new ButtonSpec("Send", "", 150, "", List.of("msg: hi"), null, List.of()),
+                            new ButtonSpec("Other", "", 150, "", List.of("msg: hi"), null, List.of())),
                     null, List.of(), null),
             Map.of(), permission -> true, PLAIN);
 

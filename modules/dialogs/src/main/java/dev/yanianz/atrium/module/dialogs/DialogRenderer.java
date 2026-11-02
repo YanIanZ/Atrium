@@ -53,7 +53,7 @@ final class DialogRenderer {
      *                 valid initial values for their input are used
      */
     Dialog render(DialogDefinition definition, Player viewer, Map<String, String> previous, ClickHandler handler,
-            ClickCallback.Options options) {
+            ClickCallback.Options options, java.util.function.Predicate<java.util.List<Condition>> conditionsMet) {
         List<DialogBody> body = new ArrayList<>();
         for (BodyLine line : definition.body()) {
             body.add(DialogBody.plainMessage(text(line.text(), viewer), line.width()));
@@ -64,7 +64,7 @@ final class DialogRenderer {
         }
         List<ActionButton> buttons = new ArrayList<>();
         for (ButtonSpec button : definition.buttons()) {
-            if (allowed(viewer, button.permission())) {
+            if (allowed(viewer, button.permission()) && conditionsMet.test(button.conditions())) {
                 buttons.add(button(button, viewer, handler, options));
             }
         }
@@ -97,6 +97,20 @@ final class DialogRenderer {
 
     static boolean allowed(Player viewer, String permission) {
         return permission.isEmpty() || viewer.hasPermission(permission);
+    }
+
+    /** The same dialog with only the buttons the viewer may use (permission and conditions). */
+    static DialogDefinition visible(DialogDefinition definition, Player viewer,
+            java.util.function.Predicate<java.util.List<Condition>> conditionsMet) {
+        java.util.List<ButtonSpec> buttons = new java.util.ArrayList<>();
+        for (ButtonSpec button : definition.buttons()) {
+            if (allowed(viewer, button.permission()) && conditionsMet.test(button.conditions())) {
+                buttons.add(button);
+            }
+        }
+        ButtonSpec exit = definition.exit() != null && allowed(viewer, definition.exit().permission())
+                ? definition.exit() : null;
+        return definition.withButtons(buttons, exit);
     }
 
     Component text(String template, Player viewer) {

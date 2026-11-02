@@ -35,6 +35,9 @@ public class SeatingConfig {
     @Comment("Crawl behaviour.")
     public CrawlOptions crawlOptions = new CrawlOptions();
 
+    @Comment("Ride behaviour (/ride).")
+    public Ride ride = new Ride();
+
     @ConfigSerializable
     public static class Interaction {
         @Comment("Enable click-to-sit. Requires atrium.seating.interact.")
@@ -76,6 +79,33 @@ public class SeatingConfig {
         @Comment("Seconds between consistency checks of active seats. 0 disables the check.\n"
                 + "The check only looks at players who are sitting right now, so an idle server does no work.")
         public int checkIntervalSeconds = 10;
+    }
+
+    @ConfigSerializable
+    public static class Ride {
+        @Comment("Enable /ride (mount a player or the entity you look at, /ride stop, /ride launch).")
+        public boolean enabled = true;
+
+        @Comment("Allow riding other players. Requires atrium.seating.ride.players.")
+        public boolean players = true;
+
+        @Comment("How many players may ride the same vehicle at once (1-8).")
+        public int maxPassengers = 3;
+
+        @Comment("How far /ride looks for the entity in front of the player, in blocks (1-16).")
+        public double reach = 5.0;
+
+        @Comment("Whether a rider keeps its own fall damage after /ride launch.\n"
+                + "false (default) clears it, so a launch cannot kill the rider.")
+        public boolean launchFallDamage = false;
+
+        int reach() {
+            return (int) Math.round(Math.clamp(reach, 1.0, 16.0));
+        }
+
+        int maxPassengers() {
+            return Math.clamp(maxPassengers, 1, 8);
+        }
     }
 
     @ConfigSerializable

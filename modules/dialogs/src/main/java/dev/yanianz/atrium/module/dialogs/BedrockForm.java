@@ -218,8 +218,8 @@ final class BedrockForm {
 
     /** The same button with a plain label; actions, permission and the opened dialog are kept. */
     private static ButtonSpec plain(ButtonSpec button, Function<String, String> plain) {
-        return new ButtonSpec(plain.apply(button.label()), "", button.width(), button.permission(),
-                button.actions(), button.openDialog());
+        return new ButtonSpec(plain.apply(button.label()), "", button.width(), button.permission(), button.actions(),
+                button.openDialog(), button.conditions());
     }
 
     /** A positive step for the client; a continuous slider becomes 100 reasonable steps. */

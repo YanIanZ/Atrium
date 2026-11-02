@@ -33,6 +33,35 @@ public class WorldToolsConfig {
     @Comment("Radius used by /findbiome when none is given.")
     public int defaultBiomeRadius = 3200;
 
+    @Comment("Selection wand: left-click sets corner 1, right-click corner 2 (/select pos1|pos2 also work).")
+    public boolean selectionWandEnabled = true;
+
+    @Comment("Item used as the selection wand (any item name, e.g. GOLDEN_HOE, STICK, BLAZE_ROD).")
+    public String selectionWand = "GOLDEN_HOE";
+
+    @Comment("How far (in blocks) /select pos1 and /select pos2 look for a block (1-64).")
+    public int selectionReach = 8;
+
+    @Comment("Largest selection in blocks for /replaceblock selection (1-16777216).\n"
+            + "A bigger selection is refused instead of starting a job that would run for hours.")
+    public long maxSelectionVolume = 1_000_000L;
+
+    boolean selectionWandEnabled() {
+        return selectionWandEnabled;
+    }
+
+    org.bukkit.Material selectionWandMaterial() {
+        return SelectionListener.resolveWand(selectionWand);
+    }
+
+    int selectionReach() {
+        return Math.max(1, Math.min(64, selectionReach));
+    }
+
+    long maxSelectionVolume() {
+        return Math.max(1L, Math.min(Cuboid.MAX_VOLUME_HARD_LIMIT, maxSelectionVolume));
+    }
+
     int maxReplaceRadius() {
         return clamp(maxReplaceRadius, 1, 256);
     }

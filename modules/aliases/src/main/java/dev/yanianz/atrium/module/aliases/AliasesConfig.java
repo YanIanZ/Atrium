@@ -29,6 +29,9 @@ public class AliasesConfig {
     @Comment("Command replacement: when a player types a command starting with 'from', it is rewritten to 'to' (the\n"
             + "rest of the line is kept). The longest matching 'from' wins; a rewritten command is not rewritten again.\n"
             + "'permission' (optional) limits the rule to players who have it; others run the command unchanged.\n"
+            + "'prefix-match: true' also matches a command name that only starts with 'from' (/homebase with\n"
+            + "from: home). 'catch-all: true' is a fallback rule that runs only when no other rule matched and\n"
+            + "receives the whole typed command; write from: \"*\". 'to' may contain {args} for the rest of the line.\n"
             + "Example:  - from: \"day\"\n            to: \"time set day\"\n            permission: \"\"")
     public List<ReplacementRule> replacements = new ArrayList<>();
 
@@ -112,5 +115,13 @@ public class AliasesConfig {
 
         @Comment("Only applied for players with this permission. Empty: everyone.")
         public String permission = "";
+
+        @Comment("Also match a command name that starts with 'from' (/homebase matches from: home).\n"
+                + "The rest of the word stays part of the remainder.")
+        public boolean prefixMatch = false;
+
+        @Comment("Fallback rule: runs only when no other replacement matched, and receives the whole typed\n"
+                + "command as the remainder ('from' is ignored, write \"*\"). Useful for a help fallback.")
+        public boolean catchAll = false;
     }
 }

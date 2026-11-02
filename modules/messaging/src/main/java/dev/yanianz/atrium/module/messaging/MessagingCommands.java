@@ -28,7 +28,7 @@ final class MessagingCommands {
                         .executes(module::helpBar)
                         .then(Commands.argument("message", greedyString())
                                 .executes(module::actionBarAll)))
-                .then(Commands.argument("target", ArgumentTypes.player())
+                .then(Commands.argument("target", ArgumentTypes.players())
                         .then(Commands.argument("message", greedyString())
                                 .executes(module::actionBarTarget)))
                 .build(), "Show a MiniMessage action bar to a player or everyone"));
@@ -39,7 +39,7 @@ final class MessagingCommands {
                         .executes(module::helpTellraw)
                         .then(Commands.argument("message", greedyString())
                                 .executes(module::tellrawAll)))
-                .then(Commands.argument("target", ArgumentTypes.player())
+                .then(Commands.argument("target", ArgumentTypes.players())
                         .then(Commands.argument("message", greedyString())
                                 .executes(module::tellrawTarget)))
                 .build(), "Send a raw MiniMessage to a player or everyone"));
@@ -69,6 +69,30 @@ final class MessagingCommands {
                                 .suggests(Cmds.suggest(() -> List.of("1", "2", "3", "4", "5")))
                                 .executes(module::alertList)))
                 .build(), "Manage staff alerts shown when a player joins"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("bbroadcast", MessagingModule.PERM_BBROADCAST)
+                .executes(module::helpBroadcast)
+                .then(Commands.argument("message", greedyString())
+                        .suggests(Cmds.suggest(() -> List.of("-s:server1,server2")))
+                        .executes(module::bbroadcast))
+                .build(), "Broadcast a message to every server, or to selected ones with -s:server1,server2"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("serverlinks", MessagingModule.PERM_SERVERLINKS)
+                .executes(module::serverLinksList)
+                .then(Cmds.literal("list").executes(module::serverLinksList))
+                .then(Cmds.literal("add")
+                        .then(Commands.argument("label", word())
+                                // The URL may contain '/', ':' and '?', so it is the rest of the line. A typed
+                                // link (website, support, ...) is set in serverlinks.yml.
+                                .then(Commands.argument("url", greedyString())
+                                        .executes(module::serverLinksAdd))))
+                .then(Cmds.literal("remove")
+                        .then(Commands.argument("label", word())
+                                .suggests(Cmds.suggest(() -> module.serverLinkLabels()))
+                                .executes(module::serverLinksRemove)))
+                .then(Cmds.literal("clear").executes(module::serverLinksClear))
+                .then(Cmds.literal("reload").executes(module::serverLinksReload))
+                .build(), "Manage the links shown in the multiplayer screen"));
 
         ctx.command(CommandSpec.of(Cmds.literal("colorpicker", MessagingModule.PERM_COLORPICKER)
                 .executes(module::colorPicker)

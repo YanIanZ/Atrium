@@ -8,14 +8,19 @@ import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
+import org.bukkit.block.Sign;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
@@ -23,6 +28,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -78,6 +84,10 @@ final class InteractiveListener implements Listener {
                 trigger(player, bound.get(), click, event, blockVariables(block));
                 return;
             }
+            if (config.get().signCommands && click == InteractiveCommand.Click.RIGHT
+                    && signCommand(player, block, click, event)) {
+                return;
+            }
         }
         module.itemTag(event.getItem()).flatMap(module.registry::get).ifPresent(command -> {
             Map<String, String> vars = block != null ? blockVariables(block) : new HashMap<>();
@@ -112,8 +122,56 @@ final class InteractiveListener implements Listener {
         module.selections.remove(event.getPlayer().getUniqueId());
     }
 
-    private void entityClick(Player player, Entity entity, InteractiveCommand.Click click, Cancellable event) {
-        String description = entity.getType().getKey().getKey() + " " + entity.getUniqueId();
+    /**
+     * Runs an interactive command named by an {@code [ic:name]} sign. The sign itself is the binding, so the
+     * lookup is by name only. Returns true when the click belonged to a sign command (also when it was refused),
+     * so the click is not handled twice.
+     */
+    private boolean signCommand(Player player, Block block, InteractiveCommand.Click click, Cancellable event) {
+        if (!(block.getState() instanceof Sign sign)) {
+            return false;
+        }
+        List<String> lines = new ArrayList<>();
+        for (Component line : sign.getSide(sign.getInteractableSideFor(player)).lines()) {
+            lines.add(PlainTextComponentSerializer.plainText().serialize(line));
+        }
+        Optional<String> name = SignCommands.name(lines);
+        if (name.isEmpty()) {
+            return false;
+        }
+        Optional<InteractiveCommand> command = module.registry.get(name.get());
+        if (command.isEmpty()) {
+            ctx.messages().send(player, "interactive.sign-unknown", Msg.unparsed("name", name.get()));
+            return true;
+        }
+        Map<String, String> vars = SignCommands.variables(lines);
+        vars.putAll(blockVariables(block));
+        trigger(player, command.get(), click, event, vars);
+        return true;
+    }
+
+    /** Warns the placer about a tag that cannot work, so a typo is not a silent no-op. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onSignChange(SignChangeEvent event) {
+        if (!config.get().signCommands || event.getPlayer() == null) {
+            return;
+        }
+        List<String> lines = new ArrayList<>();
+        for (Component line : event.lines()) {
+            lines.add(PlainTextComponentSerializer.plainText().serialize(line));
+        }
+        String malformed = SignCommands.malformedTag(lines);
+        if (malformed != null) {
+            ctx.messages().send(event.getPlayer(), "interactive.sign-malformed", Msg.unparsed("line", malformed));
+            return;
+        }
+        Optional<String> name = SignCommands.name(lines);
+        if (name.isPresent() && module.registry.get(name.get()).isEmpty()) {
+            ctx.messages().send(event.getPlayer(), "interactive.sign-unknown", Msg.unparsed("name", name.get()));
+        }
+    }
+
+    private void entityClick(Player player, Entity entity, InteractiveCommand.Click click, Cancellable event) {        String description = entity.getType().getKey().getKey() + " " + entity.getUniqueId();
         if (selection(player, InteractiveCommand.TargetKind.ENTITY, event, entity.getUniqueId().toString(), description)) {
             return;
         }

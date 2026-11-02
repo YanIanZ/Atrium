@@ -39,12 +39,12 @@ class BedrockFormTest {
 
     static DialogDefinition definition(List<InputSpec> inputs, List<ButtonSpec> buttons, ButtonSpec exit,
             List<BodyLine> body) {
-        return new DialogDefinition("test", "<gold>Title</gold>", "", "", true, 2, body, inputs, buttons, exit,
+        return new DialogDefinition("test", "<gold>Title</gold>", "", "", List.of(), true, 2, body, inputs, buttons, exit,
                 List.of(), null);
     }
 
     static ButtonSpec button(String label, String permission) {
-        return new ButtonSpec(label, "", 150, permission, List.of("msg: hi"), null);
+        return new ButtonSpec(label, "", 150, permission, List.of("msg: hi"), null, List.of());
     }
 
     @Test void withoutInputsItIsASimpleFormWithButtons() {

@@ -129,4 +129,52 @@ class AliasesTest {
         assertEquals(Optional.empty(), rewriter.rewrite("/spawn", p -> true));
         assertEquals(Optional.empty(), rewriter.rewrite("day", p -> true));
     }
+
+    private static AliasesConfig.ReplacementRule prefixRule(String from, String to) {
+        AliasesConfig.ReplacementRule rule = rule(from, to, "");
+        rule.prefixMatch = true;
+        return rule;
+    }
+
+    private static AliasesConfig.ReplacementRule catchAllRule(String to) {
+        AliasesConfig.ReplacementRule rule = rule("*", to, "");
+        rule.catchAll = true;
+        return rule;
+    }
+
+    @Test void prefixRuleMatchesPartialCommandName() {
+        CommandRewriter rewriter = CommandRewriter.of(List.of(
+                rule("home", "homes", ""), prefixRule("home", "home"), prefixRule("gm", "gamemode")),
+                new ArrayList<>());
+        // The whole-word rule beats the prefix rule for the exact spelling.
+        assertEquals(Optional.of("/homes"), rewriter.rewrite("/home", p -> true));
+        // The rest of the word is appended as a separate argument.
+        assertEquals(Optional.of("/home base"), rewriter.rewrite("/homebase", p -> true));
+        assertEquals(Optional.of("/gamemode 1 creative"), rewriter.rewrite("/gm1 creative", p -> true));
+        assertEquals(Optional.empty(), rewriter.rewrite("/day", p -> true));
+    }
+
+    @Test void catchAllRunsOnlyWhenNothingElseMatched() {
+        CommandRewriter rewriter = CommandRewriter.of(List.of(
+                rule("day", "time set day", ""), catchAllRule("atrium help {args}")), new ArrayList<>());
+        assertEquals(2, rewriter.size());
+        assertEquals(Optional.of("/time set day"), rewriter.rewrite("/day", p -> true));
+        assertEquals(Optional.of("/atrium help spawn Steve"), rewriter.rewrite("/spawn Steve", p -> true));
+    }
+
+    @Test void catchAllHonoursItsPermission() {
+        AliasesConfig.ReplacementRule fallback = catchAllRule("help {args}");
+        fallback.permission = "vip";
+        CommandRewriter rewriter = CommandRewriter.of(List.of(fallback), new ArrayList<>());
+        assertEquals(Optional.empty(), rewriter.rewrite("/spawn", p -> false));
+        assertEquals(Optional.of("/help spawn"), rewriter.rewrite("/spawn", p -> true));
+    }
+
+    @Test void catchAllIsNotMatchedThroughTheNormalRules() {
+        List<String> problems = new ArrayList<>();
+        AliasesConfig.ReplacementRule emptyTo = catchAllRule("");
+        CommandRewriter rewriter = CommandRewriter.of(List.of(emptyTo, catchAllRule("x")), problems);
+        assertEquals(1, problems.size());
+        assertEquals(1, rewriter.size());
+    }
 }

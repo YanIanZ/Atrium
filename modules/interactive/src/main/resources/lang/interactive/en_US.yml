@@ -42,3 +42,5 @@ set-cancel-event: "<prefix><success>Cancel event of <highlight><name></highlight
 set-trigger: "<prefix><success>Trigger of <highlight><name></highlight> set to <highlight><trigger></highlight>."
 no-permission: "<prefix><error>You are not allowed to use this."
 on-cooldown: "<prefix><error>Please wait <highlight><time></highlight> before using this again."
+sign-unknown: "<prefix><error>There is no interactive command named <highlight><name></highlight> (write [ic:name] on the sign)."
+sign-malformed: "<prefix><warning><highlight><line></highlight> does not look like [ic:name]; the sign will not run anything."

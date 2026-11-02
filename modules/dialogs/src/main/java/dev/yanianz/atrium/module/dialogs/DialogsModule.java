@@ -66,10 +66,12 @@ public final class DialogsModule implements AtriumModule {
     private ConfigHandle<DialogsConfig> config;
     private DialogRenderer renderer;
     private volatile DialogLoader.Result loaded = new DialogLoader.Result(Map.of(), List.of(), List.of());
+    private DialogValueStore values;
     private final AtomicLong generation = new AtomicLong();
     private volatile boolean stopping;
     private volatile @Nullable FloodgateDialogs bedrock;
     private final AtomicBoolean warnedNoActions = new AtomicBoolean();
+    private final AtomicBoolean warnedNoPlaceholders = new AtomicBoolean();
     private final AtomicBoolean warnedNoBedrock = new AtomicBoolean();
 
     @Override
@@ -101,6 +103,8 @@ public final class DialogsModule implements AtriumModule {
         context.permission(PERM_PREVIEW, PermissionDefault.OP, "Preview a dialog without running its actions");
         context.permission(PERM_COOLDOWN_BYPASS, PermissionDefault.OP, "Ignore per-dialog cooldowns");
 
+        ctx.migrate(DialogValueStore.MIGRATIONS);
+        this.values = new DialogValueStore(ctx, config);
         createFolder();
         apply(load());
         this.bedrock = createBedrockHook();
@@ -228,12 +232,19 @@ public final class DialogsModule implements AtriumModule {
         if (stopping || !viewer.isOnline()) {
             return false;
         }
+        if (!conditionsMet(viewer, definition.conditions())) {
+            ctx.messages().send(viewer, "dialogs.condition-failed");
+            return false;
+        }
+        // Remembered values from an earlier opening (or an earlier session); explicit values win.
+        Map<String, String> starting = previous.isEmpty() ? values.remembered(viewer.getUniqueId(), definition.id())
+                : previous;
         try {
             FloodgateDialogs hook = bedrock;
             if (hook != null && config.get().bedrockForms && hook.isBedrock(viewer)) {
-                return showBedrock(viewer, definition, previous, hook);
+                return showBedrock(viewer, definition, starting, hook);
             }
-            return showPaper(viewer, definition, previous);
+            return showPaper(viewer, definition, starting);
         } catch (RuntimeException | LinkageError e) {
             buildFailed(viewer, definition, e);
             return false;
@@ -252,14 +263,15 @@ public final class DialogsModule implements AtriumModule {
                 .uses(1)
                 .lifetime(Duration.ofMinutes(Math.max(1, Math.min(1440, cfg.callbackLifetimeMinutes))))
                 .build();
-        viewer.showDialog(renderer.render(definition, viewer, previous,
-                (button, response, audience) -> clicked(session, button, response, audience), options));
+        viewer.showDialog(renderer.render(DialogRenderer.visible(definition, viewer, conditions -> conditionsMetFor(viewer, conditions)), viewer,
+                previous, (button, response, audience) -> clicked(session, button, response, audience), options,
+                conditions -> conditionsMetFor(viewer, conditions)));
         return true;
     }
 
     private boolean showBedrock(Player viewer, DialogDefinition definition, Map<String, String> previous,
             FloodgateDialogs hook) {
-        Model model = BedrockForm.build(definition, previous,
+        Model model = BedrockForm.build(DialogRenderer.visible(definition, viewer, conditions -> conditionsMetFor(viewer, conditions)), previous,
                 permission -> DialogRenderer.allowed(viewer, permission),
                 template -> plain(viewer, template));
         Session session = new Session(viewer.getUniqueId(), definition, generation.get(), new AtomicBoolean());
@@ -272,6 +284,74 @@ public final class DialogsModule implements AtriumModule {
             ctx.messages().send(viewer, "dialogs.failed");
         }
         return sent;
+    }
+
+    /** Whether one condition list passes for the viewer. */
+    private boolean conditionsMetFor(Player viewer, List<Condition> conditions) {
+        return conditionsMet(viewer, conditions);
+    }
+
+    private boolean conditionsMet(Player viewer, List<Condition> conditions) {
+        if (conditions.isEmpty()) {
+            return true;
+        }
+        for (Condition condition : conditions) {
+            if (!condition.test(viewer::hasPermission, token -> placeholder(viewer, token))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Resolves a condition's left side. A {@code %token%} goes to PlaceholderAPI when it is available and the
+     * config allows it; everything else is one of the built-in values. Unknown names return an empty string,
+     * which makes the condition false.
+     */
+    private String placeholder(Player viewer, String token) {
+        String name = token == null ? "" : token.strip();
+        if (name.startsWith("%") && name.endsWith("%") && name.length() > 2) {
+            String key = name.substring(1, name.length() - 1).strip();
+            if (!config.get().placeholderConditions) {
+                return "";
+            }
+            if (!ctx.plugin().getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+                if (warnedNoPlaceholders.compareAndSet(false, true)) {
+                    ctx.logger().warn("Dialog conditions use %{}% but PlaceholderAPI is not enabled; "
+                            + "those conditions stay false", key);
+                }
+                return "";
+            }
+            try {
+                return DialogsPlaceholderHook.resolve(viewer, key);
+            } catch (LinkageError | RuntimeException e) {
+                if (warnedNoPlaceholders.compareAndSet(false, true)) {
+                    ctx.logger().warn("PlaceholderAPI could not resolve %{}% for dialog conditions", key, e);
+                }
+                return "";
+            }
+        }
+        return switch (name.toLowerCase(java.util.Locale.ROOT)) {
+            case "player", "name" -> viewer.getName();
+            case "uuid" -> viewer.getUniqueId().toString();
+            case "world" -> viewer.getWorld().getName();
+            case "online" -> Integer.toString(ctx.plugin().getServer().getOnlinePlayers().size());
+            case "world_players" -> Integer.toString(viewer.getWorld().getPlayers().size());
+            case "gamemode" -> viewer.getGameMode().name().toLowerCase(java.util.Locale.ROOT);
+            case "level" -> Integer.toString(viewer.getLevel());
+            case "health" -> Double.toString(viewer.getHealth());
+            case "food" -> Integer.toString(viewer.getFoodLevel());
+            case "x" -> Integer.toString(viewer.getLocation().getBlockX());
+            case "y" -> Integer.toString(viewer.getLocation().getBlockY());
+            case "z" -> Integer.toString(viewer.getLocation().getBlockZ());
+            default -> {
+                // A permission node can be tested directly as a value: permission:atrium.dialog.vip.
+                if (name.toLowerCase(java.util.Locale.ROOT).startsWith("permission:")) {
+                    yield Boolean.toString(viewer.hasPermission(name.substring(name.indexOf(':') + 1)));
+                }
+                yield "";
+            }
+        };
     }
 
     /** Runs the {@code on-open} lines once, after the dialog was actually shown. */
@@ -359,6 +439,11 @@ public final class DialogsModule implements AtriumModule {
             ctx.messages().send(player, "dialogs.no-permission-button");
             return;
         }
+        // A condition may have changed while the dialog was open; re-check it before anything runs.
+        if (!conditionsMetFor(player, button.conditions())) {
+            ctx.messages().send(player, "dialogs.condition-failed");
+            return;
+        }
         if (result instanceof InputValidator.Rejected rejected) {
             ctx.messages().send(player, "dialogs.invalid-" + reasonKey(rejected.reason()),
                     Msg.component("input", renderer.text(rejected.input().label(), player)),
@@ -369,6 +454,8 @@ public final class DialogsModule implements AtriumModule {
             return;
         }
         Map<String, String> variables = ((InputValidator.Accepted) result).variables();
+        // Remember the raw submission (a bool stays "true"/"false"), which is what the renderer can pre-fill.
+        values.remember(player.getUniqueId(), definition.id(), raw);
         if (button.actions().isEmpty()) {
             openNext(player, button);
             return;

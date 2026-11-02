@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -37,6 +38,8 @@ public final class ArmorStandModule implements AtriumModule, Listener {
     private StandAccess access;
     private StandEditor editor;
     private PoseStore store;
+    private TemplateStore templates;
+    private TemplateListener templateListener;
     private final Map<UUID, Clipboard> clipboard = new ConcurrentHashMap<>();
 
     /** Pose and flags only: copying equipment would mint items. */
@@ -64,6 +67,17 @@ public final class ArmorStandModule implements AtriumModule, Listener {
         this.config = ctx.config(ArmorStandConfig.class, ArmorStandConfig::new);
         ctx.migrate(PoseStore.MIGRATIONS);
         this.store = new PoseStore(ctx.database());
+        java.nio.file.Path templateFile = ctx.plugin().getDataPath().resolve("modules").resolve("armorstand")
+                .resolve("templates.yml");
+        this.templates = new TemplateStore(templateFile, ctx.logger());
+        try {
+            templates.load();
+        } catch (java.io.IOException e) {
+            ctx.logger().warn("Armor stand templates could not be read; starting with none", e);
+        }
+        this.templateListener = new TemplateListener(ctx, config,
+                templates, new org.bukkit.NamespacedKey(ctx.plugin(), "astand_template"));
+        ctx.listen(templateListener);
         this.access = new StandAccess(config, ctx.services().get(ProtectionService.class).orElse(null));
         this.editor = new StandEditor(ctx, config, access);
         ctx.listen(this);
@@ -72,6 +86,10 @@ public final class ArmorStandModule implements AtriumModule, Listener {
         ctx.permission("atrium.armorstand.equipment", PermissionDefault.OP, "Swap armor stand equipment with the main hand");
         ctx.permission("atrium.armorstand.poses", PermissionDefault.OP, "Save, load and delete named armor stand poses");
         ctx.permission("atrium.armorstand.copy", PermissionDefault.OP, "Copy and paste armor stand poses and flags");
+        ctx.permission("atrium.armorstand.templates", PermissionDefault.OP,
+                "Save, give and delete armor stand placement templates");
+        ctx.permission(TemplateListener.PERM_ARMS, PermissionDefault.TRUE,
+                "Get an armor stand with arms when placing one with arms enabled");
 
         SuggestionProvider<CommandSourceStack> poseNames = (c, builder) -> {
             if (!(c.getSource().getSender() instanceof Player player)) {
@@ -98,6 +116,21 @@ public final class ArmorStandModule implements AtriumModule, Listener {
                         .then(Cmds.literal("delete").executes(this::poseUsage).then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(poseNames).executes(this::delete)))
                         .then(Cmds.literal("list").executes(this::list)))
+                .then(Cmds.literal("template", "atrium.armorstand.templates")
+                        .executes(this::templateUsage)
+                        .then(Cmds.literal("list").executes(this::templateList))
+                        .then(Cmds.literal("save")
+                                .then(Commands.argument("name", StringArgumentType.word())
+                                        .suggests(Cmds.suggest(templates::names))
+                                        .executes(this::templateSave)))
+                        .then(Cmds.literal("delete")
+                                .then(Commands.argument("name", StringArgumentType.word())
+                                        .suggests(Cmds.suggest(templates::names))
+                                        .executes(this::templateDelete)))
+                        .then(Cmds.literal("give")
+                                .then(Commands.argument("name", StringArgumentType.word())
+                                        .suggests(Cmds.suggest(templates::names))
+                                        .executes(this::templateGive))))
                 .build(), "Open the editor for the armor stand you look at; copy, paste and save poses", "armorstand"));
     }
 
@@ -241,6 +274,90 @@ public final class ArmorStandModule implements AtriumModule, Listener {
                         Msg.number("count", names.size()));
             }
         });
+        return Cmds.OK;
+    }
+
+    // ---- templates ----
+
+    private int templateUsage(CommandContext<CommandSourceStack> c) {
+        ctx.messages().send(c.getSource().getSender(), "armorstand.usage-template");
+        return Cmds.OK;
+    }
+
+    private int templateList(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        java.util.List<String> names = templates.names();
+        if (names.isEmpty()) {
+            ctx.messages().send(sender, "armorstand.template-list-empty");
+        } else {
+            ctx.messages().send(sender, "armorstand.template-list", Msg.number("count", names.size()),
+                    Msg.unparsed("templates", String.join(", ", names)));
+        }
+        return Cmds.OK;
+    }
+
+    private int templateSave(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        if (!TemplateStore.validName(name)) {
+            throw cmds.fail(c.getSource(), "armorstand.template-invalid-name");
+        }
+        ArmorStand stand = target(c, player);
+        if (!access.permitted(player, stand, Action.APPLY_POSE, name)) {
+            throw cmds.fail(c.getSource(), "armorstand.denied");
+        }
+        StandTemplate template = StandTemplate.capture(name, stand);
+        int limit = Permissions.limit(player, "atrium.armorstand.templates", Math.max(1, config.get().maxTemplates));
+        if (templates.get(name).isEmpty() && templates.names().size() >= limit) {
+            throw cmds.fail(c.getSource(), "armorstand.template-limit", Msg.number("limit", limit));
+        }
+        ctx.scheduler().supplyIo(() -> {
+            templates.put(template);
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                ctx.logger().error("Cannot save armor stand template '{}'", name, error);
+                reply(player, "armorstand.storage-error");
+                return;
+            }
+            reply(player, "armorstand.template-saved", Msg.unparsed("name", name),
+                    Msg.unparsed("templates-hint", "/astand template give " + name));
+        });
+        return Cmds.OK;
+    }
+
+    private int templateDelete(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        if (!TemplateStore.validName(name)) {
+            throw cmds.fail(c.getSource(), "armorstand.template-invalid-name");
+        }
+        ctx.scheduler().supplyIo(() -> templates.delete(name)).whenComplete((deleted, error) -> {
+            if (error != null) {
+                ctx.logger().error("Cannot delete armor stand template '{}'", name, error);
+                reply(player, "armorstand.storage-error");
+                return;
+            }
+            reply(player, Boolean.TRUE.equals(deleted) ? "armorstand.template-deleted"
+                    : "armorstand.template-not-found", Msg.unparsed("name", name));
+        });
+        return Cmds.OK;
+    }
+
+    private int templateGive(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
+        if (templates.get(name).isEmpty()) {
+            throw cmds.fail(c.getSource(), "armorstand.template-not-found", Msg.unparsed("name", name));
+        }
+        org.bukkit.inventory.ItemStack item = new org.bukkit.inventory.ItemStack(org.bukkit.Material.ARMOR_STAND);
+        templateListener.tag(item, name);
+        var leftover = player.getInventory().addItem(item);
+        if (!leftover.isEmpty()) {
+            ctx.messages().send(player, "armorstand.template-inventory-full");
+            return Cmds.OK;
+        }
+        ctx.messages().send(player, "armorstand.template-given", Msg.unparsed("name", name));
         return Cmds.OK;
     }
 

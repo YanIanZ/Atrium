@@ -19,6 +19,7 @@ import org.jspecify.annotations.Nullable;
  * complete, self-contained dialog.
  *
  * @param permission empty when anyone with {@code atrium.dialog.open} may open it
+ * @param conditions extra gates evaluated on the viewer (permission and placeholder comparisons)
  * @param exit       button used when the dialog is closed with escape; {@code null} for none
  * @param onOpen     admin-written action lines run once when the dialog is opened by a player
  * @param cooldown   minimum time between two opens of this dialog by the same player; {@code null} for none
@@ -28,6 +29,7 @@ record DialogDefinition(
         String title,
         String externalTitle,
         String permission,
+        List<Condition> conditions,
         boolean canCloseWithEscape,
         int columns,
         List<BodyLine> body,
@@ -40,9 +42,16 @@ record DialogDefinition(
     DialogDefinition {
         Objects.requireNonNull(id, "id");
         body = List.copyOf(body);
+        conditions = List.copyOf(conditions);
         inputs = List.copyOf(inputs);
         buttons = List.copyOf(buttons);
         onOpen = List.copyOf(onOpen);
+    }
+
+    /** The same dialog with a different button list (used to hide buttons the viewer may not use). */
+    DialogDefinition withButtons(List<ButtonSpec> buttons, @Nullable ButtonSpec exit) {
+        return new DialogDefinition(id, title, externalTitle, permission, conditions, canCloseWithEscape, columns,
+                body, inputs, buttons, exit, onOpen, cooldown);
     }
 
     Optional<InputSpec> input(String key) {
@@ -54,9 +63,10 @@ record DialogDefinition(
 
     /** A clickable button. Actions are admin-written {@code ActionService} lines. */
     record ButtonSpec(String label, String tooltip, int width, String permission, List<String> actions,
-            @Nullable String openDialog) {
+            @Nullable String openDialog, List<Condition> conditions) {
         ButtonSpec {
             actions = List.copyOf(actions);
+            conditions = List.copyOf(conditions);
         }
     }
 

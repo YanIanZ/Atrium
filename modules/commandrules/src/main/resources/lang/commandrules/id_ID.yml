@@ -29,6 +29,7 @@ warmup-started: "<prefix><muted>Memakai <highlight>/<command></highlight> dalam 
 warmup-countdown: "<muted>/<command> dalam <highlight><seconds></highlight>s"
 warmup-cancelled: "<prefix><error>Warmup untuk <highlight>/<command></highlight> dibatalkan oleh perintah lain."
 warmup-cancelled-move: "<prefix><error>Warmup untuk <highlight>/<command></highlight> dibatalkan: kamu bergerak."
+warmup-cancelled-inventory: "<prefix><error>Warmup untuk <highlight>/<command></highlight> dibatalkan: kamu membuka inventaris."
 warmup-cancelled-damage: "<prefix><error>Warmup untuk <highlight>/<command></highlight> dibatalkan: kamu menerima damage."
 value-none: "tidak ada"
 value-all: "semua"

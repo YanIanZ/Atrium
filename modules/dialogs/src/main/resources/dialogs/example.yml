@@ -9,6 +9,12 @@
 #                        Cycles and unknown names are refused at load time.
 #   on-open: [ ... ]     action lines run once when the player opens the dialog (no input exists yet)
 #   cooldown: 5m         minimum time between two opens per player (0 or absent = no cooldown)
+#   conditions: [...]    extra gates, checked on the player when the dialog opens. One entry is either
+#                        "permission:<node>" or a placeholder comparison: "%server_online% >= 5", "%rank% == vip",
+#                        "%vip%" (true for enabled/1/on/yes/true), or a built-in name without percent signs
+#                        (online, world_players, level, health, food, gamemode, player, world, x, y, z).
+#                        Prefix a condition with ! to negate it. A missing placeholder makes it false.
+#                        Buttons accept the same "conditions:" list; a button whose condition fails is hidden.
 title: "<gold>Hello, <player>!"
 # Permission needed to open this dialog (empty = anyone with atrium.dialog.open).
 permission: ""

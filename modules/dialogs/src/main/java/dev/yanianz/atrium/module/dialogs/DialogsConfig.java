@@ -29,6 +29,17 @@ public class DialogsConfig {
     @Comment("Write example.yml into the dialogs folder when the folder is created for the first time.")
     public boolean createExample = true;
 
+    @Comment("Remember the values a player typed into each dialog and show them again when the dialog is\n"
+            + "reopened or after they log in again. Only values that passed validation are stored.")
+    public boolean rememberValues = true;
+
+    @Comment("How many dialogs per player keep remembered values; the least recently changed are dropped (1-64).")
+    public int savedValuesMaxDialogs = 32;
+
+    @Comment("Allow %placeholder% conditions on dialogs and buttons (PlaceholderAPI must be enabled).\n"
+            + "Built-in names (online, world_players, level, health, food, gamemode, x, y, z) work without it.")
+    public boolean placeholderConditions = true;
+
     @Comment("Show dialogs to Bedrock players (Geyser/Floodgate) as native Bedrock forms instead of Paper dialogs, "
             + "which a Bedrock client cannot render. Their answers are validated exactly like Java answers. "
             + "Requires the floodgate plugin; without it this setting does nothing. A custom form has one submit "

@@ -33,4 +33,10 @@ public class ActionsConfig {
 
     @Comment("Log every console command run by an action sequence (audit trail).")
     public boolean logConsoleCommands = false;
+
+    @Comment("Run the schedules in modules/actions/schedules.yml. A schedule uses a five-field cron\n"
+            + "expression (cron: \"0 8 * * *\") or an interval (every: 10m) and runs its actions as the\n"
+            + "console. See the file header written on first use. A run missed while the server was down\n"
+            + "is skipped, never replayed.")
+    public boolean schedulesEnabled = true;
 }

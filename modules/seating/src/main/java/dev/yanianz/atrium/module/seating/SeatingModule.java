@@ -27,11 +27,16 @@ public final class SeatingModule implements AtriumModule {
     static final String PERM_WORLD_BYPASS = "atrium.seating.worlds.bypass";
     static final String PERM_ADMIN = "atrium.seating.admin";
     static final String PERM_SWEEP = "atrium.seating.sweep";
+    static final String PERM_RIDE = "atrium.seating.ride";
+    static final String PERM_RIDE_PLAYERS = "atrium.seating.ride.players";
+    static final String PERM_RIDE_OFF = "atrium.seating.ride.others";
+    static final String PERM_LAUNCH = "atrium.seating.ride.launch";
 
     private ModuleContext ctx;
     private ConfigHandle<SeatingConfig> config;
     private SeatManager seats;
     private CrawlManager crawl;
+    private RideManager ride;
     private TaskHandle checkTask = TaskHandle.NOOP;
 
     @Override
@@ -51,10 +56,12 @@ public final class SeatingModule implements AtriumModule {
         validate(config.get());
         this.seats = new SeatManager(ctx, config);
         this.crawl = new CrawlManager(ctx, config);
+        this.ride = new RideManager(ctx, config);
         this.seats.beforeSeat(player -> crawl.stop(player, CrawlRules.StopReason.INVALID));
         ctx.listen(new SeatingListener(ctx, config, seats, crawl));
+        ctx.listen(ride);
         registerPermissions();
-        new SeatingCommands(ctx, seats, crawl).register();
+        new SeatingCommands(ctx, seats, crawl, ride, config).register();
         scheduleCheck();
     }
 
@@ -70,6 +77,10 @@ public final class SeatingModule implements AtriumModule {
                 "Use seating features in worlds disabled in the seating config");
         ctx.permission(PERM_ADMIN, PermissionDefault.OP, "Use /seating help and status commands");
         ctx.permission(PERM_SWEEP, PermissionDefault.OP, "Remove stale seat records with /seating sweep");
+        ctx.permission(PERM_RIDE, PermissionDefault.TRUE, "Ride the entity you look at with /ride");
+        ctx.permission(PERM_RIDE_PLAYERS, PermissionDefault.OP, "Ride another player with /ride <player>");
+        ctx.permission(PERM_RIDE_OFF, PermissionDefault.OP, "Take another player off their vehicle with /ride stop <player>");
+        ctx.permission(PERM_LAUNCH, PermissionDefault.OP, "Launch your mount upwards with /ride launch");
     }
 
     private void scheduleCheck() {
@@ -118,6 +129,9 @@ public final class SeatingModule implements AtriumModule {
         }
         if (cfg.crawlOptions == null) {
             cfg.crawlOptions = new SeatingConfig.CrawlOptions();
+        }
+        if (cfg.ride == null) {
+            cfg.ride = new SeatingConfig.Ride();
         }
         cfg.seat.heightOffset = Math.clamp(cfg.seat.heightOffset, -2.0, 2.0);
         cfg.seat.layDepth = Math.clamp(cfg.seat.layDepth, 0.0, 1.0);

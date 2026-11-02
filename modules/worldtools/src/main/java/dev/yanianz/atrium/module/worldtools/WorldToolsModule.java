@@ -24,10 +24,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Biome;
+import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.permissions.PermissionDefault;
@@ -41,7 +43,10 @@ public final class WorldToolsModule implements AtriumModule {
     private ProtectionService protection;
     private ReplaceJobs jobs;
     private final Set<UUID> searching = ConcurrentHashMap.newKeySet();
+    private final Selections selections = new Selections();
     private volatile List<String> blockNames = List.of();
+
+    static final String PERM_SELECT = "atrium.select";
 
     @Override
     public String id() {
@@ -72,6 +77,9 @@ public final class WorldToolsModule implements AtriumModule {
         ctx.permission("atrium.replaceblock", PermissionDefault.OP, "Replace blocks in a radius around you");
         ctx.permission("atrium.replaceblock.others", PermissionDefault.OP, "Cancel every running /replaceblock job");
         ctx.permission("atrium.findbiome", PermissionDefault.OP, "Find the nearest biome of a type");
+        ctx.permission(PERM_SELECT, PermissionDefault.OP, "Use the selection wand and /select");
+
+        ctx.listen(new SelectionListener(ctx, config, selections));
 
         SuggestionProvider<CommandSourceStack> blocks = Cmds.suggest(() -> blockNames);
         SuggestionProvider<CommandSourceStack> targets = (c, builder) -> {
@@ -94,8 +102,27 @@ public final class WorldToolsModule implements AtriumModule {
                 .then(Commands.argument("from", StringArgumentType.word()).suggests(blocks)
                         .then(Commands.argument("to", StringArgumentType.string()).suggests(targets)
                                 .executes(this::replace)
-                                .then(Commands.argument("radius", IntegerArgumentType.integer(1)).executes(this::replace))))
+                                .then(Commands.argument("radius", IntegerArgumentType.integer(1)).executes(this::replace))
+                                .then(Cmds.literal("selection").executes(this::replaceSelection))))
                 .build(), "Replace one block type around you in chunk batches"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("select", PERM_SELECT)
+                .executes(this::selectInfo)
+                .then(Cmds.literal("pos1").executes(c -> selectCorner(c, 1)))
+                .then(Cmds.literal("pos2").executes(c -> selectCorner(c, 2)))
+                .then(Cmds.literal("info").executes(this::selectInfo))
+                .then(Cmds.literal("clear").executes(this::selectClear))
+                .then(Cmds.literal("wand").executes(this::selectWand))
+                .then(Cmds.literal("expand")
+                        .executes(this::selectExpandUsage)
+                        .then(Commands.argument("amount", IntegerArgumentType.integer(1))
+                                .suggests(Cmds.suggest(() -> List.of("1", "5", "10", "50")))
+                                .executes(c -> selectExpand(c, null))
+                                .then(Commands.argument("direction", StringArgumentType.word())
+                                        .suggests(Cmds.suggest(() -> List.of("up", "down", "north", "south", "east",
+                                                "west", "vert")))
+                                        .executes(c -> selectExpand(c, StringArgumentType.getString(c, "direction"))))))
+                .build(), "Select two corners and use the selection with /replaceblock", "selection"));
 
         ctx.command(CommandSpec.of(Cmds.literal("findbiome", "atrium.findbiome")
                 .executes(this::biomeUsage)
@@ -167,8 +194,138 @@ public final class WorldToolsModule implements AtriumModule {
         return Cmds.OK;
     }
 
-    private int cancel(CommandContext<CommandSourceStack> c) {
+    // ---- selection ----
+
+    private int selectInfo(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        selections.selection(player.getUniqueId()).ifPresentOrElse(cuboid -> {
+            if (!cuboid.fits(config.get().maxSelectionVolume())) {
+                ctx.messages().send(player, "worldtools.select-too-big", Msg.number("volume", cuboid.volume()),
+                        Msg.number("max", config.get().maxSelectionVolume()));
+            }
+            ctx.messages().send(player, "worldtools.select-info", Msg.unparsed("world", cuboid.world()),
+                    Msg.number("min_x", cuboid.minX()), Msg.number("min_y", cuboid.minY()),
+                    Msg.number("min_z", cuboid.minZ()), Msg.number("max_x", cuboid.maxX()),
+                    Msg.number("max_y", cuboid.maxY()), Msg.number("max_z", cuboid.maxZ()),
+                    Msg.number("volume", cuboid.volume()));
+        }, () -> ctx.messages().send(player, "worldtools.select-empty",
+                Msg.number("max", config.get().maxSelectionVolume())));
+        return Cmds.OK;
+    }
+
+    private int selectCorner(CommandContext<CommandSourceStack> c, int corner) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        Block block = player.getTargetBlockExact(Math.clamp(config.get().selectionReach(), 1, 64));
+        if (block == null) {
+            ctx.messages().send(player, "worldtools.select-no-block");
+            return Cmds.OK;
+        }
+        Cuboid.Point point = new Cuboid.Point(block.getWorld().getName(), block.getX(), block.getY(), block.getZ());
+        selections.setCorner(player.getUniqueId(), corner, point);
+        ctx.messages().send(player, "worldtools.select-corner", Msg.number("corner", corner),
+                Msg.number("x", point.x()), Msg.number("y", point.y()), Msg.number("z", point.z()));
+        return Cmds.OK;
+    }
+
+    private int selectClear(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        selections.clear(player.getUniqueId());
+        ctx.messages().send(player, "worldtools.select-cleared");
+        return Cmds.OK;
+    }
+
+    private int selectWand(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (!config.get().selectionWandEnabled()) {
+            ctx.messages().send(player, "worldtools.select-wand-disabled");
+            return Cmds.OK;
+        }
+        var leftover = player.getInventory().addItem(SelectionListener.wand(config.get()));
+        if (!leftover.isEmpty()) {
+            // Never drop a plain tool on the ground silently: report that the inventory is full.
+            ctx.messages().send(player, "worldtools.select-wand-full");
+            return Cmds.OK;
+        }
+        ctx.messages().send(player, "worldtools.select-wand-given",
+                Msg.unparsed("item", config.get().selectionWandMaterial().getKey().getKey()));
+        return Cmds.OK;
+    }
+
+    private int selectExpandUsage(CommandContext<CommandSourceStack> c) {
+        ctx.messages().send(c.getSource().getSender(), "worldtools.select-expand-usage");
+        return Cmds.OK;
+    }
+
+    private int selectExpand(CommandContext<CommandSourceStack> c, @org.jspecify.annotations.Nullable String directionName) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        Cuboid current = selections.selection(player.getUniqueId()).orElse(null);
+        if (current == null) {
+            ctx.messages().send(player, "worldtools.select-empty", Msg.number("max", config.get().maxSelectionVolume()));
+            return Cmds.OK;
+        }
+        Cuboid.Direction direction = directionName == null
+                ? Cuboid.facing(player.getLocation().getYaw(), player.getLocation().getPitch())
+                : Cuboid.Direction.parse(directionName);
+        if (direction == null) {
+            ctx.messages().send(player, "worldtools.select-bad-direction", Msg.unparsed("direction", directionName));
+            return Cmds.OK;
+        }
+        int amount = IntegerArgumentType.getInteger(c, "amount");
+        org.bukkit.World world = player.getWorld();
+        Cuboid expanded = current.expand(direction, amount, world.getMinHeight(), world.getMaxHeight() - 1);
+        if (!expanded.fits(config.get().maxSelectionVolume())) {
+            ctx.messages().send(player, "worldtools.select-too-big", Msg.number("volume", expanded.volume()),
+                    Msg.number("max", config.get().maxSelectionVolume()));
+            return Cmds.OK;
+        }
+        selections.setSelection(player.getUniqueId(), expanded);
+        ctx.messages().send(player, "worldtools.select-expanded",
+                Msg.unparsed("direction", direction.name().toLowerCase(Locale.ROOT)),
+                Msg.number("volume", expanded.volume()));
+        return Cmds.OK;
+    }
+
+    /** Starts a job on the selection; the area is copied now so a later /select does not change a running job. */
+    private int replaceSelection(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         CommandSender sender = c.getSource().getSender();
+        if (!(sender instanceof Player player)) {
+            throw cmds.fail(c.getSource(), "core.player-only");
+        }
+        WorldToolsConfig cfg = config.get();
+        Cuboid cuboid = selections.selection(player.getUniqueId()).orElseThrow(() ->
+                cmds.fail(c.getSource(), "worldtools.select-empty", Msg.number("max", cfg.maxSelectionVolume())));
+        if (!cuboid.fits(cfg.maxSelectionVolume())) {
+            throw cmds.fail(c.getSource(), "worldtools.select-too-big", Msg.number("volume", cuboid.volume()),
+                    Msg.number("max", cfg.maxSelectionVolume()));
+        }
+        World world = Bukkit.getWorld(cuboid.world());
+        if (world == null) {
+            throw cmds.fail(c.getSource(), "worldtools.select-world-gone", Msg.unparsed("world", cuboid.world()));
+        }
+        Material from = block(StringArgumentType.getString(c, "from").toLowerCase(Locale.ROOT)).orElseThrow(() ->
+                cmds.fail(c.getSource(), "worldtools.unknown-block",
+                        Msg.unparsed("block", StringArgumentType.getString(c, "from"))));
+        String spec = StringArgumentType.getString(c, "to");
+        List<Replacement.Choice<Material>> to;
+        try {
+            to = Replacement.parse(spec, WorldToolsModule::block);
+        } catch (IllegalArgumentException e) {
+            throw cmds.fail(c.getSource(), "worldtools.bad-replacement", Msg.unparsed("spec", spec));
+        }
+        var area = new ReplaceJobs.Area(world, (cuboid.minX() + cuboid.maxX()) / 2, (cuboid.minZ() + cuboid.maxZ()) / 2,
+                cuboid.minX(), cuboid.maxX(), cuboid.minY(), cuboid.maxY(), cuboid.minZ(), cuboid.maxZ());
+        switch (jobs.start(player.getUniqueId(), player.getName(), area, from, to)) {
+            case ALREADY_RUNNING -> throw cmds.fail(c.getSource(), "worldtools.replace-running");
+            case TOO_MANY -> throw cmds.fail(c.getSource(), "worldtools.replace-busy");
+            case STARTED -> ctx.messages().send(sender, "worldtools.replace-started-selection",
+                    Msg.unparsed("from", from.getKey().getKey()), Msg.unparsed("to", ReplaceJobs.describe(to)),
+                    Msg.number("volume", cuboid.volume()),
+                    Msg.number("chunks", jobs.job(player.getUniqueId()).map(ReplaceJobs.Job::total).orElse(0)));
+        }
+        return Cmds.OK;
+    }
+
+    private int cancel(CommandContext<CommandSourceStack> c) {        CommandSender sender = c.getSource().getSender();
         boolean cancelled = jobs.cancel(sender instanceof Player player ? player.getUniqueId() : ReplaceJobs.CONSOLE);
         ctx.messages().send(sender, cancelled ? "worldtools.replace-cancelling" : "worldtools.replace-none");
         return Cmds.OK;

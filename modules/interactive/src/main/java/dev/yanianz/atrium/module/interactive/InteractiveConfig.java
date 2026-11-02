@@ -19,4 +19,9 @@ public class InteractiveConfig {
     @Comment("cancel-event for newly created interactive commands: the vanilla interaction (opening a chest, breaking\n"
             + "the block, trading with a villager) is cancelled when a binding is clicked.")
     public boolean defaultCancelEvent = true;
+
+    @Comment("Run an interactive command when a player right-clicks a sign with a line that reads [ic:name].\n"
+            + "The sign itself is the binding (nothing is stored) and the command's own permission still applies.\n"
+            + "The other sign lines become {sign_line1}..{sign_line4} and {sign_args} in the action lines.")
+    public boolean signCommands = true;
 }

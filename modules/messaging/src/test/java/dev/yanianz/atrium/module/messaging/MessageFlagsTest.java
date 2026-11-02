@@ -11,6 +11,7 @@ class MessageFlagsTest {
         assertEquals("hello world", result.text());
         assertEquals(5, result.seconds());
         assertFalse(result.silent());
+        assertTrue(result.perTarget().isEmpty());
     }
 
     @Test void parsesSecondsAndCompoundDurations() {
@@ -22,6 +23,34 @@ class MessageFlagsTest {
         MessageFlags.Result minutes = MessageFlags.parse("-t:1m hello", 5, 300, false);
         assertTrue(minutes.ok());
         assertEquals(60, minutes.seconds());
+    }
+
+    @Test void acceptsTheCmiDurationSpelling() {
+        MessageFlags.Result shortForm = MessageFlags.parse("-s:15 hello", 5, 300, false);
+        assertTrue(shortForm.ok());
+        assertEquals(15, shortForm.seconds());
+        assertEquals("hello", shortForm.text());
+        assertFalse(shortForm.silent());
+    }
+
+    @Test void perTargetDurationsOverrideTheGlobalOne() {
+        MessageFlags.Result result = MessageFlags.parse("-t:8 -t:Alice=30 -t:bob=1m hello", 5, 300, false);
+        assertTrue(result.ok());
+        assertEquals(8, result.seconds());
+        assertEquals(30, result.secondsFor("alice"));
+        assertEquals(30, result.secondsFor("ALICE"));
+        assertEquals(60, result.secondsFor("Bob"));
+        assertEquals(8, result.secondsFor("Carol"));
+        assertEquals("hello", result.text());
+    }
+
+    @Test void perTargetDurationsAreClampedAndValidated() {
+        MessageFlags.Result clamped = MessageFlags.parse("-t:Alice=9999 hi", 5, 300, false);
+        assertEquals(300, clamped.secondsFor("alice"));
+        assertEquals(MessageFlags.Problem.INVALID_DURATION,
+                MessageFlags.parse("-t:=5s hi", 5, 300, false).problem());
+        assertEquals(MessageFlags.Problem.INVALID_DURATION,
+                MessageFlags.parse("-t:Alice=nope hi", 5, 300, false).problem());
     }
 
     @Test void clampsLongDurationsToTheConfiguredMaximum() {

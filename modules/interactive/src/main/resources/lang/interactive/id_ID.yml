@@ -42,3 +42,5 @@ set-cancel-event: "<prefix><success>Batalkan event untuk <highlight><name></high
 set-trigger: "<prefix><success>Pemicu <highlight><name></highlight> diatur ke <highlight><trigger></highlight>."
 no-permission: "<prefix><error>Kamu tidak diizinkan menggunakan ini."
 on-cooldown: "<prefix><error>Tunggu <highlight><time></highlight> sebelum menggunakan ini lagi."
+sign-unknown: "<prefix><error>Tidak ada perintah interaktif bernama <highlight><name></highlight> (tulis [ic:name] di papan)."
+sign-malformed: "<prefix><warning><highlight><line></highlight> bukan [ic:name] yang valid; papan tidak akan menjalankan apa pun."

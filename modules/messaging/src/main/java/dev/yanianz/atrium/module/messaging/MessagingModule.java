@@ -65,15 +65,24 @@ public final class MessagingModule implements AtriumModule, Listener {
     static final String PERM_COLORPICKER = "atrium.colorpicker";
     static final String PERM_COLORLIMITS = "atrium.colorlimits";
     static final String PERM_TP = "atrium.tp";
+    static final String PERM_CTELLRAW_CONSOLE = "atrium.messaging.ctellraw.console";
+    static final String PERM_BBROADCAST = "atrium.messaging.bbroadcast";
+    static final String PERM_BBROADCAST_SERVERS = "atrium.messaging.bbroadcast.servers";
+    static final String PERM_SERVERLINKS = "atrium.messaging.serverlinks";
 
     static final String HELPOP_TOPIC = "helpop";
+    static final String BROADCAST_TOPIC = "bbroadcast";
     private static final String HELPOP_COOLDOWN = "messaging:helpop";
 
     private ModuleContext ctx;
     private Cmds cmds;
     private ConfigHandle<MessagingConfig> configHandle;
     private AlertStore alerts;
+    private ServerLinksStore serverLinks;
     private ProxyService.Subscription helpOpSubscription;
+    private ProxyService.Subscription broadcastSubscription;
+    private final java.util.concurrent.atomic.AtomicBoolean warnedConsoleClick =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private volatile DateTimeFormatter dates;
 
     @Override
@@ -98,6 +107,12 @@ public final class MessagingModule implements AtriumModule, Listener {
         this.configHandle = ctx.config(MessagingConfig.class, MessagingConfig::new);
         ctx.migrate(AlertStore.MIGRATIONS);
         this.alerts = new AlertStore(ctx.database());
+        this.serverLinks = new ServerLinksStore(ctx.dataDirectory().resolve("serverlinks.yml"), ctx.logger());
+        try {
+            serverLinks.load();
+        } catch (java.io.IOException e) {
+            ctx.logger().warn("Server links could not be read; starting with none", e);
+        }
         rebuildFormatter();
         ctx.listen(this);
         new MessagingCommands(this, ctx).register();
@@ -112,8 +127,15 @@ public final class MessagingModule implements AtriumModule, Listener {
         ctx.permission(PERM_ALERT_RECEIVE, PermissionDefault.OP, "See player alerts when they join");
         ctx.permission(PERM_COLORPICKER, PermissionDefault.TRUE, "Show the clickable colour palette");
         ctx.permission(PERM_COLORLIMITS, PermissionDefault.TRUE, "Show your colour and format permissions");
+        ctx.permission(PERM_CTELLRAW_CONSOLE, PermissionDefault.OP,
+                "Use <cc> in an admin message to run a command as the console when clicked");
+        ctx.permission(PERM_BBROADCAST, PermissionDefault.OP, "Broadcast a message to the whole network");
+        ctx.permission(PERM_BBROADCAST_SERVERS, PermissionDefault.OP, "Choose the servers of a /bbroadcast");
+        ctx.permission(PERM_SERVERLINKS, PermissionDefault.OP, "Manage the server links shown in the server list");
 
         subscribeHelpOp();
+        subscribeBroadcast();
+        applyServerLinks();
         int minutes = config().clampAlertPurgeMinutes();
         ctx.track(ctx.scheduler().asyncTimer(this::purgeAlerts,
                 Duration.ofMinutes(minutes), Duration.ofMinutes(minutes)));
@@ -122,6 +144,12 @@ public final class MessagingModule implements AtriumModule, Listener {
     @Override
     public void reload() {
         rebuildFormatter();
+        try {
+            serverLinks.load();
+        } catch (java.io.IOException e) {
+            ctx.logger().warn("Server links could not be read; keeping the previous ones", e);
+        }
+        applyServerLinks();
     }
 
     @Override
@@ -129,6 +157,10 @@ public final class MessagingModule implements AtriumModule, Listener {
         if (helpOpSubscription != null) {
             helpOpSubscription.close();
             helpOpSubscription = null;
+        }
+        if (broadcastSubscription != null) {
+            broadcastSubscription.close();
+            broadcastSubscription = null;
         }
     }
 
@@ -179,6 +211,14 @@ public final class MessagingModule implements AtriumModule, Listener {
         return help(c, "messaging.help-alert");
     }
 
+    int helpBroadcast(CommandContext<CommandSourceStack> c) {
+        return help(c, "messaging.help-bbroadcast");
+    }
+
+    List<String> serverLinkLabels() {
+        return serverLinks.links().stream().map(ServerLinksStore.Link::label).toList();
+    }
+
     private int help(CommandContext<CommandSourceStack> c, String key) {
         ctx.messages().send(c.getSource().getSender(), key,
                 Msg.number("max", config().clampActionBarMax()));
@@ -204,17 +244,21 @@ public final class MessagingModule implements AtriumModule, Listener {
         String template = adminText(source, flags.text());
         validateTemplate(source, template);
 
+        boolean consoleClicks = sender.hasPermission(PERM_CTELLRAW_CONSOLE);
         List<Player> targets = targets(source, c, all);
         for (Player target : targets) {
-            scheduleActionBar(target, template, flags.seconds());
+            scheduleActionBar(target, template, flags.secondsFor(target.getName()), consoleClicks);
         }
         if (!flags.silent()) {
             if (all) {
                 reply(sender, "messaging.actionbar-sent-all",
                         Msg.number("count", targets.size()), Msg.number("seconds", flags.seconds()));
-            } else {
+            } else if (targets.size() == 1) {
                 reply(sender, "messaging.actionbar-sent",
                         Msg.unparsed("player", targets.getFirst().getName()),
+                        Msg.number("seconds", flags.secondsFor(targets.getFirst().getName())));
+            } else {
+                reply(sender, "messaging.actionbar-sent-many", Msg.number("count", targets.size()),
                         Msg.number("seconds", flags.seconds()));
             }
         }
@@ -237,11 +281,12 @@ public final class MessagingModule implements AtriumModule, Listener {
         String template = adminText(source, flags.text());
         validateTemplate(source, template);
 
+        boolean consoleClicks = sender.hasPermission(PERM_CTELLRAW_CONSOLE);
         List<Player> targets = targets(source, c, all);
         for (Player target : targets) {
             ctx.scheduler().entity(target, () -> {
                 if (target.isOnline()) {
-                    target.sendMessage(render(template, target));
+                    target.sendMessage(render(template, target, consoleClicks));
                 }
             }, null);
         }
@@ -419,6 +464,240 @@ public final class MessagingModule implements AtriumModule, Listener {
         }
     }
 
+    // ---- /bbroadcast ----
+
+    int bbroadcast(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSourceStack source = c.getSource();
+        CommandSender sender = source.getSender();
+        BroadcastFlags.Result flags = BroadcastFlags.parse(StringArgumentType.getString(c, "message"),
+                sender.hasPermission(PERM_BBROADCAST_SERVERS));
+        switch (flags.problem()) {
+            case BLANK -> throw cmds.fail(source, "messaging.blank");
+            case INVALID_SERVER -> throw cmds.fail(source, "messaging.broadcast-bad-server",
+                    Msg.unparsed("server", flags.detail()));
+            case SERVERS_NOT_ALLOWED -> throw cmds.fail(source, "messaging.no-permission-flag",
+                    Msg.unparsed("flag", "-s:"), Msg.unparsed("permission", PERM_BBROADCAST_SERVERS));
+            case NONE -> {
+            }
+        }
+        String template = adminText(source, flags.text());
+        validateTemplate(source, template);
+        boolean consoleClicks = sender.hasPermission(PERM_CTELLRAW_CONSOLE);
+        List<Player> local = new ArrayList<>();
+        for (AtriumUser user : ctx.users().online()) {
+            user.player().ifPresent(player -> {
+                if (canSee(sender, player)) {
+                    local.add(player);
+                }
+            });
+        }
+        for (Player player : local) {
+            ctx.scheduler().entity(player, () -> {
+                if (player.isOnline()) {
+                    player.sendMessage(render(template, player, consoleClicks));
+                }
+            }, null);
+        }
+        Optional<ProxyService> proxy = ctx.services().get(ProxyService.class);
+        boolean published = false;
+        if (proxy.isPresent()) {
+            List<String> selected = flags.servers();
+            if (!selected.isEmpty()) {
+                List<String> known = new ArrayList<>(proxy.get().servers());
+                List<String> unknown = selected.stream()
+                        .filter(name -> known.stream().noneMatch(knownName -> knownName.equalsIgnoreCase(name)))
+                        .toList();
+                if (!unknown.isEmpty()) {
+                    ctx.messages().send(sender, "messaging.broadcast-unknown-servers",
+                            Msg.unparsed("servers", String.join(", ", unknown)),
+                            Msg.unparsed("known", known.isEmpty() ? "-" : String.join(", ", known)));
+                }
+                List<String> reachable = selected.stream()
+                        .filter(name -> known.stream().anyMatch(knownName -> knownName.equalsIgnoreCase(name)))
+                        .toList();
+                if (reachable.isEmpty()) {
+                    // Never fall back to "every server" when the sender named servers explicitly.
+                    ctx.messages().send(sender, "messaging.broadcast-none-reachable");
+                    return Cmds.OK;
+                }
+                published = publishBroadcast(proxy.get(), sender, template, reachable, consoleClicks);
+            } else {
+                published = publishBroadcast(proxy.get(), sender, template, List.of(), consoleClicks);
+            }
+        }
+        ctx.messages().send(sender, published ? "messaging.broadcast-sent"
+                        : "messaging.broadcast-sent-local",
+                Msg.number("count", local.size()),
+                Msg.unparsed("servers", flags.servers().isEmpty() ? "-" : String.join(", ", flags.servers())));
+        return Cmds.OK;
+    }
+
+    private boolean publishBroadcast(ProxyService proxy, CommandSender sender, String template,
+            List<String> servers, boolean consoleClicks) {
+        try {
+            String plain = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                    .serialize(render(template, sender instanceof Player player ? player : null, consoleClicks,
+                            sender.getName()));
+            BroadcastPayload payload = new BroadcastPayload(proxy.serverName(), senderName(sender), plain, servers);
+            proxy.publish(BROADCAST_TOPIC, payload.encode());
+            return true;
+        } catch (Exception e) {
+            ctx.logger().warn("Could not publish a network broadcast", e);
+            return false;
+        }
+    }
+
+    /** Rendering helper that accepts a {@code null} viewer (console sender) and an explicit player name. */
+    private Component render(String template, @Nullable Player viewer, boolean consoleClicks, String playerName) {
+        return ctx.messages().parseTrusted(template, Msg.unparsed("player", playerName), clickTags(consoleClicks));
+    }
+
+    private void subscribeBroadcast() {
+        Optional<ProxyService> proxy = ctx.services().get(ProxyService.class);
+        if (proxy.isEmpty()) {
+            return;
+        }
+        try {
+            broadcastSubscription = proxy.get().subscribe(BROADCAST_TOPIC, this::receiveBroadcast);
+        } catch (RuntimeException e) {
+            ctx.logger().warn("Could not subscribe to the bbroadcast proxy topic", e);
+        }
+    }
+
+    private void receiveBroadcast(ProxyMessage message) {
+        Optional<ProxyService> proxy = ctx.services().get(ProxyService.class);
+        String own = proxy.map(ProxyService::serverName).orElse("");
+        if (!own.isBlank() && own.equalsIgnoreCase(message.server())) {
+            return;
+        }
+        Optional<BroadcastPayload> decoded = BroadcastPayload.decode(message.payload());
+        if (decoded.isEmpty()) {
+            ctx.logger().warn("Ignored a malformed broadcast payload from server '{}'", message.server());
+            return;
+        }
+        BroadcastPayload payload = decoded.get();
+        if (own.isBlank() || !payload.targets(own)) {
+            return;
+        }
+        String text = untrustedText(payload.message(), config().clampAdminLength());
+        if (text.isBlank()) {
+            return;
+        }
+        String server = message.server().isBlank() ? payload.server() : message.server();
+        for (AtriumUser user : ctx.users().online()) {
+            user.player().ifPresent(player -> ctx.scheduler().entity(player, () -> {
+                if (player.isOnline()) {
+                    ctx.messages().send(player, "messaging.broadcast-remote",
+                            Msg.unparsed("server", server), Msg.unparsed("sender", payload.sender()),
+                            Msg.unparsed("message", text));
+                }
+            }, null));
+        }
+    }
+
+    // ---- /serverlinks ----
+
+    int serverLinksList(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        List<ServerLinksStore.Link> links = serverLinks.links();
+        if (links.isEmpty()) {
+            ctx.messages().send(sender, "messaging.serverlinks-empty");
+            return Cmds.OK;
+        }
+        ctx.messages().send(sender, "messaging.serverlinks-header", Msg.number("count", links.size()));
+        for (ServerLinksStore.Link link : links) {
+            ctx.messages().send(sender, "messaging.serverlinks-entry",
+                    Msg.unparsed("label", link.label()), Msg.unparsed("url", link.url()),
+                    Msg.unparsed("type", link.type().isEmpty() ? "-" : link.type()));
+        }
+        return Cmds.OK;
+    }
+
+    int serverLinksAdd(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String label = StringArgumentType.getString(c, "label").strip();
+        String url = StringArgumentType.getString(c, "url").strip();
+        ServerLinksStore.Link link = new ServerLinksStore.Link(label, url, "");
+        if (!link.valid()) {
+            throw cmds.fail(c.getSource(), "messaging.serverlinks-invalid",
+                    Msg.unparsed("label", label), Msg.number("max", ServerLinksStore.Link.MAX_LABEL));
+        }
+        ctx.scheduler().supplyIo(() -> {
+            serverLinks.put(link);
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                failed(sender, "save a server link", error);
+                return;
+            }
+            applyServerLinks();
+            reply(sender, "messaging.serverlinks-added", Msg.unparsed("label", link.label()),
+                    Msg.unparsed("url", link.url()));
+        });
+        return Cmds.OK;
+    }
+
+    int serverLinksRemove(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String label = StringArgumentType.getString(c, "label");
+        ctx.scheduler().supplyIo(() -> serverLinks.remove(label)).whenComplete((removed, error) -> {
+            if (error != null) {
+                failed(sender, "remove a server link", error);
+                return;
+            }
+            if (Boolean.TRUE.equals(removed)) {
+                applyServerLinks();
+                reply(sender, "messaging.serverlinks-removed", Msg.unparsed("label", label));
+            } else {
+                reply(sender, "messaging.serverlinks-unknown", Msg.unparsed("label", label));
+            }
+        });
+        return Cmds.OK;
+    }
+
+    int serverLinksClear(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ctx.scheduler().supplyIo(() -> {
+            serverLinks.clear();
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                failed(sender, "clear the server links", error);
+                return;
+            }
+            applyServerLinks();
+            reply(sender, "messaging.serverlinks-cleared");
+        });
+        return Cmds.OK;
+    }
+
+    int serverLinksReload(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ctx.scheduler().supplyIo(() -> {
+            serverLinks.load();
+            return null;
+        }).whenComplete((ignored, error) -> {
+            if (error != null) {
+                failed(sender, "reload the server links", error);
+                return;
+            }
+            applyServerLinks();
+            reply(sender, "messaging.serverlinks-reloaded", Msg.number("count", serverLinks.links().size()));
+        });
+        return Cmds.OK;
+    }
+
+    private void applyServerLinks() {
+        ctx.scheduler().global(() -> {
+            int count = serverLinks.apply(ctx.plugin().getServer().getServerLinks());
+            var links = ctx.plugin().getServer().getServerLinks();
+            for (Player player : ctx.plugin().getServer().getOnlinePlayers()) {
+                player.sendLinks(links);
+            }
+            ctx.logger().debug("Applied {} server links", count);
+        });
+    }
+
     // ---- colour tools ----
 
     int colorPicker(CommandContext<CommandSourceStack> c) {
@@ -522,7 +801,23 @@ public final class MessagingModule implements AtriumModule, Listener {
     }
 
     private Component render(String template, Player target) {
-        return ctx.messages().parseTrusted(template, Msg.unparsed("player", target.getName()));
+        return render(template, target, false);
+    }
+
+    /**
+     * @param consoleClicks whether the sender may use {@code <cc>}; without it the tag renders as plain text
+     */
+    private Component render(String template, Player target, boolean consoleClicks) {
+        return ctx.messages().parseTrusted(template, Msg.unparsed("player", target.getName()),
+                clickTags(consoleClicks));
+    }
+
+    private net.kyori.adventure.text.minimessage.tag.resolver.TagResolver clickTags(boolean consoleClicks) {
+        return new ConsoleClickTags(ctx.scheduler(), consoleClicks, message -> {
+            if (warnedConsoleClick.compareAndSet(false, true)) {
+                ctx.logger().warn(message);
+            }
+        }).resolver();
     }
 
     /** Normalises untrusted single-line text and caps its length. */
@@ -579,11 +874,12 @@ public final class MessagingModule implements AtriumModule, Listener {
             }
             targets.sort(Comparator.comparing(Player::getName, String.CASE_INSENSITIVE_ORDER));
         } else {
-            Player target = cmds.argPlayer(c, "target");
-            if (!canSee(sender, target)) {
-                throw cmds.fail(source, "messaging.target-hidden");
+            for (Player target : cmds.argPlayers(c, "target")) {
+                if (!canSee(sender, target)) {
+                    throw cmds.fail(source, "messaging.target-hidden");
+                }
+                targets.add(target);
             }
-            targets.add(target);
         }
         if (targets.isEmpty()) {
             throw cmds.fail(source, "messaging.no-targets");
@@ -605,7 +901,7 @@ public final class MessagingModule implements AtriumModule, Listener {
         }).orElse(true);
     }
 
-    private void scheduleActionBar(Player target, String template, int seconds) {
+    private void scheduleActionBar(Player target, String template, int seconds, boolean consoleClicks) {
         int interval = config().clampActionBarInterval();
         ctx.scheduler().entity(target, () -> {
             if (!target.isOnline()) {
@@ -613,7 +909,7 @@ public final class MessagingModule implements AtriumModule, Listener {
             }
             Component bar;
             try {
-                bar = render(template, target);
+                bar = render(template, target, consoleClicks);
             } catch (RuntimeException e) {
                 ctx.logger().warn("Invalid action bar MiniMessage for {}", target.getName(), e);
                 return;

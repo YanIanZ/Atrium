@@ -28,6 +28,11 @@ final class DialogPreview {
             body.add(new BodyLine("<dark_gray>Requires permission <white>" + definition.permission()
                     + "</white></dark_gray>", 200));
         }
+        if (!definition.conditions().isEmpty()) {
+            body.add(new BodyLine("<dark_gray>Conditions: <white>" + summary(new ArrayList<>(
+                    definition.conditions().stream().map(Condition::source).toList()))
+                    + "</white></dark_gray>", 200));
+        }
         if (definition.cooldown() != null) {
             body.add(new BodyLine("<dark_gray>Cooldown: <white>"
                     + Durations.format(definition.cooldown(), 3)
@@ -44,8 +49,8 @@ final class DialogPreview {
         }
         ButtonSpec exit = definition.exit() == null ? null : preview(definition.exit());
         return new DialogDefinition(definition.id(), "<dark_gray>[preview]</dark_gray> " + definition.title(),
-                definition.externalTitle(), "", definition.canCloseWithEscape(), definition.columns(), body,
-                definition.inputs(), buttons, exit, List.of(), null);
+                definition.externalTitle(), "", List.of(), definition.canCloseWithEscape(), definition.columns(),
+                body, definition.inputs(), buttons, exit, List.of(), null);
     }
 
     /** The button without its actions, with the actions spelled out in the label. */
@@ -54,7 +59,8 @@ final class DialogPreview {
         String label = described.isEmpty()
                 ? button.label() + " <dark_gray>(no action)</dark_gray>"
                 : button.label() + " <dark_gray>»</dark_gray> <gray>" + described + "</gray>";
-        return new ButtonSpec(label, button.tooltip(), button.width(), button.permission(), List.of(), null);
+        return new ButtonSpec(label, button.tooltip(), button.width(), button.permission(), List.of(), null,
+                List.of());
     }
 
     private static String describe(ButtonSpec button) {
