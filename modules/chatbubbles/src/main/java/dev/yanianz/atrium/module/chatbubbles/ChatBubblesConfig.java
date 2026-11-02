@@ -9,6 +9,14 @@ public class ChatBubblesConfig {
     @Comment("Show a floating text display above a player after their chat message.")
     public boolean enabled = true;
 
+    @Comment("""
+            How the bubble is rendered:
+              auto    - packets when the packetevents plugin is enabled, otherwise follow
+              packets - a client-side TextDisplay mounted on the speaker (zero lag, needs packetevents)
+              follow  - a server TextDisplay moved every tick with velocity prediction
+            """)
+    public String mode = "auto";
+
     @Comment("How long a bubble stays visible, in seconds (1-60).")
     public int durationSeconds = 6;
 
@@ -24,8 +32,24 @@ public class ChatBubblesConfig {
     @Comment("Client-side line width in pixels passed to the TextDisplay (1-1000).")
     public int lineWidth = 200;
 
-    @Comment("Height of the bubble above the player's feet, in blocks.")
-    public double yOffset = 2.15;
+    @Comment("Height of the bubble above the player's eyes, in blocks.")
+    public double heightAboveEyes = 0.55;
+
+    @Comment("Deprecated: older versions measured the height from the feet (default 2.15). When this key is\n"
+            + "still present it is converted (minus the standing eye height 1.62) and height-above-eyes is ignored.\n"
+            + "Remove it to use height-above-eyes.")
+    public Double yOffset = null;
+
+    /** Standing eye height used to convert the deprecated feet-relative y-offset. */
+    static final double LEGACY_EYE_HEIGHT = 1.62;
+
+    /** Effective height above the eyes, honouring a legacy feet-relative {@code y-offset}. */
+    public double effectiveHeightAboveEyes() {
+        if (yOffset != null && Double.isFinite(yOffset)) {
+            return Math.max(0.1, yOffset - LEGACY_EYE_HEIGHT);
+        }
+        return heightAboveEyes;
+    }
 
     @Comment("Hide the bubble from the player who wrote the message.")
     public boolean hideFromSender = false;

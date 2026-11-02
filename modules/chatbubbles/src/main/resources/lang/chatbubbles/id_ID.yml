@@ -1,2 +1,7 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
 bubble-unavailable: "<prefix><muted>Kamu tidak bisa menampilkan gelembung chat saat ini."
+mode: "<prefix><muted>Mode gelembung chat: <highlight><mode></highlight> <muted>(dikonfigurasi <configured>, PacketEvents <packets>)</muted>."
+packets-usable: "<success>siap"
+packets-unusable: "<warning>aktif tetapi tidak dapat dipakai"
+packets-not-used: "<muted>aktif, tidak dipakai"
+packets-missing: "<muted>tidak ada"

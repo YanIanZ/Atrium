@@ -1,2 +1,7 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
 bubble-unavailable: "<prefix><muted>You cannot show a chat bubble right now."
+mode: "<prefix><muted>Chat bubble mode: <highlight><mode></highlight> <muted>(configured <configured>, PacketEvents <packets>)</muted>."
+packets-usable: "<success>usable"
+packets-unusable: "<warning>enabled but unusable"
+packets-not-used: "<muted>enabled, not used"
+packets-missing: "<muted>missing"

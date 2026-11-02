@@ -1,56 +1,60 @@
 package dev.yanianz.atrium.module.chatbubbles;
 
+import com.mojang.brigadier.context.CommandContext;
 import dev.yanianz.atrium.api.moderation.MuteService;
 import dev.yanianz.atrium.api.vanish.VanishService;
 import dev.yanianz.atrium.api.vanish.VanishStateChangeEvent;
+import dev.yanianz.atrium.core.command.Cmds;
+import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.config.ConfigHandle;
+import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
-import dev.yanianz.atrium.core.scheduler.TaskHandle;
+import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.event.player.AsyncChatEvent;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
-import org.bukkit.Color;
-import org.bukkit.Location;
-import org.bukkit.entity.Display;
 import org.bukkit.entity.Player;
-import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.permissions.PermissionDefault;
 
 /**
- * Shows a short, floating {@link TextDisplay} above a player's head after their chat message.
+ * Shows a short, floating text after a player's chat message.
  *
- * <p>The display is NOT mounted as a passenger: Paper refuses cross-world teleports of a player who carries
- * passengers ({@code CraftPlayer#teleport0} returns false), so a bubble would block /home, /warp, /spawn.
- * Instead a short-lived timer on the player's thread moves the display with interpolation while both are
- * owned by the same region; otherwise the bubble is removed. It is created on the player's own region
- * thread after the chat event completed and was not cancelled. Player text is inserted literally; it is
- * never parsed as MiniMessage. The text is the final {@code message()} so chat filters also apply here.
+ * <p>With the packetevents plugin a client-side TextDisplay is mounted on the speaker as a fake passenger:
+ * the client moves it with the player, so there is no visible lag, no server entity and no teleport
+ * problem. Without PacketEvents a server TextDisplay follows every tick with velocity prediction. Neither
+ * display is a real passenger, because Paper refuses a cross-world teleport of a player who carries one
+ * ({@code CraftPlayer#teleport0} returns false), which would block /home, /warp and /spawn.
+ *
+ * <p>Player text is inserted literally; it is never parsed as MiniMessage. The text is the final
+ * {@code message()} so chat filters also apply here.
  */
 public final class ChatBubblesModule implements AtriumModule, Listener {
     static final String PERM_USE = "atrium.chatbubbles";
-
-    /** Ticks between bubble moves; also the client-side interpolation duration. */
-    private static final long FOLLOW_PERIOD = 2L;
+    static final String PERM_ADMIN = "atrium.chatbubbles.admin";
 
     private ModuleContext ctx;
     private ConfigHandle<ChatBubblesConfig> config;
-    private final Map<UUID, Bubble> bubbles = new ConcurrentHashMap<>();
+    private volatile FollowBubbleRenderer follow;
+    private volatile PacketBubbleRenderer packets;
+    private volatile BubbleRenderer active;
+    private BubbleMode configuredMode = BubbleMode.AUTO;
+    private BubbleMode effectiveMode = BubbleMode.FOLLOW;
+    private boolean packetEventsPresent;
 
     @Override
     public String id() {
@@ -59,7 +63,7 @@ public final class ChatBubblesModule implements AtriumModule, Listener {
 
     @Override
     public String description() {
-        return "Floating TextDisplay chat bubbles above players";
+        return "Chat bubbles above players, client-side or server-side";
     }
 
     @Override
@@ -68,16 +72,64 @@ public final class ChatBubblesModule implements AtriumModule, Listener {
         this.config = ctx.config(ChatBubblesConfig.class, ChatBubblesConfig::new);
         ctx.listen(this);
         ctx.permission(PERM_USE, PermissionDefault.TRUE, "Show chat bubbles for your messages");
+        ctx.permission(PERM_ADMIN, PermissionDefault.OP, "Inspect the chat bubble rendering mode");
+        registerCommands();
+        setupRenderers();
+    }
+
+    @Override
+    public void reload() {
+        teardownRenderers();
+        setupRenderers();
     }
 
     @Override
     public void disable() {
-        for (Map.Entry<UUID, Bubble> entry : bubbles.entrySet()) {
-            Bubble bubble = entry.getValue();
-            bubble.task.cancel();
-            removeLater(bubble.display);
+        teardownRenderers();
+    }
+
+    // ---- renderer selection ----
+
+    private void setupRenderers() {
+        ChatBubblesConfig cfg = config.get();
+        List<String> problems = new ArrayList<>();
+        configuredMode = BubbleMode.parse(cfg.mode, (option, problem) -> problems.add(option + ": " + problem));
+        for (String problem : problems) {
+            ctx.logger().warn("modules/chatbubbles.yml {}", problem);
         }
-        bubbles.clear();
+        if (!BubbleColors.validBackground(cfg.backgroundColor)) {
+            ctx.logger().warn("Invalid backgroundColor '{}' in modules/chatbubbles.yml; using #40000000",
+                    cfg.backgroundColor);
+        }
+        packetEventsPresent = Bukkit.getPluginManager().isPluginEnabled(PacketBubbleFactory.PLUGIN);
+        follow = new FollowBubbleRenderer(ctx, config::get);
+        packets = null;
+        if (configuredMode != BubbleMode.FOLLOW && packetEventsPresent) {
+            packets = PacketBubbleFactory.create(ctx, config::get);
+        }
+        boolean packetsReady = packets != null;
+        effectiveMode = BubbleMode.effective(configuredMode, packetsReady);
+        active = effectiveMode == BubbleMode.PACKETS ? packets : follow;
+        if (configuredMode == BubbleMode.PACKETS && !packetsReady) {
+            ctx.logger().warn("chatbubbles mode is 'packets' but PacketEvents is not usable; using follow mode");
+        }
+        ctx.logger().info("Chat bubble mode: {} (configured {}, PacketEvents {})",
+                effectiveMode.id(), configuredMode.id(),
+                packetsReady ? "usable" : packetEventsPresent ? "enabled but unusable" : "missing");
+    }
+
+    private void teardownRenderers() {
+        PacketBubbleRenderer oldPackets = packets;
+        FollowBubbleRenderer oldFollow = follow;
+        packets = null;
+        follow = null;
+        active = null;
+        if (oldPackets != null) {
+            oldPackets.shutdown();
+        }
+        if (oldFollow != null) {
+            oldFollow.shutdown();
+        }
     }
 
     // ---- chat ----
@@ -95,14 +147,25 @@ public final class ChatBubblesModule implements AtriumModule, Listener {
         // The async chat thread must not touch entities; creation runs on the player's own thread.
         ctx.scheduler().entity(player, () -> {
             ChatBubblesConfig cfg = config.get();
-            if (event.isCancelled() || !cfg.enabled || !player.isOnline() || player.isDead()) {
+            BubbleRenderer renderer = active;
+            if (event.isCancelled() || !cfg.enabled || renderer == null || !player.isOnline() || player.isDead()) {
                 return;
             }
             if (!player.hasPermission(PERM_USE) || unavailable(player.getUniqueId())) {
                 return;
             }
-            show(player, text);
+            show(renderer, player, text, cfg);
         }, null);
+    }
+
+    private void show(BubbleRenderer renderer, Player player, String text, ChatBubblesConfig cfg) {
+        List<String> lines = BubbleText.lines(text, cfg.maxLength, cfg.charsPerLine, cfg.maxLines);
+        if (lines.isEmpty()) {
+            return;
+        }
+        TextColor color = BubbleColors.text(cfg.textColor);
+        Component component = Component.text(String.join("\n", lines)).color(color);
+        renderer.show(player, component, cfg);
     }
 
     /** Vanished and shadow-muted players never get a visible bubble. */
@@ -115,186 +178,105 @@ public final class ChatBubblesModule implements AtriumModule, Listener {
                 mutes.isShadowMuted(player) || mutes.isMuted(player)).orElse(false);
     }
 
-    // ---- display lifecycle (always on the player's region thread) ----
+    // ---- packet viewer tracking (only meaningful in packets mode) ----
 
-    private void show(Player player, String text) {
-        ChatBubblesConfig cfg = config.get();
-        List<String> lines = BubbleText.lines(text, cfg.maxLength, cfg.charsPerLine, cfg.maxLines);
-        if (lines.isEmpty()) {
-            return;
-        }
-        removeNow(player.getUniqueId());
-        Component component = Component.text(String.join("\n", lines)).color(textColor(cfg.textColor));
-        TextDisplay display;
-        try {
-            display = player.getWorld().spawn(anchor(player, cfg), TextDisplay.class,
-                    entity -> configure(entity, component, cfg));
-        } catch (RuntimeException error) {
-            ctx.logger().warn("Could not create a chat bubble for {}", player.getName(), error);
-            return;
-        }
-        if (cfg.hideFromSender) {
-            player.hideEntity(ctx.plugin(), display);
-        }
-        Bubble bubble = new Bubble(display);
-        Bubble previous = bubbles.put(player.getUniqueId(), bubble);
-        if (previous != null) {
-            previous.task.cancel();
-            removeLater(previous.display);
-        }
-        long ticks = 20L * Math.clamp(cfg.durationSeconds, 1, 60);
-        long deadline = player.getWorld().getGameTime() + ticks;
-        try {
-            // Runs on the player's thread; removes the bubble when it expires or leaves the player's region.
-            bubble.task = ctx.track(ctx.scheduler().entityTimer(player,
-                    () -> follow(player, bubble, deadline),
-                    () -> removeLater(display), FOLLOW_PERIOD, FOLLOW_PERIOD));
-        } catch (RuntimeException error) {
-            ctx.logger().warn("Could not schedule the expiry of a chat bubble for {}", player.getName(), error);
-            removeNow(player.getUniqueId());
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onMove(PlayerMoveEvent event) {
+        PacketBubbleRenderer renderer = packets;
+        if (renderer != null) {
+            renderer.track(event.getPlayer());
         }
     }
 
-    private void configure(TextDisplay display, Component text, ChatBubblesConfig cfg) {
-        display.setPersistent(false);
-        display.setVisibleByDefault(true);
-        display.text(text);
-        display.setLineWidth(Math.clamp(cfg.lineWidth, 1, 1000));
-        display.setAlignment(TextDisplay.TextAlignment.CENTER);
-        display.setBillboard(Display.Billboard.CENTER);
-        display.setSeeThrough(cfg.seeThrough);
-        display.setShadowed(cfg.shadowed);
-        display.setDefaultBackground(false);
-        display.setBackgroundColor(background(cfg.backgroundColor));
-        display.setViewRange(Math.clamp(cfg.viewRange, 1f, 128f));
-        display.setTeleportDuration((int) FOLLOW_PERIOD);
-    }
-
-    private static Location anchor(Player player, ChatBubblesConfig cfg) {
-        Location location = player.getLocation().add(0, cfg.yOffset, 0);
-        location.setYaw(0f);
-        location.setPitch(0f);
-        return location;
-    }
-
-    /** Player thread. */
-    private void follow(Player player, Bubble bubble, long deadline) {
-        TextDisplay display = bubble.display;
-        boolean current = bubbles.get(player.getUniqueId()) == bubble;
-        if (!current || !player.isOnline() || !display.isValid()
-                || player.getWorld().getGameTime() >= deadline
-                || display.getWorld() != player.getWorld()
-                || !Bukkit.isOwnedByCurrentRegion(display)) {
-            bubble.task.cancel();
-            bubbles.remove(player.getUniqueId(), bubble);
-            if (display.isValid() && Bukkit.isOwnedByCurrentRegion(display)) {
-                display.remove();
-            } else {
-                removeLater(display);
-            }
-            return;
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onJoin(PlayerJoinEvent event) {
+        PacketBubbleRenderer renderer = packets;
+        if (renderer != null) {
+            renderer.track(event.getPlayer());
         }
-        Location target = anchor(player, config.get());
-        if (display.getLocation().distanceSquared(target) > 0.0025) {
-            display.teleportAsync(target).exceptionally(error -> {
-                ctx.logger().warn("Could not move the chat bubble of {}", player.getName(), error);
-                return false;
-            });
-        }
-    }
-
-    /** Removes the bubble of a player on that player's thread. */
-    private void removeNow(UUID owner) {
-        Bubble bubble = bubbles.remove(owner);
-        if (bubble == null) {
-            return;
-        }
-        bubble.task.cancel();
-        if (bubble.display.isValid() && Bukkit.isOwnedByCurrentRegion(bubble.display)) {
-            bubble.display.remove();
-        } else {
-            removeLater(bubble.display);
-        }
-    }
-
-    private void removeLater(TextDisplay display) {
-        if (!ctx.plugin().isEnabled()) {
-            // Server stop: displays are non-persistent and must not be scheduled after disable.
-            return;
-        }
-        ctx.scheduler().entity(display, () -> {
-            if (display.isValid()) {
-                display.remove();
-            }
-        }, null);
     }
 
     // ---- cleanup events ----
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTeleport(PlayerTeleportEvent event) {
-        removeNow(event.getPlayer().getUniqueId());
+        endBubble(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
-        removeNow(event.getPlayer().getUniqueId());
+        UUID player = event.getPlayer().getUniqueId();
+        endBubble(player);
+        PacketBubbleRenderer renderer = packets;
+        if (renderer != null) {
+            renderer.forget(player);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDeath(PlayerDeathEvent event) {
-        removeNow(event.getPlayer().getUniqueId());
+        endBubble(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onWorldChange(PlayerChangedWorldEvent event) {
-        removeNow(event.getPlayer().getUniqueId());
+        endBubble(event.getPlayer().getUniqueId());
+        PacketBubbleRenderer renderer = packets;
+        if (renderer != null) {
+            renderer.track(event.getPlayer());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onVanish(VanishStateChangeEvent event) {
         if (event.isVanishing()) {
-            removeNow(event.getPlayer().getUniqueId());
+            endBubble(event.getPlayer().getUniqueId());
         }
     }
 
-    // ---- helpers ----
-
-    private static TextColor textColor(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return NamedTextColor.WHITE;
+    /** Ends a bubble in whichever renderer holds it; both are idempotent. */
+    private void endBubble(UUID speaker) {
+        FollowBubbleRenderer followRenderer = follow;
+        if (followRenderer != null) {
+            followRenderer.remove(speaker);
         }
-        String value = raw.trim().toLowerCase(Locale.ROOT);
-        if (value.startsWith("#")) {
-            TextColor hex = TextColor.fromHexString(value);
-            return hex == null ? NamedTextColor.WHITE : hex;
-        }
-        NamedTextColor named = NamedTextColor.NAMES.value(value);
-        return named == null ? NamedTextColor.WHITE : named;
-    }
-
-    private Color background(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return Color.fromARGB(0x40000000);
-        }
-        String hex = raw.trim();
-        if (hex.startsWith("#")) {
-            hex = hex.substring(1);
-        }
-        try {
-            return Color.fromARGB((int) Long.parseLong(hex, 16));
-        } catch (NumberFormatException error) {
-            ctx.logger().warn("Invalid backgroundColor '{}' in modules/chatbubbles.yml; using #40000000", raw, error);
-            return Color.fromARGB(0x40000000);
+        PacketBubbleRenderer packetRenderer = packets;
+        if (packetRenderer != null) {
+            packetRenderer.remove(speaker);
         }
     }
 
-    private static final class Bubble {
-        private final TextDisplay display;
-        private volatile TaskHandle task = TaskHandle.NOOP;
+    // ---- command ----
 
-        private Bubble(TextDisplay display) {
-            this.display = display;
+    private void registerCommands() {
+        ctx.command(CommandSpec.of(Cmds.literal("chatbubbles", PERM_ADMIN)
+                .executes(this::mode)
+                .then(Cmds.literal("mode").executes(this::mode))
+                .build(), "Show how chat bubbles are rendered", "chatbubbles"));
+    }
+
+    private int mode(CommandContext<CommandSourceStack> c) {
+        PacketBubbleRenderer packetRenderer = packets;
+        String statusKey;
+        if (packetRenderer != null) {
+            statusKey = "chatbubbles.packets-usable";
+        } else if (!packetEventsPresent) {
+            statusKey = "chatbubbles.packets-missing";
+        } else if (configuredMode == BubbleMode.FOLLOW) {
+            statusKey = "chatbubbles.packets-not-used";
+        } else {
+            statusKey = "chatbubbles.packets-unusable";
         }
+        Component status = ctx.messages().render(c.getSource().getSender(), statusKey);
+        ctx.messages().send(c.getSource().getSender(), "chatbubbles.mode",
+                Msg.unparsed("mode", effectiveMode().id()),
+                Msg.unparsed("configured", configuredMode.id()),
+                Msg.component("packets", status));
+        return Cmds.OK;
+    }
+
+    /** The renderer currently in use, for the admin command and tests. */
+    BubbleMode effectiveMode() {
+        return effectiveMode;
     }
 }
