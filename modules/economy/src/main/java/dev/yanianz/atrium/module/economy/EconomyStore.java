@@ -35,6 +35,14 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
         Rejected(TransactionResult result) { this.result = result; }
     }
     private record Outcome(TransactionResult result, Map<UUID, BigDecimal> balances) {}
+    private static final int RECENT_READ_LIMIT = 4096;
+    /** Insertion-ordered LRU for offline read values. Guarded by {@link Collections#synchronizedMap}. */
+    private static final class ReadCache extends LinkedHashMap<UUID, BigDecimal> {
+        private static final long serialVersionUID = 1L;
+        private final int limit;
+        ReadCache(int limit) { super(64, 0.75f, true); this.limit = limit; }
+        @Override protected boolean removeEldestEntry(Map.Entry<UUID, BigDecimal> eldest) { return size() > limit; }
+    }
     private final Database db;
     private final Logger logger;
     private final Money money;
@@ -42,6 +50,8 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
     private final String singular, plural;
     private final Set<UUID> online = ConcurrentHashMap.newKeySet();
     private final Map<UUID, BigDecimal> cache = new ConcurrentHashMap<>();
+    /** Values loaded for offline Vault reads; bounded so a placeholder loop cannot grow it without limit. */
+    private final Map<UUID, BigDecimal> recentReads = Collections.synchronizedMap(new ReadCache(RECENT_READ_LIMIT));
     private CompletableFuture<Void> tail = CompletableFuture.completedFuture(null);
     private volatile boolean closed;
     final UserComponentType<AccountState> component;
@@ -75,14 +85,52 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
     }
 
     synchronized CompletableFuture<Void> close() {
-        closed = true; online.clear(); cache.clear(); return tail;
+        closed = true;
+        online.clear();
+        cache.clear();
+        recentReads.clear();
+        return tail;
     }
 
+    /**
+     * Loads a balance before login and keeps it in the bounded read cache until the player joins. A pre-login
+     * read of a missing account reports the starting balance without creating a row, as all reads do.
+     */
+    CompletableFuture<Void> warm(UUID id) {
+        return balance(id).thenAccept(value -> rememberRead(id, value));
+    }
+
+    /** Warms and tracks an account so {@link #online} reads and every commit from now on are cached. */
     CompletableFuture<Void> online(UUID id) {
         online.add(id);
-        return ensure(id).thenAccept(value -> {});
+        // The warmed value stays readable until the committed balance replaces it, so the cache never has a gap.
+        return ensure(id).thenAccept(value -> recentReads.remove(id));
     }
-    void offline(UUID id) { online.remove(id); cache.remove(id); }
+
+    boolean isOnline(UUID id) { return online.contains(id); }
+
+    /** Newest known value for Vault reads: the committed balance of an online player, else a recent read. */
+    BigDecimal cachedRead(UUID id) {
+        BigDecimal value = cache.get(id);
+        return value != null ? value : recentReads.get(id);
+    }
+
+    /** Keeps an asynchronously loaded offline value so a later read that cannot wait answers from it. */
+    void rememberRead(UUID id, BigDecimal value) {
+        if (!online.contains(id)) recentReads.put(id, value);
+    }
+
+    /**
+     * Stops caching at quit and evicts once the queue has drained, so a commit that is still in flight
+     * cannot repopulate a value after the player left.
+     */
+    synchronized CompletableFuture<Void> offline(UUID id) {
+        online.remove(id);
+        return tail.handle((value, failure) -> null).thenRun(() -> {
+            cache.remove(id);
+            recentReads.remove(id);
+        });
+    }
 
     CompletableFuture<BigDecimal> ensure(UUID id) {
         return ordered(() -> db.transaction(c -> ensureRow(c, id).value()).thenApply(value -> {
@@ -168,7 +216,11 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
         balances.forEach((id, value) -> {
             if (online.contains(id)) {
                 cache.put(id, value);
+                recentReads.remove(id);
                 if (!online.contains(id)) cache.remove(id);
+            } else {
+                // Every commit invalidates an offline read value, so a stale entry can never be served.
+                recentReads.remove(id);
             }
         });
     }

@@ -9,64 +9,103 @@ import java.util.function.Function;
 import net.milkbowl.vault.economy.AbstractEconomy;
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
+import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.ServicePriority;
 
-/** Loaded only when Vault is present. The synchronous compatibility boundary is intentionally isolated. */
+/**
+ * Loaded only when Vault is present. The synchronous compatibility boundary is intentionally isolated.
+ *
+ * <p>Reads are answered by {@link VaultReads}: a balance for an online player comes from the cache that
+ * is warmed before the player is in game, so a scoreboard plugin calling Vault from its own thread on
+ * join cannot stall. Writes keep their transactional semantics and are the only path that waits, bounded
+ * by {@code vaultTimeoutMillis}, because Vault has no asynchronous result.
+ */
 @SuppressWarnings("deprecation")
 final class VaultBridge extends AbstractEconomy implements AutoCloseable {
     private final ModuleContext ctx;
     private final EconomyStore store;
-    private final int timeout;
+    private final VaultReads reads;
+    private final Set<String> resolving = ConcurrentHashMap.newKeySet();
     private volatile boolean enabled = true;
+
     private VaultBridge(ModuleContext ctx, EconomyStore store, EconomyConfig config) {
-        this.ctx = ctx; this.store = store; timeout = config.vaultTimeoutMillis;
+        this.ctx = ctx;
+        this.store = store;
+        this.reads = new VaultReads(new VaultReads.Store() {
+            @Override public BigDecimal cachedRead(UUID account) { return store.cachedRead(account); }
+            @Override public boolean isOnline(UUID account) { return store.isOnline(account); }
+            @Override public CompletableFuture<BigDecimal> balance(UUID account) { return store.balance(account); }
+            @Override public void rememberRead(UUID account, BigDecimal value) { store.rememberRead(account, value); }
+        }, ctx.logger(), config.vaultTimeoutMillis, VaultBridge::onTickThread, () -> enabled);
     }
+
     static VaultBridge register(ModuleContext ctx, EconomyStore store, EconomyConfig config) {
         VaultBridge provider = new VaultBridge(ctx, store, config);
         ctx.plugin().getServer().getServicesManager().register(Economy.class, provider, ctx.plugin(), ServicePriority.Normal);
-        ctx.logger().info("Vault economy registered; synchronous writes may wait up to {} ms", config.vaultTimeoutMillis);
+        ctx.logger().info("Vault economy registered; writes may wait up to {} ms, reads never wait on a tick thread",
+                config.vaultTimeoutMillis);
         return provider;
     }
+
     @Override public void close() {
         enabled = false;
         ctx.plugin().getServer().getServicesManager().unregister(Economy.class, this);
     }
-    private static final long WAIT_WARNING_INTERVAL_NANOS = java.util.concurrent.TimeUnit.MINUTES.toNanos(1);
-    private final java.util.concurrent.atomic.AtomicLong lastWaitWarning = new java.util.concurrent.atomic.AtomicLong();
-    private final java.util.concurrent.atomic.AtomicLong suppressedWaits = new java.util.concurrent.atomic.AtomicLong();
 
-    private <T> T await(CompletableFuture<T> future) {
-        if (!enabled) throw new IllegalStateException("Economy disabled");
-        if (!future.isDone()) {
-            // Rate-limited (once a minute, with a count) so a bulk caller such as /vault-convert cannot flood the log.
-            long now = System.nanoTime();
-            long last = lastWaitWarning.get();
-            long waits = suppressedWaits.incrementAndGet();
-            if ((last == 0L || now - last >= WAIT_WARNING_INTERVAL_NANOS) && lastWaitWarning.compareAndSet(last, now)) {
-                suppressedWaits.addAndGet(-waits);
-                ctx.logger().warn("{} synchronous Vault wait(s), latest on thread '{}' (limit {} ms). Tick-thread callers can "
-                        + "stall; prefer EconomyService futures.", waits, Thread.currentThread().getName(), timeout);
-            }
-        }
-        try { return future.get(timeout, TimeUnit.MILLISECONDS); }
-        catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            ctx.logger().warn("Vault operation interrupted; write outcome may be unknown", e);
-            throw new IllegalStateException("Interrupted; outcome unknown", e);
-        } catch (ExecutionException | TimeoutException e) {
-            ctx.logger().warn("Vault operation did not complete synchronously; do not blindly retry a timed-out write", e);
-            throw new IllegalStateException("Storage error or timeout; outcome unknown", e);
-        }
+    /**
+     * True on the global tick thread or on a region tick thread. Foreign plugin pools (for example a
+     * scoreboard plugin's own thread) are not tick threads and may still wait briefly.
+     */
+    private static boolean onTickThread() {
+        // Folia implements isPrimaryThread as TickThread.isTickThread, which covers region and global
+        // tick threads; isGlobalTickThread keeps that true on builds that only implement the global part.
+        if (Bukkit.isPrimaryThread() || Bukkit.isGlobalTickThread()) return true;
+        // Fallback for forks that leave isPrimaryThread alone: Folia names region threads
+        // "Folia Region Scheduler Thread #n". No API identifies a region thread without an entity or
+        // location, and this check must work for offline accounts too.
+        String name = Thread.currentThread().getName();
+        return name.startsWith("Folia Region Scheduler Thread") || name.startsWith("Region Scheduler Thread");
     }
+
+    private <T> T await(CompletableFuture<T> future) { return reads.await(future); }
+
+    private BigDecimal balance(UUID id) { return reads.balance(id); }
+
+    /**
+     * Names are resolved through the online list first (no storage), then through the account store.
+     * Resolving a name needs storage, so a tick thread gets a background lookup and {@code 0}.
+     */
+    private BigDecimal namedBalance(String name) {
+        Player online = Bukkit.getPlayerExact(name);
+        if (online != null) return reads.balance(online.getUniqueId());
+        if (reads.onTickThread()) {
+            deferName(name);
+            return BigDecimal.ZERO;
+        }
+        return await(ctx.users().loadByName(name)).map(user -> reads.balance(user.uuid())).orElse(BigDecimal.ZERO);
+    }
+
+    private void deferName(String name) {
+        String key = name.toLowerCase(Locale.ROOT);
+        if (!resolving.add(key)) return;
+        reads.warnDeferred("name '" + name + "'");
+        ctx.users().loadByName(name).whenComplete((user, failure) -> {
+            resolving.remove(key);
+            if (failure != null) {
+                ctx.logger().warn("Deferred Vault name lookup failed for '{}'", name, failure);
+                return;
+            }
+            user.ifPresent(found -> reads.defer(found.uuid()));
+        });
+    }
+
     private <T> CompletableFuture<T> byName(String name, Function<UUID, CompletableFuture<T>> work) {
         return ctx.users().loadByName(name).thenCompose(user -> user.isPresent() ? work.apply(user.get().uuid())
                 : CompletableFuture.failedFuture(new IllegalArgumentException("Unknown Atrium player")));
     }
-    private double balance(UUID id) {
-        BigDecimal cached = store.cachedBalance(id);
-        return (cached != null ? cached : await(store.balance(id))).doubleValue();
-    }
+
     private EconomyResponse invalid(String error) { return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, error); }
     private EconomyResponse response(TransactionResult result) {
         return new EconomyResponse(result.success() ? result.amount().doubleValue() : 0, result.balance().doubleValue(),
@@ -96,26 +135,21 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
     @Override public String currencyNamePlural() { return store.currencyNamePlural(); }
     @Override public String currencyNameSingular() { return store.currencyNameSingular(); }
     @Override public boolean hasAccount(String name) {
+        if (Bukkit.getPlayerExact(name) != null) return true;
         return await(ctx.users().loadByName(name).thenCompose(user -> user.isPresent()
                 ? store.exists(user.get().uuid()) : CompletableFuture.completedFuture(false)));
     }
-    @Override public boolean hasAccount(OfflinePlayer player) { return await(store.exists(player.getUniqueId())); }
-    private BigDecimal namedBalance(String name) {
-        return await(byName(name, id -> {
-            BigDecimal cached = store.cachedBalance(id);
-            return cached == null ? store.balance(id) : CompletableFuture.completedFuture(cached);
-        }));
+    @Override public boolean hasAccount(OfflinePlayer player) {
+        // A warmed online account was created at join, so existence needs no storage round trip.
+        return store.isOnline(player.getUniqueId()) || await(store.exists(player.getUniqueId()));
     }
     @Override public double getBalance(String name) { return namedBalance(name).doubleValue(); }
-    @Override public double getBalance(OfflinePlayer player) { return balance(player.getUniqueId()); }
+    @Override public double getBalance(OfflinePlayer player) { return balance(player.getUniqueId()).doubleValue(); }
     @Override public boolean has(String name, double amount) {
         return Double.isFinite(amount) && amount >= 0 && namedBalance(name).compareTo(BigDecimal.valueOf(amount)) >= 0;
     }
     @Override public boolean has(OfflinePlayer player, double amount) {
-        if (!Double.isFinite(amount) || amount < 0) return false;
-        BigDecimal cached = store.cachedBalance(player.getUniqueId());
-        BigDecimal value = cached != null ? cached : await(store.balance(player.getUniqueId()));
-        return value.compareTo(BigDecimal.valueOf(amount)) >= 0;
+        return Double.isFinite(amount) && amount >= 0 && balance(player.getUniqueId()).compareTo(BigDecimal.valueOf(amount)) >= 0;
     }
     @Override public EconomyResponse depositPlayer(String name, double amount) { return write(name, amount, true); }
     @Override public EconomyResponse withdrawPlayer(String name, double amount) { return write(name, amount, false); }

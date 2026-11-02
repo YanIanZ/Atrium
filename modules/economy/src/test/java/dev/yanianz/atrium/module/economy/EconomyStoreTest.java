@@ -15,15 +15,15 @@ class EconomyStoreTest {
     @TempDir Path folder;
     Database db;
     EconomyStore store;
-    ExecutorService executor;
+    GatedExecutor executor;
     final UUID a = UUID.randomUUID(), b = UUID.randomUUID();
     @BeforeEach void setup() throws Exception {
-        executor = Executors.newVirtualThreadPerTaskExecutor();
+        executor = new GatedExecutor();
         db = new Database(new CoreConfig.Database(), folder, executor, LoggerFactory.getLogger("economy-test"));
         db.migrate("economy", EconomyStore.MIGRATIONS);
         store = new EconomyStore(db, new EconomyConfig(), LoggerFactory.getLogger("economy-test"));
     }
-    @AfterEach void close() { db.close(); executor.close(); }
+    @AfterEach void close() { db.close(); executor.shutdown(); }
     @Test void cancellingCallerFutureDoesNotReleaseInternalQueue() throws Exception {
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
         CompletableFuture<Void> blocker = db.query(c -> {
@@ -97,9 +97,75 @@ class EconomyStoreTest {
         store.deposit(a, new BigDecimal("10"), "give").join();
         store.withdraw(a, new BigDecimal("3"), "take").join();
         assertEquals(new BigDecimal("7.00"), store.cachedBalance(a));
-        store.offline(a);
+        store.offline(a).join();
         store.deposit(a, BigDecimal.ONE, "offline").join();
         assertNull(store.cachedBalance(a));
+    }
+    @Test void warmBeforeLoginCachesTheStartingBalanceAndQuitEvicts() {
+        assertFalse(store.isOnline(a));
+        store.warm(a).join();
+        assertEquals(new BigDecimal("0.00"), store.cachedRead(a), "The warm must publish before the player is in game");
+        assertFalse(store.isOnline(a), "Warming alone must not mark a player online");
+        store.online(a).join();
+        assertTrue(store.isOnline(a));
+        assertEquals(new BigDecimal("0.00"), store.cachedBalance(a));
+        store.deposit(a, new BigDecimal("5"), "give").join();
+        assertEquals(new BigDecimal("5.00"), store.cachedRead(a));
+        store.offline(a).join();
+        assertFalse(store.isOnline(a));
+        assertNull(store.cachedBalance(a));
+        assertNull(store.cachedRead(a), "Quit evicts the recent offline read too");
+    }
+    @Test void cacheChangesOnlyAfterTheCommitCompletes() throws Exception {
+        store.online(a).join();
+        assertEquals(new BigDecimal("0.00"), store.cachedRead(a));
+        executor.hold();
+        var pending = store.deposit(a, new BigDecimal("10"), "give");
+        assertTrue(executor.blocked.await(5, TimeUnit.SECONDS), "The write must be waiting on storage");
+        assertEquals(new BigDecimal("0.00"), store.cachedRead(a), "A queued write must not touch the cache");
+        executor.release();
+        assertTrue(pending.get(5, TimeUnit.SECONDS).success());
+        assertEquals(new BigDecimal("10.00"), store.cachedRead(a));
+    }
+    @Test void offlineReadValuesAreBoundedAndDroppedWhenThePlayerGoesOnline() {
+        for (int i = 0; i < 5000; i++) store.rememberRead(uuid("read-" + i), BigDecimal.ONE);
+        assertNotNull(store.cachedRead(uuid("read-4999")));
+        assertNull(store.cachedRead(uuid("read-0")), "The bounded read cache drops the oldest value");
+        store.rememberRead(a, new BigDecimal("3"));
+        assertEquals(new BigDecimal("3"), store.cachedRead(a));
+        store.online(a).join();
+        assertEquals(new BigDecimal("0.00"), store.cachedRead(a), "The committed balance wins once the player is online");
+    }
+    @Test void commitsInvalidateAnOfflineReadValue() {
+        store.rememberRead(a, new BigDecimal("1"));
+        assertTrue(store.deposit(a, new BigDecimal("4"), "give").join().success());
+        assertNull(store.cachedRead(a), "A commit must invalidate the offline read value instead of serving it");
+        assertEquals(new BigDecimal("4.00"), store.balance(a).join());
+    }
+    private static UUID uuid(String seed) { return UUID.nameUUIDFromBytes(seed.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+
+    /** Executes database work on virtual threads, optionally held so a test can observe pre-commit state. */
+    static final class GatedExecutor implements Executor {
+        private final ExecutorService delegate = Executors.newVirtualThreadPerTaskExecutor();
+        private final CountDownLatch blocked = new CountDownLatch(1);
+        private volatile CountDownLatch gate;
+        @Override public void execute(Runnable task) {
+            delegate.execute(() -> {
+                CountDownLatch held = gate;
+                if (held != null) {
+                    blocked.countDown();
+                    try { held.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                }
+                task.run();
+            });
+        }
+        void hold() { gate = new CountDownLatch(1); }
+        void release() {
+            CountDownLatch held = gate;
+            gate = null;
+            if (held != null) held.countDown();
+        }
+        void shutdown() { release(); delegate.shutdown(); }
     }
     @Test void invalidAmountsAndSelfTransferDoNotCreateAnAccount() {
         assertFalse(store.deposit(a, new BigDecimal("-0.001"), "invalid").join().success());

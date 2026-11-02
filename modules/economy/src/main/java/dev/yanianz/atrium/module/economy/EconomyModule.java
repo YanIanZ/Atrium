@@ -26,6 +26,7 @@ import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.*;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.permissions.PermissionDefault;
@@ -231,10 +232,27 @@ public final class EconomyModule implements AtriumModule, Listener {
             refreshing.set(false);
         });
     }
+    @EventHandler(priority = EventPriority.MONITOR) public void preLogin(AsyncPlayerPreLoginEvent event) {
+        UUID id = event.getUniqueId();
+        // Warming here is intentional: this thread already blocks for the core user data, and the player
+        // is not in game yet, so every Vault read for this account is answered from a cached value later.
+        // The value waits in the bounded read cache, so a denied login cannot leak an online entry.
+        try { store.warm(id).get(config.vaultTimeoutMillis, TimeUnit.MILLISECONDS); }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            ctx.logger().warn("Interrupted while warming the economy balance for {}", id, e);
+        } catch (ExecutionException | TimeoutException e) {
+            ctx.logger().warn("Cannot warm the economy balance for {} before login; the first read may be deferred", id, e);
+        }
+    }
     @EventHandler(priority = EventPriority.MONITOR) public void join(PlayerJoinEvent event) {
+        // Fallback for a warm that failed or timed out before login; it also publishes the committed value.
         observe(store.online(event.getPlayer().getUniqueId()));
     }
     @EventHandler(priority = EventPriority.MONITOR) public void quit(PlayerQuitEvent event) {
-        UUID id = event.getPlayer().getUniqueId(); confirmations.remove(id); store.offline(id);
+        UUID id = event.getPlayer().getUniqueId();
+        confirmations.remove(id);
+        // Eviction waits for queued writes, so a commit cannot repopulate the cache after the player left.
+        observe(store.offline(id));
     }
 }

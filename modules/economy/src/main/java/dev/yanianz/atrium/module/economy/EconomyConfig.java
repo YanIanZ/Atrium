@@ -33,6 +33,12 @@ public class EconomyConfig {
     public int leaderboardRefreshMinutes = 5;
     @Comment("Entries shown per /baltop page; 1 through 100.")
     public int pageSize = 10;
-    @Comment("Maximum wait in milliseconds for synchronous Vault operations. Timeout has an unknown write outcome; do not retry blindly.")
+    @Comment("""
+            Maximum wait in milliseconds for a synchronous Vault call. Reads for online players are answered from
+            the cache warmed before login, and reads on a server tick thread never wait (they answer from the cache
+            or 0 and load in the background). Only writes and offline lookups on regular plugin threads wait.
+            A write on a tick thread, such as a SuperiorSkyblock2 profile switch through GuardedEconomy, waits at
+            most this long for the commit: raising it lengthens the worst-case tick stall, lowering it makes a
+            write that times out more likely, and a timed-out write has an unknown outcome. Do not retry blindly.""")
     public int vaultTimeoutMillis = 2000;
 }

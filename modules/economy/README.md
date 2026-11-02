@@ -34,11 +34,12 @@ DECIMAL and `SELECT ... FOR UPDATE`. Accounts use idempotent insertion; generate
 are validated before insertion. SQLite's core pool already serializes connections.
 
 A module-local asynchronous queue orders storage operations through post-commit cache
-publication. It never waits on a game thread and prevents an older callback from
+publication. A tick thread never waits on it and prevents an older callback from
 replacing a newer balance. This favors correctness over maximum parallel throughput.
-The online cache is populated at join/enable and removed at quit. `balance()` and component
-loads never create an account: a missing account reads as its configured starting balance.
-Creation occurs explicitly at join, on a mutation, or via Vault account creation.
+The online cache is warmed before login and removed at quit, once queued writes drained.
+`balance()` and component loads never create an account: a missing account reads as its
+configured starting balance.
+Creation occurs explicitly before login/at join, on a mutation, or via Vault account creation.
 `economy:account` is an immutable load-time user-component projection. Its saver is a
 no-op so UserManager cannot overwrite the authoritative ledger with an old snapshot.
 Use `EconomyService` for current balances and every mutation.
@@ -60,15 +61,28 @@ unregistered on module disable. World overloads share the global account; banks 
 supported. OfflinePlayer overloads use UUIDs directly, including unnamed offline players.
 Legacy string overloads use Atrium's known-player lookup.
 
-Vault requires synchronous methods. Cached online balance reads avoid database waits;
-uncached/offline reads and writes wait up to `vault-timeout-millis`. Every actual wait
-logs a warning with the caller thread, including all tick-thread callers. These calls
-can stall a Folia region or global tick; integrations should prefer EconomyService futures.
+Vault requires synchronous methods. The balance of an online player is warmed in
+`AsyncPlayerPreLoginEvent` (blocking there is expected, as the core loads user data on
+that thread) and kept cached until quit; the cache is evicted after the queued writes
+drain so a late commit cannot repopulate it. A read for an online player therefore always
+answers from the cache and never waits, even on a foreign plugin thread such as a
+scoreboard plugin's own thread.
+
+A read that is not cached follows a thread-aware policy: a regular plugin thread may wait
+up to `vault-timeout-millis`, while a server tick thread (global or region) never waits —
+it answers from a recent value if one exists, otherwise it loads the balance in the
+background, answers `0` and logs a rate-limited warning. String overloads consult the
+online player list first, so they avoid storage entirely for online names. Writes keep
+their transactional semantics, and the cache is published only from the committed result.
+A write on a tick thread (for example a profile switch through GuardedEconomy) waits at
+most `vault-timeout-millis` for the commit: that value is the worst-case tick stall.
 A failed write is never returned as SUCCESS. A timed-out or interrupted write can still
 commit after Vault returns FAILURE: its outcome is **unknown**, and automatic retries can
 duplicate a charge. A bounded synchronous wait cannot guarantee cancellation of a JDBC
-commit. Offline read failures throw rather than fabricate a successful zero balance.
-Vault's external double interface also limits precision; Atrium's internal API stays exact.
+commit. A read that could not wait reports `0`, which is the same value the guarded Vault
+boundary already returned for a failed or timed-out read, so keep bulk conversions and
+other exact reads on EconomyService futures. Vault's external double interface also limits
+precision; Atrium's internal API stays exact.
 
 ## Validation
 
