@@ -3,14 +3,17 @@ package dev.yanianz.atrium.module.chat;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import dev.yanianz.atrium.api.actions.ActionService;
 import dev.yanianz.atrium.api.chat.ChatChannel;
 import dev.yanianz.atrium.api.chat.ChatGate;
 import dev.yanianz.atrium.api.chat.IgnoreService;
 import dev.yanianz.atrium.api.chat.StaffChatEvent;
+import dev.yanianz.atrium.api.economy.EconomyService;
 import dev.yanianz.atrium.api.moderation.MuteService;
 import dev.yanianz.atrium.api.proxy.NetworkPlayer;
 import dev.yanianz.atrium.api.proxy.ProxyMessage;
 import dev.yanianz.atrium.api.proxy.ProxyService;
+import dev.yanianz.atrium.api.tablist.TabListService;
 import dev.yanianz.atrium.api.user.AtriumUser;
 import dev.yanianz.atrium.api.vanish.VanishService;
 import dev.yanianz.atrium.core.command.Cmds;
@@ -20,6 +23,7 @@ import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.event.player.AsyncChatEvent;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -30,6 +34,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.key.Key;
@@ -42,13 +47,17 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.permissions.PermissionDefault;
 import org.jspecify.annotations.Nullable;
@@ -69,11 +78,22 @@ public final class ChatModule implements AtriumModule, Listener {
     private volatile ChatColorPalette palette = new ChatColorPalette(List.of());
     private volatile EmojiReplacer.Table emoji = EmojiReplacer.Table.EMPTY;
     private volatile List<ChatFilter.Rule> filterRules = List.of();
+    private volatile CapsFilter.Settings capsSettings = new CapsFilter.Settings(false, 60, 6, true, false, List.of());
+    private volatile AdFilter.Settings adSettings = new AdFilter.Settings(false, AdFilter.Action.CENSOR, "***",
+            Set.of(), true);
+    private volatile List<RangeTable.Step> rangeSteps = List.of();
+    private volatile List<ChatTags.Definition> tags = List.of();
+    private volatile List<ChatConfig.SpriteEntry> sprites = List.of();
+    private volatile ChatRoomStore roomStore;
+    private volatile Component deleteHover = Component.empty();
     private volatile Sound mentionSound;
     private volatile ChatRelay relay;
     private final SpamGuard spam = new SpamGuard();
-    /** World names are cached on the player's own thread so the async chat event never reads a world. */
+    private final CommandSpamGuard commandSpam = new CommandSpamGuard();
+    private volatile ChatHistory history = new ChatHistory(200);
+    /** World names and block positions are cached on the player's own thread so chat never reads a world. */
     private final java.util.Map<UUID, String> worldNames = new ConcurrentHashMap<>();
+    private final java.util.Map<UUID, RangeTable.Position> positions = new ConcurrentHashMap<>();
 
     @Override
     public String id() {
@@ -97,9 +117,15 @@ public final class ChatModule implements AtriumModule, Listener {
         this.configHandle = ctx.config(ChatConfig.class, ChatConfig::new);
         ctx.migrate(ChatStore.MIGRATIONS);
         this.store = new ChatStore(ctx.database());
+        this.roomStore = new ChatRoomStore(ctx.database());
         ctx.component(store.component);
         ctx.service(IgnoreService.class, new ChatIgnoreService(uuid -> cachedUser(uuid).ignored()));
         rebuild();
+        try {
+            roomStore.install(roomStore.loadAll().get(30, TimeUnit.SECONDS));
+        } catch (Exception e) {
+            ctx.logger().error("Cannot load chat rooms", e);
+        }
         ctx.listen(this);
         new ChatCommands(this).register();
 
@@ -122,6 +148,17 @@ public final class ChatModule implements AtriumModule, Listener {
         ctx.permission("atrium.chat.filter.alert", PermissionDefault.OP, "Receive chat filter alerts");
         ctx.permission("atrium.chat.filter.bypass", PermissionDefault.OP, "Bypass the chat filter");
         ctx.permission("atrium.chat.spam.bypass", PermissionDefault.OP, "Bypass chat rate limits");
+        ctx.permission("atrium.chat.caps.bypass", PermissionDefault.OP, "Bypass the anti-caps filter");
+        ctx.permission("atrium.chat.item", PermissionDefault.TRUE, "Use [item] and [item:slot] in chat");
+        ctx.permission("atrium.chat.sprite", PermissionDefault.FALSE, "Use [sprite:...] tags in chat");
+        ctx.permission("atrium.chat.shout", PermissionDefault.TRUE, "Use the shout prefix");
+        ctx.permission("atrium.chat.range.bypass", PermissionDefault.FALSE, "Always receive ranged chat");
+        ctx.permission("atrium.chat.range.spy", PermissionDefault.OP, "Toggle range spy with /rangespy");
+        ctx.permission("atrium.chat.delete", PermissionDefault.OP, "Delete chat messages for everyone");
+        ctx.permission("atrium.chat.rooms", PermissionDefault.TRUE, "Use persistent chat rooms");
+        ctx.permission("atrium.chat.rooms.admin", PermissionDefault.OP, "Delete any chat room");
+        ctx.permission("atrium.chat.tags", PermissionDefault.TRUE, "Select a chat tag");
+        ctx.permission("atrium.chat.signspy", PermissionDefault.OP, "See sign advertisement spy");
         ctx.permission("atrium.chatcolor", PermissionDefault.TRUE, "Choose a default chat colour with /chatcolor");
         ctx.permission(ChatColorPalette.GRADIENT_PERMISSION, PermissionDefault.TRUE, "Use gradient chat colours");
         for (ChatColorPalette.Choice choice : palette.choices()) {
@@ -135,9 +172,14 @@ public final class ChatModule implements AtriumModule, Listener {
     public void reload() {
         rebuild();
         spam.clear();
+        commandSpam.clear();
+        history.clear();
         for (ChatColorPalette.Choice choice : palette.choices()) {
             ctx.permission(ChatColorPalette.permission(choice.name()), PermissionDefault.TRUE,
                     "Use the '" + choice.name() + "' chat colour");
+        }
+        for (AtriumUser user : ctx.users().online()) {
+            user.player().ifPresent(this::applyTabTag);
         }
         startRelay();
     }
@@ -146,16 +188,48 @@ public final class ChatModule implements AtriumModule, Listener {
     public void disable() {
         stopRelay();
         spam.clear();
+        commandSpam.clear();
+        history.clear();
+        ctx.services().get(TabListService.class).ifPresent(tab -> {
+            tab.clearNameTags("chat-prefix");
+            tab.clearNameTags("chat-suffix");
+        });
     }
 
     private void rebuild() {
         ChatConfig config = configHandle.get();
-        this.formatter = new ChatFormatter(ctx.messages(), config);
+        this.formatter = new ChatFormatter(ctx.messages(), config, this::renderToken);
         this.palette = ChatColorPalette.compile(config.chatColors, message -> ctx.logger().warn(message));
         this.emoji = EmojiReplacer.compile(config.emoji == null ? null : config.emoji.codes,
                 message -> ctx.logger().warn(message));
         this.filterRules = ChatFilter.compile(config.filter, message -> ctx.logger().warn(message));
+        this.capsSettings = CapsFilter.Settings.of(config.caps);
+        this.adSettings = AdFilter.Settings.of(config.ads);
+        this.rangeSteps = RangeTable.compile(config.range == null ? null : config.range.dynamic);
+        this.tags = ChatTags.compile(config.tags, message -> ctx.logger().warn(message));
+        this.sprites = config.sprites == null || config.sprites.entries == null
+                ? List.of() : List.copyOf(config.sprites.entries);
+        this.history = new ChatHistory(config.deleteButton == null ? 200 : config.deleteButton.historySize);
+        this.deleteHover = config.deleteButton == null || config.deleteButton.hover == null
+                ? Component.text("Delete") : ctx.messages().parseTrusted(config.deleteButton.hover);
         this.mentionSound = parseSound(config.mentions);
+        for (ChatFilter.Rule rule : filterRules) {
+            if (!rule.group().isEmpty()) {
+                ctx.permission("atrium.chat.filter.bypass." + rule.group(), PermissionDefault.OP,
+                        "Bypass the '" + rule.group() + "' chat filter group");
+            }
+        }
+        for (ChatConfig.SpriteEntry sprite : sprites) {
+            if (sprite != null && sprite.id != null && !sprite.id.isBlank()) {
+                ctx.permission("atrium.chat.sprite." + sprite.id, PermissionDefault.OP,
+                        "Use the '" + sprite.id + "' chat sprite");
+            }
+        }
+        for (ChatTags.Definition tag : tags) {
+            if (!tag.permission().isEmpty()) {
+                ctx.permission(tag.permission(), PermissionDefault.OP, "Use the '" + tag.id() + "' chat tag");
+            }
+        }
     }
 
     private void startRelay() {
@@ -217,29 +291,116 @@ public final class ChatModule implements AtriumModule, Listener {
 
         ChatConfig config = config();
         String plain = plain(event.originalMessage());
-        String expanded = applyEmoji(sender, plain);
+        List<String> names = viewerNames(event);
+        List<String> ruleIds = new ArrayList<>();
+
+        String text = plain;
+        if (!sender.hasPermission("atrium.chat.caps.bypass")) {
+            CapsFilter.Result caps = CapsFilter.check(text, capsSettings, names);
+            if (caps.exceeded()) {
+                ruleIds.add("caps");
+                text = caps.text();
+                notifyStaff(sender, plain, List.of("caps"));
+                if (capsSettings.cancel()) {
+                    event.setCancelled(true);
+                    ctx.messages().send(sender, "chat.caps-blocked");
+                    return;
+                }
+            }
+        }
+        text = applyEmoji(sender, text);
+
         boolean bypass = sender.hasPermission("atrium.chat.filter.bypass");
+        if (!bypass && adSettings.enabled()) {
+            AdFilter.Verdict ads = AdFilter.apply(text, adSettings);
+            if (!ads.matches().isEmpty()) {
+                ruleIds.add("ad");
+                if (ads.blocked()) {
+                    event.setCancelled(true);
+                    ctx.messages().send(sender, "chat.filter-blocked");
+                    notifyStaff(sender, plain, List.of("ad"));
+                    runFilterActions(sender, plain, List.of("ad"), List.of());
+                    return;
+                }
+                text = ads.text();
+            }
+        }
+
         ChatFilter.Verdict verdict = bypass
-                ? new ChatFilter.Verdict(expanded, false, List.of())
-                : ChatFilter.apply(expanded, filterRules, config.filter.replacement);
+                ? new ChatFilter.Verdict(text, false, List.of())
+                : ChatFilter.apply(text, filterRules, config.filter.replacement,
+                        group -> sender.hasPermission("atrium.chat.filter.bypass." + group));
         if (verdict.blocked()) {
             event.setCancelled(true);
             ctx.messages().send(sender, "chat.filter-blocked");
             notifyStaff(sender, plain, verdict);
+            runFilterActions(sender, plain, verdict);
             return;
         }
+        text = verdict.text();
         if (!bypass && hasWarning(verdict)) {
             notifyStaff(sender, plain, verdict);
         }
-        if (!allowSpam(sender, verdict.text())) {
+        for (ChatFilter.Match match : verdict.matches()) {
+            if (!ruleIds.contains(match.ruleId())) {
+                ruleIds.add(match.ruleId());
+            }
+        }
+        if (!ruleIds.isEmpty()) {
+            if (verdict.matches().isEmpty()) {
+                runFilterActions(sender, plain, ruleIds, List.of());
+            } else {
+                runFilterActions(sender, plain, verdict);
+            }
+        }
+
+        ChatUser chatUser = cachedUser(senderId);
+        if (config.rooms != null && config.rooms.enabled && chatUser.chatRoom() != null) {
+            event.setCancelled(true);
+            if (!allowSpam(sender, text)) {
+                return;
+            }
+            sendRoom(sender, chatUser.chatRoom(), text);
+            return;
+        }
+
+        boolean shout = false;
+        String shoutPrefix = config.range == null ? "" : config.range.shoutPrefix;
+        if (config.range != null && config.range.enabled && shoutPrefix != null && !shoutPrefix.isEmpty()
+                && text.startsWith(shoutPrefix)
+                && (!config.range.requireShoutPermission || sender.hasPermission("atrium.chat.shout"))) {
+            shout = true;
+            text = text.substring(shoutPrefix.length());
+            if (text.startsWith(" ")) {
+                text = text.substring(1);
+            }
+            if (text.isBlank()) {
+                event.setCancelled(true);
+                ctx.messages().send(sender, "chat.shout-empty");
+                return;
+            }
+        }
+
+        if (!allowSpam(sender, text)) {
             event.setCancelled(true);
             return;
         }
 
+        if (shout && config.range.shoutCost > 0) {
+            event.setCancelled(true);
+            chargeAndShout(sender, text);
+            return;
+        }
+
         removeIgnoredViewers(event, senderId);
-        List<String> names = viewerNames(event);
+        names = viewerNames(event);
+        if (config.range != null && config.range.enabled && !sender.hasPermission("atrium.chat.range.bypass")) {
+            int range = shout ? shoutRange() : chatRange();
+            removeOutOfRange(event, sender, range);
+        }
+
         List<String> mentioned = config.mentions.enabled
-                ? MentionDetector.find(verdict.text(), names, config.mentions.requireAtSign)
+                ? MentionDetector.find(text, names, config.mentions.requireAtSign)
                 : List.of();
         Pattern mentionPattern = config.mentions.enabled && !names.isEmpty()
                 ? MentionDetector.pattern(names, config.mentions.requireAtSign)
@@ -255,18 +416,33 @@ public final class ChatModule implements AtriumModule, Listener {
         // Publish the filtered text. Later listeners at MONITOR (the Discord bridge, chat bubbles,
         // cross-server relays) read event.message(), so leaving the raw message here would send a
         // filtered word to the public webhook. The renderer still controls how the line is displayed.
-        event.message(relayedMessage(verdict.text()));
-        boolean rewritten = !verdict.text().equals(plain);
-        Component message = formatter.playerMessage(sender, event.originalMessage(), verdict.text(), rewritten,
+        event.message(relayedMessage(text));
+        boolean rewritten = !text.equals(plain);
+        Component message = formatter.playerMessage(sender, event.originalMessage(), text, rewritten,
                 chatColor(sender));
         Component rendered = formatter.format(sender, message, mentionPattern,
-                worldNames.getOrDefault(senderId, "?"));
-        // The renderer runs once per viewer, sometimes on the chat thread: it must stay free of side
-        // effects. Mention sounds are played once, on the mentioned player's own region thread.
-        event.renderer((source, displayName, rawMessage, viewer) -> rendered);
+                worldNames.getOrDefault(senderId, "?"), tagPrefix(sender), tagSuffix(sender));
+        UUID deleteId = null;
+        if (config.deleteButton != null && config.deleteButton.enabled) {
+            deleteId = history.add(senderId, sender.getName(), text, event.signedMessage(),
+                    System.currentTimeMillis()).id();
+        }
+        final UUID buttonId = deleteId;
+        event.renderer((source, displayName, rawMessage, viewer) -> withDeleteButton(rendered, viewer, buttonId));
         for (Player target : mentionTargets) {
             playMentionSoundLater(target);
         }
+    }
+
+    private Component withDeleteButton(Component rendered, Audience viewer, @Nullable UUID id) {
+        if (id == null || !(viewer instanceof Player player) || !player.hasPermission("atrium.chat.delete")) {
+            return rendered;
+        }
+        ChatConfig config = config();
+        String label = config.deleteButton == null ? " [x]" : config.deleteButton.label;
+        return rendered.append(Component.text(label == null ? " [x]" : label, NamedTextColor.RED)
+                .clickEvent(ClickEvent.runCommand("/chatdelete " + id))
+                .hoverEvent(HoverEvent.showText(deleteHover)));
     }
 
     /**
@@ -276,6 +452,10 @@ public final class ChatModule implements AtriumModule, Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChatRelay(AsyncChatEvent event) {
         ChatConfig config = config();
+        if (config.range != null && config.range.enabled) {
+            // Ranged chat is local to this server; its recipients were already filtered.
+            return;
+        }
         if (config.crossServer == null || !config.crossServer.enabled || !config.crossServer.globalChat) {
             return;
         }
@@ -298,11 +478,28 @@ public final class ChatModule implements AtriumModule, Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
         rememberWorld(event.getPlayer());
+        rememberPosition(event.getPlayer());
+        ctx.scheduler().entity(event.getPlayer(), () -> applyTabTag(event.getPlayer()), null);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onChangedWorld(PlayerChangedWorldEvent event) {
         rememberWorld(event.getPlayer());
+        rememberPosition(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onMove(PlayerMoveEvent event) {
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        if (to == null || to.getWorld() == null) {
+            return;
+        }
+        if (from.getWorld() == to.getWorld() && from.getBlockX() == to.getBlockX()
+                && from.getBlockY() == to.getBlockY() && from.getBlockZ() == to.getBlockZ()) {
+            return;
+        }
+        rememberPosition(event.getPlayer());
     }
 
     private void rememberWorld(Player player) {
@@ -311,11 +508,117 @@ public final class ChatModule implements AtriumModule, Listener {
         }
     }
 
+    private void rememberPosition(Player player) {
+        Location location = player.getLocation();
+        if (location == null || location.getWorld() == null) {
+            return;
+        }
+        positions.put(player.getUniqueId(), new RangeTable.Position(location.getWorld().getName(),
+                location.getX(), location.getY(), location.getZ()));
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL)
+    public void onJoinMessage(PlayerJoinEvent event) {
+        ChatConfig.JoinQuit settings = config().joinQuit;
+        if (settings == null || !settings.enabled || hidden(event.getPlayer())) {
+            return;
+        }
+        Player player = event.getPlayer();
+        String format = player.hasPlayedBefore() ? settings.join : settings.firstJoin;
+        if (format == null || format.isBlank()) {
+            event.joinMessage(null);
+            return;
+        }
+        event.joinMessage(ctx.messages().parseTrusted(format,
+                Msg.unparsed("player", player.getName()),
+                Msg.component("display_name", player.displayName()),
+                Msg.unparsed("world", worldNames.getOrDefault(player.getUniqueId(), "?"))));
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL)
+    public void onQuitMessage(PlayerQuitEvent event) {
+        ChatConfig.JoinQuit settings = config().joinQuit;
+        if (settings == null || !settings.enabled || hidden(event.getPlayer())) {
+            return;
+        }
+        String format = settings.quit;
+        if (format == null || format.isBlank()) {
+            event.quitMessage(null);
+            return;
+        }
+        Player player = event.getPlayer();
+        event.quitMessage(ctx.messages().parseTrusted(format,
+                Msg.unparsed("player", player.getName()),
+                Msg.component("display_name", player.displayName()),
+                Msg.unparsed("world", worldNames.getOrDefault(player.getUniqueId(), "?"))));
+    }
+
+    private boolean hidden(Player player) {
+        ChatConfig.JoinQuit settings = config().joinQuit;
+        if (settings.hideAbove > 0 && ctx.users().online().size() > settings.hideAbove) {
+            return true;
+        }
+        if (settings.respectVanish && isVanished(player.getUniqueId())) {
+            return true;
+        }
+        String world = player.getWorld() == null ? "" : player.getWorld().getName();
+        return settings.hiddenWorlds != null && settings.hiddenWorlds.contains(world);
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onCommandSpam(PlayerCommandPreprocessEvent event) {
+        Player player = event.getPlayer();
+        if (player.hasPermission("atrium.chat.spam.bypass")) {
+            return;
+        }
+        CommandSpamGuard.Result result = commandSpam.check(player.getUniqueId(), event.getMessage(),
+                System.currentTimeMillis(), CommandSpamGuard.Settings.of(config().commandSpam));
+        if (result == CommandSpamGuard.Result.TOO_MANY) {
+            event.setCancelled(true);
+            ctx.messages().send(player, "chat.command-spam");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onSignChange(SignChangeEvent event) {
+        ChatConfig.SignSpy settings = config().signSpy;
+        if (settings == null || !settings.enabled) {
+            return;
+        }
+        Player author = event.getPlayer();
+        int limit = Math.max(1, Math.min(event.lines().size(), settings.maxLines));
+        List<String> lines = new ArrayList<>(limit);
+        for (int i = 0; i < limit; i++) {
+            String line = plainComponent(event.line(i));
+            if (!line.isBlank()) {
+                lines.add(line);
+            }
+        }
+        if (lines.isEmpty()) {
+            return;
+        }
+        for (AtriumUser user : ctx.users().online()) {
+            Optional<Player> viewer = user.player();
+            if (viewer.isEmpty() || !viewer.get().hasPermission("atrium.chat.signspy")) {
+                continue;
+            }
+            ctx.messages().send(viewer.get(), "chat.sign-spy",
+                    Msg.unparsed("player", author.getName()),
+                    Msg.unparsed("lines", String.join(" | ", lines)));
+        }
+    }
+
+    private static String plainComponent(@Nullable Component component) {
+        return component == null ? "" : PlainTextComponentSerializer.plainText().serialize(component);
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
         worldNames.remove(uuid);
+        positions.remove(uuid);
         spam.forget(uuid);
+        commandSpam.forget(uuid);
     }
 
     private static String plain(Component component) {
@@ -376,9 +679,17 @@ public final class ChatModule implements AtriumModule, Listener {
     private String relayText(Player sender, Component original) {
         String plain = plain(original);
         String expanded = applyEmoji(sender, plain);
+        if (!sender.hasPermission("atrium.chat.filter.bypass")) {
+            AdFilter.Verdict ads = AdFilter.apply(expanded, adSettings);
+            if (ads.blocked()) {
+                return null;
+            }
+            expanded = ads.text();
+        }
         ChatFilter.Verdict verdict = sender.hasPermission("atrium.chat.filter.bypass")
                 ? new ChatFilter.Verdict(expanded, false, List.of())
-                : ChatFilter.apply(expanded, filterRules, config().filter.replacement);
+                : ChatFilter.apply(expanded, filterRules, config().filter.replacement,
+                        group -> sender.hasPermission("atrium.chat.filter.bypass." + group));
         if (verdict.blocked()) {
             return null;
         }
@@ -391,6 +702,194 @@ public final class ChatModule implements AtriumModule, Listener {
         event.viewers().removeIf(audience -> audience instanceof Player viewer
                 && !viewer.getUniqueId().equals(senderId)
                 && ignores(viewer, senderId));
+    }
+
+    // ---- range, shout and tokens ----
+
+    private Optional<Component> renderToken(Player sender, ChatTokens.Token token) {
+        if (token instanceof ChatTokens.Item item) {
+            ChatConfig.Items items = config().items;
+            if (items == null || !items.enabled
+                    || (items.requirePermission && !sender.hasPermission("atrium.chat.item"))) {
+                return Optional.of(Component.text(item.raw()));
+            }
+            Component rendered = ChatItems.render(sender, item.slot());
+            return Optional.of(rendered == null ? Component.text(item.raw()) : rendered);
+        }
+        if (token instanceof ChatTokens.Sprite sprite) {
+            return renderSprite(sender, sprite);
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Component> renderSprite(Player sender, ChatTokens.Sprite token) {
+        ChatConfig.Sprites settings = config().sprites;
+        if (settings == null || !settings.enabled
+                || (settings.requirePermission && !sender.hasPermission("atrium.chat.sprite"))) {
+            return Optional.of(Component.text(token.raw()));
+        }
+        String wanted = token.name() == null ? "" : token.name().trim().toLowerCase(Locale.ROOT);
+        for (ChatConfig.SpriteEntry entry : sprites) {
+            if (entry == null || entry.id == null || !entry.id.equalsIgnoreCase(wanted)) {
+                continue;
+            }
+            if (!token.atlas().isBlank() && entry.atlas != null
+                    && !entry.atlas.equalsIgnoreCase(token.atlas())) {
+                continue;
+            }
+            if (settings.requirePermission && !sender.hasPermission("atrium.chat.sprite." + entry.id)) {
+                return Optional.of(Component.text(token.raw()));
+            }
+            if (entry.sprite == null || entry.sprite.isBlank()) {
+                return Optional.of(Component.text(token.raw()));
+            }
+            try {
+                Key atlas = Key.key(entry.atlas == null || entry.atlas.isBlank() ? "minecraft" : entry.atlas.trim());
+                Key sprite = Key.key(entry.sprite.trim());
+                return Optional.of(Component.object(net.kyori.adventure.text.object.ObjectContents.sprite(atlas, sprite)));
+            } catch (RuntimeException e) {
+                ctx.logger().warn("Invalid sprite '{}:{}' in chat config", entry.atlas, entry.sprite, e);
+                return Optional.of(Component.text(token.raw()));
+            }
+        }
+        return Optional.of(Component.text(token.raw()));
+    }
+
+    int chatRange() {
+        ChatConfig.Range range = config().range;
+        if (range == null) {
+            return 100;
+        }
+        int online = ctx.users().online().size();
+        return RangeTable.resolve(rangeSteps, online, range.defaultRange);
+    }
+
+    int shoutRange() {
+        ChatConfig.Range range = config().range;
+        if (range == null || range.shoutRange <= 0) {
+            return chatRange();
+        }
+        return range.shoutRange;
+    }
+
+    private void removeOutOfRange(AsyncChatEvent event, Player sender, int range) {
+        RangeTable.Position origin = positions.get(sender.getUniqueId());
+        if (origin == null) {
+            return;
+        }
+        event.viewers().removeIf(audience -> {
+            if (!(audience instanceof Player viewer) || viewer.getUniqueId().equals(sender.getUniqueId())) {
+                return false;
+            }
+            if (viewer.hasPermission("atrium.chat.range.bypass") || rangeSpy(viewer)) {
+                return false;
+            }
+            return !RangeTable.inRange(origin, positions.get(viewer.getUniqueId()), range);
+        });
+    }
+
+    private boolean rangeSpy(Player viewer) {
+        return viewer.hasPermission("atrium.chat.range.spy") && cachedUser(viewer.getUniqueId()).rangeSpy();
+    }
+
+    private void chargeAndShout(Player sender, String text) {
+        ChatConfig.Range range = config().range;
+        Optional<EconomyService> economy = ctx.services().get(EconomyService.class);
+        if (economy.isEmpty()) {
+            sender.sendMessage(ctx.messages().render(sender, "chat.shout-unavailable"));
+            return;
+        }
+        BigDecimal cost = BigDecimal.valueOf(range.shoutCost);
+        economy.get().withdraw(sender.getUniqueId(), cost, "chat shout").thenAccept(result -> {
+            if (!result.success()) {
+                onSender(sender, () -> ctx.messages().send(sender, "chat.shout-no-money",
+                        Msg.unparsed("cost", economy.get().format(cost)),
+                        Msg.unparsed("balance", economy.get().format(result.balance()))));
+                return;
+            }
+            ctx.scheduler().entity(sender, () -> {
+                if (sender.isOnline()) {
+                    broadcastShout(sender, text);
+                }
+            }, null);
+        }).exceptionally(throwable -> {
+            ctx.logger().warn("Could not charge {} for a shout", sender.getName(), throwable);
+            onSender(sender, () -> ctx.messages().send(sender, "chat.shout-unavailable"));
+            return null;
+        });
+    }
+
+    private void broadcastShout(Player sender, String text) {
+        int range = shoutRange();
+        RangeTable.Position origin = positions.get(sender.getUniqueId());
+        Component message = formatter.playerMessage(sender, Component.text(text), text, true, chatColor(sender));
+        Component formatted = formatter.format(sender, message, null,
+                worldNames.getOrDefault(sender.getUniqueId(), "?"), tagPrefix(sender), tagSuffix(sender));
+        int recipients = 0;
+        for (AtriumUser user : ctx.users().online()) {
+            Optional<Player> viewer = user.player();
+            if (viewer.isEmpty()) {
+                continue;
+            }
+            Player target = viewer.get();
+            if (!target.getUniqueId().equals(sender.getUniqueId())) {
+                if (cachedUser(user.uuid()).ignores(sender.getUniqueId())) {
+                    continue;
+                }
+                if (!target.hasPermission("atrium.chat.range.bypass") && !rangeSpy(target)
+                        && !RangeTable.inRange(origin, positions.get(target.getUniqueId()), range)) {
+                    continue;
+                }
+            }
+            ctx.messages().send(target, "chat.shout-format", Msg.component("message", formatted));
+            recipients++;
+        }
+        ctx.messages().send(ctx.plugin().getServer().getConsoleSender(), "chat.shout-format",
+                Msg.component("message", formatted));
+        if (recipients == 0) {
+            ctx.messages().send(sender, "chat.shout-nobody");
+        }
+    }
+
+    // ---- chat tags ----
+
+    private Optional<ChatTags.Definition> selectedTag(Player player) {
+        ChatConfig.Tags config = config().tags;
+        if (config == null || !config.enabled) {
+            return Optional.empty();
+        }
+        return ChatTags.resolve(tags, cachedUser(player.getUniqueId()).chatTag(), player::hasPermission);
+    }
+
+    private Component tagPrefix(Player player) {
+        return selectedTag(player)
+                .map(tag -> ctx.messages().parseTrusted(tag.prefix(), Msg.unparsed("player", player.getName())))
+                .orElse(Component.empty());
+    }
+
+    private Component tagSuffix(Player player) {
+        return selectedTag(player)
+                .map(tag -> ctx.messages().parseTrusted(tag.suffix(), Msg.unparsed("player", player.getName())))
+                .orElse(Component.empty());
+    }
+
+    void applyTabTag(Player player) {
+        Optional<TabListService> tab = ctx.services().get(TabListService.class);
+        if (tab.isEmpty()) {
+            return;
+        }
+        ChatConfig.Tags config = config().tags;
+        Optional<ChatTags.Definition> tag = config != null && config.enabled && config.showInTabList
+                ? selectedTag(player) : Optional.empty();
+        if (tag.isPresent()) {
+            tab.get().setNameTag(player.getUniqueId(), "chat-prefix", TabListService.Placement.BEFORE,
+                    tagPrefix(player));
+            tab.get().setNameTag(player.getUniqueId(), "chat-suffix", TabListService.Placement.AFTER,
+                    tagSuffix(player));
+        } else {
+            tab.get().setNameTag(player.getUniqueId(), "chat-prefix", TabListService.Placement.BEFORE, null);
+            tab.get().setNameTag(player.getUniqueId(), "chat-suffix", TabListService.Placement.AFTER, null);
+        }
     }
 
     private List<String> viewerNames(AsyncChatEvent event) {
@@ -480,6 +979,11 @@ public final class ChatModule implements AtriumModule, Listener {
                 .map(ChatFilter.Match::ruleId)
                 .distinct()
                 .toList();
+        notifyStaff(sender, message, rules);
+    }
+
+    private void notifyStaff(Player sender, String message, List<String> rules) {
+        String joined = String.join(", ", rules);
         for (AtriumUser user : ctx.users().online()) {
             Optional<Player> player = user.player();
             if (player.isEmpty() || !player.get().hasPermission("atrium.chat.filter.alert")) {
@@ -487,9 +991,43 @@ public final class ChatModule implements AtriumModule, Listener {
             }
             ctx.messages().send(player.get(), "chat.filter-alert",
                     Msg.unparsed("player", sender.getName()),
-                    Msg.unparsed("rules", String.join(", ", rules)),
+                    Msg.unparsed("rules", joined),
                     Msg.unparsed("message", message));
         }
+    }
+
+    /** Runs the global and per-rule action lines through the actions module. */
+    private void runFilterActions(Player sender, String message, ChatFilter.Verdict verdict) {
+        List<String> lines = new ArrayList<>();
+        for (ChatFilter.Match match : verdict.matches()) {
+            lines.addAll(match.actions());
+        }
+        runFilterActions(sender, message, verdict.matches().stream().map(ChatFilter.Match::ruleId).toList(), lines);
+    }
+
+    private void runFilterActions(Player sender, String message, List<String> rules, List<String> extra) {
+        ChatConfig config = config();
+        List<String> lines = new ArrayList<>();
+        if (config.filter != null && config.filter.actions != null) {
+            lines.addAll(config.filter.actions);
+        }
+        if (extra != null) {
+            lines.addAll(extra);
+        }
+        if (lines.isEmpty()) {
+            return;
+        }
+        Optional<ActionService> service = ctx.services().get(ActionService.class);
+        if (service.isEmpty()) {
+            return;
+        }
+        service.get().run(lines, sender, Map.of(
+                        "message", message == null ? "" : message,
+                        "rules", String.join(",", rules)))
+                .exceptionally(throwable -> {
+                    ctx.logger().warn("Chat filter actions failed for {}", sender.getName(), throwable);
+                    return null;
+                });
     }
 
     private boolean allowSpam(Player sender, String raw) {
@@ -505,6 +1043,8 @@ public final class ChatModule implements AtriumModule, Listener {
         if (result == SpamGuard.Result.TOO_FAST) {
             double seconds = Math.max(0.1, config.antiSpam.minimumIntervalMillis / 1000.0);
             ctx.messages().send(sender, "chat.spam-too-fast", Msg.number("seconds", seconds));
+        } else if (result == SpamGuard.Result.SIMILAR) {
+            ctx.messages().send(sender, "chat.spam-similar");
         } else {
             ctx.messages().send(sender, "chat.spam-duplicate");
         }
@@ -516,14 +1056,31 @@ public final class ChatModule implements AtriumModule, Listener {
         if (!(sender instanceof Player player) || player.hasPermission("atrium.chat.filter.bypass")) {
             return raw;
         }
-        ChatFilter.Verdict verdict = ChatFilter.apply(raw, filterRules, config().filter.replacement);
+        String text = raw;
+        AdFilter.Verdict ads = AdFilter.apply(text, adSettings);
+        if (ads.blocked()) {
+            ctx.messages().send(player, blockKey);
+            notifyStaff(player, raw, List.of("ad"));
+            return null;
+        }
+        if (!ads.matches().isEmpty()) {
+            notifyStaff(player, raw, List.of("ad"));
+            runFilterActions(player, raw, List.of("ad"), List.of());
+            text = ads.text();
+        }
+        ChatFilter.Verdict verdict = ChatFilter.apply(text, filterRules, config().filter.replacement,
+                group -> player.hasPermission("atrium.chat.filter.bypass." + group));
         if (verdict.blocked()) {
             ctx.messages().send(player, blockKey);
             notifyStaff(player, raw, verdict);
+            runFilterActions(player, raw, verdict);
             return null;
         }
         if (hasWarning(verdict)) {
             notifyStaff(player, raw, verdict);
+        }
+        if (!verdict.matches().isEmpty()) {
+            runFilterActions(player, raw, verdict);
         }
         return verdict.text();
     }
@@ -971,7 +1528,428 @@ public final class ChatModule implements AtriumModule, Listener {
         return Cmds.OK;
     }
 
-    // ---- commands ----
+    // ---- rooms, tags and deletion ----
+
+    void sendRoom(Player sender, String roomName, String text) {
+        ChatConfig config = config();
+        Optional<ChatRoom> found = roomStore.get(roomName);
+        if (found.isEmpty()) {
+            update(sender, user -> user.withChatRoom(null));
+            ctx.messages().send(sender, "chat.room-gone");
+            return;
+        }
+        ChatRoom room = found.get();
+        if (!room.isMember(sender.getUniqueId()) && !room.isOwner(sender.getUniqueId())) {
+            update(sender, user -> user.withChatRoom(null));
+            ctx.messages().send(sender, "chat.room-not-member");
+            return;
+        }
+        String expanded = applyEmoji(sender, text);
+        Component message = formatter.playerMessage(sender, Component.text(expanded), expanded,
+                !expanded.equals(text), chatColor(sender));
+        for (AtriumUser user : ctx.users().online()) {
+            Optional<Player> viewer = user.player();
+            if (viewer.isEmpty()) {
+                continue;
+            }
+            if (!room.isMember(user.uuid()) && !room.isOwner(user.uuid())) {
+                continue;
+            }
+            if (!user.uuid().equals(sender.getUniqueId()) && cachedUser(user.uuid()).ignores(sender.getUniqueId())) {
+                continue;
+            }
+            ctx.messages().send(viewer.get(), "chat.room-format",
+                    Msg.unparsed("room", room.name()),
+                    Msg.unparsed("player", sender.getName()),
+                    Msg.component("message", message));
+        }
+        ctx.messages().send(ctx.plugin().getServer().getConsoleSender(), "chat.room-format",
+                Msg.unparsed("room", room.name()),
+                Msg.unparsed("player", sender.getName()),
+                Msg.component("message", message));
+    }
+
+    int roomInfo(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        if (!roomsEnabled()) {
+            throw cmds.fail(context.getSource(), "chat.room-disabled");
+        }
+        String active = user(player).chatRoom();
+        if (active == null) {
+            ctx.messages().send(player, "chat.room-usage");
+            return Cmds.OK;
+        }
+        Optional<ChatRoom> room = roomStore.get(active);
+        if (room.isEmpty()) {
+            update(player, user -> user.withChatRoom(null));
+            ctx.messages().send(player, "chat.room-gone");
+            return Cmds.OK;
+        }
+        ChatRoom value = room.get();
+        String owner = ctx.users().cached(value.owner()).map(AtriumUser::name).orElse("?");
+        ctx.messages().send(player, "chat.room-info",
+                Msg.unparsed("room", value.name()),
+                Msg.unparsed("owner", owner),
+                Msg.number("members", value.members().size()),
+                Msg.unparsed("locked", value.locked() ? "yes" : "no"));
+        return Cmds.OK;
+    }
+
+    int roomList(CommandContext<CommandSourceStack> context) {
+        CommandSender sender = context.getSource().getSender();
+        if (!roomsEnabled()) {
+            ctx.messages().send(sender, "chat.room-disabled");
+            return Cmds.OK;
+        }
+        List<ChatRoom> rooms = roomStore.all();
+        if (rooms.isEmpty()) {
+            ctx.messages().send(sender, "chat.room-list-empty");
+            return Cmds.OK;
+        }
+        ctx.messages().send(sender, "chat.room-list-header", Msg.number("count", rooms.size()));
+        for (ChatRoom room : rooms) {
+            ctx.messages().send(sender, "chat.room-list-entry",
+                    Msg.unparsed("room", room.name()),
+                    Msg.number("members", room.members().size()),
+                    Msg.unparsed("locked", room.locked() ? "yes" : "no"));
+        }
+        return Cmds.OK;
+    }
+
+    int roomCreate(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        if (!roomsEnabled()) {
+            throw cmds.fail(context.getSource(), "chat.room-disabled");
+        }
+        String name = StringArgumentType.getString(context, "name");
+        Optional<String> normalised = ChatRoom.normaliseName(name, config().rooms.maxNameLength);
+        if (normalised.isEmpty()) {
+            throw cmds.fail(context.getSource(), "chat.room-bad-name");
+        }
+        String roomName = normalised.get();
+        if (roomStore.get(roomName).isPresent()) {
+            throw cmds.fail(context.getSource(), "chat.room-exists", Msg.unparsed("room", roomName));
+        }
+        if (roomStore.ownedBy(player.getUniqueId()) >= Math.max(1, config().rooms.maxRoomsPerPlayer)
+                && !player.hasPermission("atrium.chat.rooms.admin")) {
+            throw cmds.fail(context.getSource(), "chat.room-limit");
+        }
+        ChatRoom room = new ChatRoom(roomName, player.getUniqueId(), Set.of(player.getUniqueId()), Set.of(),
+                false, System.currentTimeMillis());
+        roomStore.put(room);
+        persistRoom(player, room);
+        update(player, user -> user.withChatRoom(roomName));
+        ctx.messages().send(player, "chat.room-created", Msg.unparsed("room", roomName));
+        return Cmds.OK;
+    }
+
+    int roomJoin(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        if (!roomsEnabled()) {
+            throw cmds.fail(context.getSource(), "chat.room-disabled");
+        }
+        String name = StringArgumentType.getString(context, "name").toLowerCase(Locale.ROOT);
+        ChatRoom room = roomStore.get(name)
+                .orElseThrow(() -> cmds.fail(context.getSource(), "chat.room-unknown", Msg.unparsed("room", name)));
+        if (!room.canJoin(player.getUniqueId(), config().rooms.allowPublicJoin)) {
+            throw cmds.fail(context.getSource(), "chat.room-locked", Msg.unparsed("room", room.name()));
+        }
+        if (!room.isMember(player.getUniqueId()) && room.members().size() >= Math.max(1, config().rooms.maxMembers)) {
+            throw cmds.fail(context.getSource(), "chat.room-full", Msg.unparsed("room", room.name()));
+        }
+        ChatRoom updated = room.withMember(player.getUniqueId());
+        roomStore.put(updated);
+        persistRoom(player, updated);
+        update(player, user -> user.withChatRoom(updated.name()));
+        ctx.messages().send(player, "chat.room-joined", Msg.unparsed("room", updated.name()));
+        return Cmds.OK;
+    }
+
+    int roomLeave(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        String active = user(player).chatRoom();
+        if (active == null) {
+            ctx.messages().send(player, "chat.room-not-in-one");
+            return Cmds.OK;
+        }
+        update(player, user -> user.withChatRoom(null));
+        Optional<ChatRoom> room = roomStore.get(active);
+        if (room.isPresent()) {
+            ChatRoom updated = room.get().withoutMember(player.getUniqueId());
+            roomStore.put(updated);
+            persistRoom(player, updated);
+        }
+        ctx.messages().send(player, "chat.room-left", Msg.unparsed("room", active));
+        return Cmds.OK;
+    }
+
+    int roomInvite(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        ChatRoom room = requireOwnedRoom(context, player);
+        String name = StringArgumentType.getString(context, "player");
+        Player target = findOnline(name);
+        if (target == null) {
+            throw cmds.fail(context.getSource(), "core.player-not-found");
+        }
+        if (room.isMember(target.getUniqueId())) {
+            ctx.messages().send(player, "chat.room-already-member", Msg.unparsed("player", target.getName()));
+            return Cmds.OK;
+        }
+        ChatRoom updated = room.withInvited(target.getUniqueId());
+        roomStore.put(updated);
+        persistRoom(player, updated);
+        ctx.messages().send(player, "chat.room-invited", Msg.unparsed("player", target.getName()),
+                Msg.unparsed("room", updated.name()));
+        ctx.messages().send(target, "chat.room-invite-received", Msg.unparsed("player", player.getName()),
+                Msg.unparsed("room", updated.name()));
+        return Cmds.OK;
+    }
+
+    int roomKick(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        ChatRoom room = requireOwnedRoom(context, player);
+        String name = StringArgumentType.getString(context, "player");
+        Player target = findOnline(name);
+        if (target == null) {
+            throw cmds.fail(context.getSource(), "core.player-not-found");
+        }
+        if (target.getUniqueId().equals(player.getUniqueId())) {
+            throw cmds.fail(context.getSource(), "chat.room-kick-self");
+        }
+        if (!room.isMember(target.getUniqueId())) {
+            throw cmds.fail(context.getSource(), "chat.room-target-not-member", Msg.unparsed("player", target.getName()));
+        }
+        ChatRoom updated = room.withoutMember(target.getUniqueId());
+        roomStore.put(updated);
+        persistRoom(player, updated);
+        update(target, user -> user.withChatRoom(null));
+        ctx.messages().send(player, "chat.room-kicked", Msg.unparsed("player", target.getName()));
+        ctx.messages().send(target, "chat.room-kicked-self",
+                Msg.unparsed("room", updated.name()), Msg.unparsed("player", player.getName()));
+        return Cmds.OK;
+    }
+
+    int roomLock(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        ChatRoom room = requireOwnedRoom(context, player);
+        ChatRoom updated = room.withLocked(!room.locked());
+        roomStore.put(updated);
+        persistRoom(player, updated);
+        ctx.messages().send(player, updated.locked() ? "chat.room-locked-on" : "chat.room-locked-off",
+                Msg.unparsed("room", updated.name()));
+        return Cmds.OK;
+    }
+
+    int roomDelete(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        String name = StringArgumentType.getString(context, "name").toLowerCase(Locale.ROOT);
+        ChatRoom room = roomStore.get(name)
+                .orElseThrow(() -> cmds.fail(context.getSource(), "chat.room-unknown", Msg.unparsed("room", name)));
+        if (!room.isOwner(player.getUniqueId()) && !player.hasPermission("atrium.chat.rooms.admin")) {
+            throw cmds.fail(context.getSource(), "chat.room-not-owner");
+        }
+        roomStore.remove(room.name());
+        roomStore.delete(room.name()).exceptionally(throwable -> {
+            ctx.logger().warn("Cannot delete chat room {}", room.name(), throwable);
+            return false;
+        });
+        for (AtriumUser user : ctx.users().online()) {
+            Optional<Player> viewer = user.player();
+            if (viewer.isPresent() && room.name().equals(cachedUser(user.uuid()).chatRoom())) {
+                update(viewer.get(), value -> value.withChatRoom(null));
+                ctx.messages().send(viewer.get(), "chat.room-deleted", Msg.unparsed("room", room.name()));
+            }
+        }
+        ctx.messages().send(player, "chat.room-deleted", Msg.unparsed("room", room.name()));
+        return Cmds.OK;
+    }
+
+    int roomWho(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        String name = user(player).chatRoom();
+        if (name == null) {
+            ctx.messages().send(player, "chat.room-not-in-one");
+            return Cmds.OK;
+        }
+        return roomWho(context, name);
+    }
+
+    int roomWhoNamed(CommandContext<CommandSourceStack> context) {
+        return roomWho(context, StringArgumentType.getString(context, "name"));
+    }
+
+    private int roomWho(CommandContext<CommandSourceStack> context, String name) {
+        CommandSender sender = context.getSource().getSender();
+        Optional<ChatRoom> room = roomStore.get(name);
+        if (room.isEmpty()) {
+            ctx.messages().send(sender, "chat.room-unknown", Msg.unparsed("room", name));
+            return Cmds.OK;
+        }
+        List<String> online = new ArrayList<>();
+        for (AtriumUser user : ctx.users().online()) {
+            if (room.get().isMember(user.uuid()) || room.get().isOwner(user.uuid())) {
+                online.add(user.name());
+            }
+        }
+        online.sort(String.CASE_INSENSITIVE_ORDER);
+        ctx.messages().send(sender, "chat.room-who",
+                Msg.unparsed("room", room.get().name()),
+                Msg.number("online", online.size()),
+                Msg.number("members", room.get().members().size()),
+                Msg.unparsed("players", online.isEmpty() ? "-" : String.join(", ", online)));
+        return Cmds.OK;
+    }
+
+    private boolean roomsEnabled() {
+        return config().rooms != null && config().rooms.enabled;
+    }
+
+    private ChatRoom requireOwnedRoom(CommandContext<CommandSourceStack> context, Player player)
+            throws CommandSyntaxException {
+        if (!roomsEnabled()) {
+            throw cmds.fail(context.getSource(), "chat.room-disabled");
+        }
+        String active = user(player).chatRoom();
+        if (active == null) {
+            throw cmds.fail(context.getSource(), "chat.room-not-in-one");
+        }
+        ChatRoom room = roomStore.get(active)
+                .orElseThrow(() -> cmds.fail(context.getSource(), "chat.room-gone"));
+        if (!room.isOwner(player.getUniqueId()) && !player.hasPermission("atrium.chat.rooms.admin")) {
+            throw cmds.fail(context.getSource(), "chat.room-not-owner");
+        }
+        return room;
+    }
+
+    private void persistRoom(Player actor, ChatRoom room) {
+        roomStore.save(room).exceptionally(throwable -> {
+            ctx.logger().warn("Cannot save chat room {}", room.name(), throwable);
+            onSender(actor, () -> ctx.messages().send(actor, "chat.room-save-failed"));
+            return null;
+        });
+    }
+
+    List<String> roomNames() {
+        List<String> names = new ArrayList<>();
+        for (ChatRoom room : roomStore.all()) {
+            names.add(room.name());
+        }
+        return names;
+    }
+
+    int chatTagInfo(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        Optional<ChatTags.Definition> tag = selectedTag(player);
+        if (tag.isEmpty()) {
+            ctx.messages().send(player, "chat.tag-none");
+        } else {
+            ctx.messages().send(player, "chat.tag-current", Msg.unparsed("tag", tag.get().id()));
+        }
+        return Cmds.OK;
+    }
+
+    int chatTagList(CommandContext<CommandSourceStack> context) {
+        CommandSender sender = context.getSource().getSender();
+        List<ChatTags.Definition> allowed = new ArrayList<>();
+        for (ChatTags.Definition tag : tags) {
+            if (ChatTags.allowed(tag, sender::hasPermission)) {
+                allowed.add(tag);
+            }
+        }
+        if (allowed.isEmpty()) {
+            ctx.messages().send(sender, "chat.tag-list-empty");
+            return Cmds.OK;
+        }
+        ctx.messages().send(sender, "chat.tag-list-header", Msg.number("count", allowed.size()));
+        TextComponent.Builder line = Component.text();
+        for (int i = 0; i < allowed.size(); i++) {
+            ChatTags.Definition tag = allowed.get(i);
+            if (i > 0) {
+                line.append(Component.text(", ", NamedTextColor.DARK_GRAY));
+            }
+            line.append(Component.text(tag.id(), NamedTextColor.AQUA)
+                    .clickEvent(ClickEvent.runCommand("/chattag set " + tag.id()))
+                    .hoverEvent(HoverEvent.showText(ctx.messages().render(sender, "chat.tag-hover",
+                            Msg.unparsed("tag", tag.id())))));
+        }
+        sender.sendMessage(line.build());
+        return Cmds.OK;
+    }
+
+    int chatTagSet(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        String id = StringArgumentType.getString(context, "tag").toLowerCase(Locale.ROOT);
+        ChatTags.Definition tag = ChatTags.byId(tags, id)
+                .orElseThrow(() -> cmds.fail(context.getSource(), "chat.tag-unknown", Msg.unparsed("tag", id)));
+        if (!ChatTags.allowed(tag, player::hasPermission)) {
+            throw cmds.fail(context.getSource(), "chat.tag-no-permission", Msg.unparsed("tag", id));
+        }
+        update(player, user -> user.withChatTag(tag.id()));
+        applyTabTag(player);
+        saveThen(player, "chat.tag-set", Msg.unparsed("tag", tag.id()));
+        return Cmds.OK;
+    }
+
+    int chatTagReset(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        update(player, user -> user.withChatTag(null));
+        applyTabTag(player);
+        saveThen(player, "chat.tag-reset");
+        return Cmds.OK;
+    }
+
+    List<String> tagNames() {
+        List<String> names = new ArrayList<>();
+        for (ChatTags.Definition tag : tags) {
+            names.add(tag.id());
+        }
+        return names;
+    }
+
+    int rangeSpy(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player player = cmds.player(context.getSource());
+        if (!config().range.allowSpy) {
+            throw cmds.fail(context.getSource(), "chat.rangespy-disabled");
+        }
+        boolean enabled = !user(player).rangeSpy();
+        update(player, user -> user.withRangeSpy(enabled));
+        ctx.messages().send(player, enabled ? "chat.rangespy-on" : "chat.rangespy-off");
+        return Cmds.OK;
+    }
+
+    int deleteMessage(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player staff = cmds.player(context.getSource());
+        String raw = StringArgumentType.getString(context, "id");
+        UUID id;
+        try {
+            id = UUID.fromString(raw);
+        } catch (IllegalArgumentException e) {
+            throw cmds.fail(context.getSource(), "chat.delete-unknown");
+        }
+        ChatHistory.Entry entry = history.remove(id)
+                .orElseThrow(() -> cmds.fail(context.getSource(), "chat.delete-unknown"));
+        if (entry.signed() == null || !entry.signed().canDelete()) {
+            ctx.messages().send(staff, "chat.delete-fallback", Msg.unparsed("player", entry.senderName()));
+            return Cmds.OK;
+        }
+        for (AtriumUser user : ctx.users().online()) {
+            Optional<Player> viewer = user.player();
+            if (viewer.isEmpty()) {
+                continue;
+            }
+            Player target = viewer.get();
+            ctx.scheduler().entity(target, () -> {
+                try {
+                    target.deleteMessage(entry.signed());
+                } catch (RuntimeException e) {
+                    ctx.logger().warn("Cannot delete a chat message for {}", target.getName(), e);
+                }
+            }, null);
+        }
+        ctx.messages().send(staff, "chat.deleted", Msg.unparsed("player", entry.senderName()));
+        return Cmds.OK;
+    }
+
 
     /** Shows a short usage line instead of a silent failure for an incomplete command. */
     int usage(CommandContext<CommandSourceStack> context, String key) {

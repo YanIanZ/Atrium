@@ -97,5 +97,61 @@ final class ChatCommands {
                 .then(Cmds.literal("self")
                         .executes(context -> module.clearChat(context, true)))
                 .build(), "Clear chat for everyone, or only yourself"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("chatroom", "atrium.chat.rooms")
+                .executes(module::roomInfo)
+                .then(Cmds.literal("list")
+                        .executes(module::roomList))
+                .then(Cmds.literal("create")
+                        .then(Commands.argument("name", word())
+                                .executes(module::roomCreate)))
+                .then(Cmds.literal("join")
+                        .then(Commands.argument("name", word())
+                                .suggests(Cmds.suggest(module::roomNames))
+                                .executes(module::roomJoin)))
+                .then(Cmds.literal("leave")
+                        .executes(module::roomLeave))
+                .then(Cmds.literal("invite")
+                        .then(Commands.argument("player", word())
+                                .suggests(Cmds.suggest(() -> ctx.users().knownNames("", 100)))
+                                .executes(module::roomInvite)))
+                .then(Cmds.literal("kick")
+                        .then(Commands.argument("player", word())
+                                .suggests(Cmds.suggest(() -> ctx.users().knownNames("", 100)))
+                                .executes(module::roomKick)))
+                .then(Cmds.literal("lock")
+                        .executes(module::roomLock))
+                .then(Cmds.literal("delete")
+                        .then(Commands.argument("name", word())
+                                .suggests(Cmds.suggest(module::roomNames))
+                                .executes(module::roomDelete)))
+                .then(Cmds.literal("who")
+                        .executes(module::roomWho)
+                        .then(Commands.argument("name", word())
+                                .suggests(Cmds.suggest(module::roomNames))
+                                .executes(module::roomWhoNamed)))
+                .build(), "Create, join and manage persistent chat rooms"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("chattag", "atrium.chat.tags")
+                .executes(module::chatTagInfo)
+                .then(Cmds.literal("list")
+                        .executes(module::chatTagList))
+                .then(Cmds.literal("set")
+                        .then(Commands.argument("tag", word())
+                                .suggests(Cmds.suggest(module::tagNames))
+                                .executes(module::chatTagSet)))
+                .then(Cmds.literal("reset")
+                        .executes(module::chatTagReset))
+                .build(), "Choose a chat tag shown before or after your name"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("rangespy", "atrium.chat.range.spy")
+                .executes(module::rangeSpy)
+                .build(), "Toggle receiving chat outside your range"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("chatdelete", "atrium.chat.delete")
+                .executes(context -> module.usage(context, "chat.usage-chatdelete"))
+                .then(Commands.argument("id", word())
+                        .executes(module::deleteMessage))
+                .build(), "Delete a chat message for everyone"));
     }
 }

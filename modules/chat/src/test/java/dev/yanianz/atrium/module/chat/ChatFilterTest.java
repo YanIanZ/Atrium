@@ -55,6 +55,22 @@ class ChatFilterTest {
         assertEquals("join [hidden] now", verdict.text());
     }
 
+    @Test
+    void perGroupBypassSkipsOnlyThatRule() {
+        ChatConfig.Filter config = new ChatConfig.Filter();
+        ChatConfig.FilterRule grouped = new ChatConfig.FilterRule("grouped", "WORD", "bad", "CENSOR");
+        grouped.group = "staff";
+        config.rules = List.of(grouped, new ChatConfig.FilterRule("plain", "WORD", "worse", "CENSOR"));
+        List<ChatFilter.Rule> rules = ChatFilter.compile(config, message -> fail(message));
+
+        ChatFilter.Verdict bypassed = ChatFilter.apply("bad worse", rules, "***", group -> group.equals("staff"));
+        assertEquals("bad ***", bypassed.text());
+        assertEquals(1, bypassed.matches().size());
+
+        ChatFilter.Verdict enforced = ChatFilter.apply("bad worse", rules, "***", group -> false);
+        assertEquals("*** ***", enforced.text());
+    }
+
     private static ChatFilter.Rule wordRule(String id, String word, ChatFilter.Action action) {
         String normalized = ChatFilter.normalize(word).text();
         return new ChatFilter.Rule(id, Pattern.compile(Pattern.quote(normalized)), action, false);

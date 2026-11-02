@@ -17,9 +17,26 @@ final class ChatFilter {
 
     enum Action { CENSOR, BLOCK, WARN }
 
-    record Rule(String id, Pattern pattern, Action action, boolean regex) {}
+    record Rule(String id, Pattern pattern, Action action, boolean regex, String group, List<String> actions) {
+        Rule {
+            group = group == null ? "" : group.trim();
+            actions = actions == null ? List.of() : List.copyOf(actions);
+        }
 
-    record Match(String ruleId, Action action, int start, int end) {}
+        Rule(String id, Pattern pattern, Action action, boolean regex) {
+            this(id, pattern, action, regex, "", List.of());
+        }
+    }
+
+    record Match(String ruleId, Action action, int start, int end, List<String> actions) {
+        Match {
+            actions = actions == null ? List.of() : List.copyOf(actions);
+        }
+
+        Match(String ruleId, Action action, int start, int end) {
+            this(ruleId, action, start, end, List.of());
+        }
+    }
 
     record Verdict(String text, boolean blocked, List<Match> matches) {
         Verdict {
@@ -49,16 +66,18 @@ final class ChatFilter {
             }
             try {
                 Pattern pattern;
+                String group = raw.group == null ? "" : raw.group.trim();
+                List<String> actions = raw.actions == null ? List.of() : raw.actions;
                 if ("WORD".equalsIgnoreCase(raw.type)) {
                     String word = normalize(raw.pattern).text();
                     if (word.isEmpty()) {
                         continue;
                     }
                     pattern = Pattern.compile(Pattern.quote(word));
-                    rules.add(new Rule(id, pattern, action, false));
+                    rules.add(new Rule(id, pattern, action, false, group, actions));
                 } else {
                     pattern = Pattern.compile(raw.pattern, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-                    rules.add(new Rule(id, pattern, action, true));
+                    rules.add(new Rule(id, pattern, action, true, group, actions));
                 }
             } catch (PatternSyntaxException e) {
                 warn.accept("Invalid regex in chat filter rule " + id + ": " + e.getDescription());
@@ -68,6 +87,14 @@ final class ChatFilter {
     }
 
     static Verdict apply(String raw, List<Rule> rules, String replacement) {
+        return apply(raw, rules, replacement, group -> false);
+    }
+
+    /**
+     * Applies every rule whose bypass group the sender is not exempt from. A rule is skipped when
+     * {@code bypass} answers {@code true} for its group; an empty group can never be bypassed per-rule.
+     */
+    static Verdict apply(String raw, List<Rule> rules, String replacement, java.util.function.Predicate<String> bypass) {
         String text = raw == null ? "" : raw;
         if (text.isEmpty() || rules.isEmpty()) {
             return new Verdict(text, false, List.of());
@@ -77,6 +104,9 @@ final class ChatFilter {
         List<Match> matches = new ArrayList<>();
         boolean blocked = false;
         for (Rule rule : rules) {
+            if (!rule.group().isEmpty() && bypass != null && bypass.test(rule.group())) {
+                continue;
+            }
             Normalized normalized;
             if (rule.regex()) {
                 if (regexText == null) {
@@ -102,7 +132,7 @@ final class ChatFilter {
                     continue;
                 }
                 matches.add(new Match(rule.id(), rule.action(),
-                        normalized.starts()[start], normalized.ends()[end - 1] + 1));
+                        normalized.starts()[start], normalized.ends()[end - 1] + 1, rule.actions()));
                 if (rule.action() == Action.BLOCK) {
                     blocked = true;
                 }
@@ -118,7 +148,7 @@ final class ChatFilter {
         return new Verdict(censor(text, matches, replacement), false, matches);
     }
 
-    private static String censor(String raw, List<Match> matches, String replacement) {
+    static String censor(String raw, List<Match> matches, String replacement) {
         List<int[]> spans = new ArrayList<>();
         for (Match match : matches) {
             if (match.action() == Action.CENSOR) {
@@ -158,6 +188,31 @@ final class ChatFilter {
 
     static Normalized normalize(String raw) {
         return normalize(raw, false);
+    }
+
+    /** Removes legacy colour codes and MiniMessage-like tags, keeping the original letter case. */
+    static String stripFormatting(String raw) {
+        String input = raw == null ? "" : raw;
+        StringBuilder out = new StringBuilder(input.length());
+        int i = 0;
+        while (i < input.length()) {
+            int skipped = skipFormatting(input, i);
+            if (skipped > i) {
+                i = skipped;
+                continue;
+            }
+            char c = input.charAt(i);
+            if (c == '<') {
+                int close = input.indexOf('>', i + 1);
+                if (close > i + 1 && close - i <= 80 && looksLikeTag(input, i + 1, close)) {
+                    i = close + 1;
+                    continue;
+                }
+            }
+            out.append(c);
+            i++;
+        }
+        return out.toString();
     }
 
     /** Keeps punctuation between non-letters, so regex rules can still recognise IPs and similar. */

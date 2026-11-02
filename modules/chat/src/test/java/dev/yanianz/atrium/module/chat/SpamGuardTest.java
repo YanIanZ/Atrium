@@ -48,4 +48,22 @@ class SpamGuardTest {
         guard.forget(player);
         assertEquals(SpamGuard.Result.ALLOWED, guard.check(player, "hello", 1, settings));
     }
+
+    @Test
+    void similarityRejectsNearDuplicates() {
+        SpamGuard guard = new SpamGuard();
+        UUID player = UUID.randomUUID();
+        SpamGuard.Settings settings = new SpamGuard.Settings(true, 0, 0, true, 80, 2, 5000);
+
+        assertEquals(SpamGuard.Result.ALLOWED, guard.check(player, "hello everyone", 0, settings));
+        assertEquals(SpamGuard.Result.ALLOWED, guard.check(player, "hello every one", 100, settings));
+        assertEquals(SpamGuard.Result.SIMILAR, guard.check(player, "hello everyonne", 200, settings));
+    }
+
+    @Test
+    void similarityMetricIsNormalised() {
+        assertEquals(1.0, SpamGuard.similarity("", ""), 0.0001);
+        assertEquals(1.0, SpamGuard.similarity("Hello", "hello"), 0.0001);
+        assertEquals(0.5, SpamGuard.similarity("abcd", "abxx"), 0.0001);
+    }
 }

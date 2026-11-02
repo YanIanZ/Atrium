@@ -23,16 +23,23 @@ final class ChatFormatter {
     private static final Pattern URL = Pattern.compile(
             "(?i)\\bhttps?://[^\\s<>]*[\\p{L}\\p{N}/]|\\bwww\\.[^\\s<>]*[\\p{L}\\p{N}/]");
 
+    /** Renders one parsed chat token from a server-side value. Empty keeps the literal token text. */
+    interface TokenRenderer {
+        java.util.Optional<Component> render(Player sender, ChatTokens.Token token);
+    }
+
     private final Messages messages;
     private final ChatConfig config;
+    private final TokenRenderer tokenRenderer;
     private final MiniMessage full;
     private final MiniMessage colorOnly;
     private final MiniMessage formatOnly;
     private final MiniMessage colorAndFormat;
 
-    ChatFormatter(Messages messages, ChatConfig config) {
+    ChatFormatter(Messages messages, ChatConfig config, TokenRenderer tokenRenderer) {
         this.messages = messages;
         this.config = config;
+        this.tokenRenderer = tokenRenderer;
         this.full = MiniMessage.miniMessage();
         this.colorOnly = restricted(StandardTags.color());
         this.formatOnly = restricted(StandardTags.decorations());
@@ -48,26 +55,50 @@ final class ChatFormatter {
 
     Component playerMessage(Player sender, Component original, String raw, boolean rewritten,
             ChatColorPalette.@Nullable Choice color) {
+        ChatTokens.Parsed parsed = parseTokens(raw);
+        String effective = parsed.text();
+        boolean changed = rewritten || !parsed.tokens().isEmpty();
         boolean advanced = sender.hasPermission("atrium.chat.advanced");
         boolean colorPermission = sender.hasPermission("atrium.chat.color");
         boolean format = sender.hasPermission("atrium.chat.format");
         Component result;
         if (advanced) {
-            result = full.deserialize(raw);
+            result = full.deserialize(effective);
         } else if (colorPermission && format) {
-            result = colorAndFormat.deserialize(legacy(raw, true, true));
+            result = colorAndFormat.deserialize(legacy(effective, true, true));
         } else if (colorPermission) {
-            result = colorOnly.deserialize(legacy(raw, true, false));
+            result = colorOnly.deserialize(legacy(effective, true, false));
         } else if (format) {
-            result = formatOnly.deserialize(legacy(raw, false, true));
+            result = formatOnly.deserialize(legacy(effective, false, true));
         } else {
-            result = rewritten ? Component.text(raw) : original;
+            result = changed ? Component.text(effective) : original;
         }
         if (color != null) {
             result = ChatColorPalette.apply(result, color);
         }
         if (sender.hasPermission("atrium.chat.link")) {
             result = linkify(result);
+        }
+        return renderTokens(result, sender, parsed);
+    }
+
+    private ChatTokens.Parsed parseTokens(String raw) {
+        ChatConfig.Items items = config.items;
+        if (tokenRenderer == null || items == null || !items.enabled) {
+            return new ChatTokens.Parsed(raw == null ? "" : raw, List.of());
+        }
+        return ChatTokens.parse(raw, items.maxPerMessage);
+    }
+
+    private Component renderTokens(Component message, Player sender, ChatTokens.Parsed parsed) {
+        if (parsed.tokens().isEmpty()) {
+            return message;
+        }
+        Component result = message;
+        for (ChatTokens.Token token : parsed.tokens()) {
+            java.util.Optional<Component> rendered = tokenRenderer.render(sender, token);
+            Component replacement = rendered.orElseGet(() -> Component.text(token.raw()));
+            result = result.replaceText(builder -> builder.matchLiteral(token.sentinel()).replacement(replacement));
         }
         return result;
     }
@@ -85,12 +116,19 @@ final class ChatFormatter {
     }
 
     Component format(Player sender, Component message, Pattern mentions, String world) {
+        return format(sender, message, mentions, world, Component.empty(), Component.empty());
+    }
+
+    Component format(Player sender, Component message, Pattern mentions, String world,
+            Component tagPrefix, Component tagSuffix) {
         Component highlighted = withMentions(message, mentions);
         ChatConfig.FormatEntry entry = pick(sender);
         return messages.parseTrusted(entry.format,
                 Msg.unparsed("player", sender.getName()),
                 Msg.component("display_name", sender.displayName()),
                 Msg.unparsed("world", world == null || world.isBlank() ? "?" : world),
+                Msg.component("tag_prefix", tagPrefix == null ? Component.empty() : tagPrefix),
+                Msg.component("tag_suffix", tagSuffix == null ? Component.empty() : tagSuffix),
                 Msg.component("message", highlighted));
     }
 
