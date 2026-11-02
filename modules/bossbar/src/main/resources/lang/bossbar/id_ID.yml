@@ -1,0 +1,8 @@
+toggle-hidden: "<prefix><muted>Pengumuman boss bar sekarang disembunyikan. Gunakan <primary>/bossbars</primary> untuk menampilkannya lagi."
+toggle-shown: "<prefix><success>Pengumuman boss bar sekarang ditampilkan."
+toggle-save-failed: "<prefix><error>Pengaturan boss bar kamu gagal disimpan dan bisa hilang setelah kamu keluar."
+message-sent: "<prefix><success>Pesan boss bar ditampilkan ke <highlight><count></highlight> pemain selama <highlight><seconds></highlight> detik."
+too-long: "<prefix><error>Pesan boss bar paling lama <highlight><max></highlight> detik."
+message-too-long: "<prefix><error>Pesan boss bar paling banyak <highlight><max></highlight> karakter."
+empty-message: "<prefix><error>Pesan boss bar kosong."
+message-usage: "<prefix><muted>Cara pakai: <primary>/bossbarmsg all <detik> <pesan></primary> atau <primary>/bossbarmsg [pemain] <detik> <pesan></primary>."

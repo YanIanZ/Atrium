@@ -1,0 +1,13 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+usage-discord: "<prefix><muted>Penggunaan: <highlight>/discord status</highlight> atau <highlight>/discord test (kanal)</highlight>."
+status-header: "<prefix><primary>Relay Discord:"
+# <error> di bawah adalah placeholder error terakhir, bukan theme tag.
+status-entry: "<prefix><muted><channel>: <state> <dark_gray>| <muted>antrean <queued>/<capacity> <dark_gray>| <muted>terkirim <sent> <dark_gray>| <muted>dibuang <dropped> <dark_gray>| <muted>gagal <failed> <dark_gray>| <muted>ulang <retries> <dark_gray>| <muted>terakhir: <error>"
+status-empty: "<prefix><warning>Belum ada webhook Discord yang dikonfigurasi. Atur di modules/discord.yml."
+state-configured: "<success>aktif <muted>(<highlight><mask></highlight>)"
+state-invalid: "<error>tidak valid <muted>(<highlight><reason></highlight>)"
+state-missing: "<dark_gray>belum diatur"
+test-queued: "<prefix><success>Pesan uji masuk antrean untuk <highlight><channel></highlight> (<mask>)."
+no-webhook: "<prefix><error>Webhook untuk <highlight><channel></highlight> belum dikonfigurasi."
+invalid-webhook: "<prefix><error>Webhook <highlight><channel></highlight> tidak valid dan diabaikan: <reason>"
+unknown-channel: "<prefix><error>Kanal <highlight><channel></highlight> tidak dikenal. Gunakan salah satu: <highlight><channels></highlight>."

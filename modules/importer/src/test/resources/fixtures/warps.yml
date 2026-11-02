@@ -1,0 +1,15 @@
+warps:
+  spawn:
+    Loc: world:0:64:0:0:180
+    Category: general
+  shop:
+    Loc:
+      world: world
+      x: 10
+      y: 65
+      z: -10
+      yaw: 90
+      pitch: 0
+    Category: town
+  broken:
+    Loc: nowhere

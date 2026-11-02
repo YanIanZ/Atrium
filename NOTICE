@@ -1,0 +1,24 @@
+Atrium - third-party notices
+
+Atrium's own code is proprietary (see LICENSE). The following third-party components are used under their own
+licenses and are NOT covered by Atrium's license.
+
+Bundled in release files
+- VaultAPI 1.7.1 (net.milkbowl.vault.*), bundled unmodified in Vault-<version>.jar (Atrium Vault).
+  License: GNU Lesser General Public License v3.0 or later. Copyright (C) 2011-2018 Morgan Humes and contributors.
+  Source: https://github.com/MilkBowl/VaultAPI. The license texts are included in that jar under META-INF/.
+
+Downloaded at server start by the Paper plugin loader (not bundled)
+- HikariCP (Apache-2.0), Caffeine (Apache-2.0), Configurate (Apache-2.0), SQLite JDBC (Apache-2.0),
+  MariaDB Connector/J (LGPL-2.1).
+
+Used at compile time only (never bundled)
+- Paper API (MIT / GPL-3.0 per upstream), Adventure (MIT) and the APIs of optional integrations (Vault,
+  PlaceholderAPI, LuckPerms, DecentHolograms, FancyHolograms, FancyNpcs, Citizens, WorldGuard, GriefPrevention,
+  Lands, Towny, BlueMap, squaremap, dynmap, PacketEvents, Floodgate), each under its own license.
+- SourbyCraft API (GPL-3.0-only): downloaded at build time from https://github.com/YanIanZ/SourbyCraft at a pinned
+  commit (compat/sourbyapi-26.2/sources.lock). Its sources are not part of this repository.
+
+Trademarks
+Minecraft is a trademark of Mojang AB. CMI, EssentialsX, Vault and the other plugin names mentioned are trademarks or
+names of their respective owners. Atrium is an independent project and is not affiliated with or endorsed by them.

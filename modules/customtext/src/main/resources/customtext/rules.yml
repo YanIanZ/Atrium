@@ -1,0 +1,28 @@
+# Custom text example: shown with /ctext rules or the alias /rules.
+# The file name (without .yml) is the text id: lower-case letters, digits, _ and - (1-32 characters).
+# Lines are trusted MiniMessage. <player>, <online> and <world> are inserted as plain values.
+# PlaceholderAPI tokens such as %player_name% work when PlaceholderAPI is installed; their values are escaped.
+#
+# command:          optional extra command (same naming rule); omit for /ctext only
+# permission:       optional permission node needed to view this text (empty = everyone)
+# cooldown:         seconds before a plain open works again (0 = no cooldown; paging is never blocked)
+# join:             show page 1 when a player joins
+# first-join-only:  with join: true, only show it on the player's very first join
+# pages:            either a list of lines (one page) or a list of pages (each a list of lines)
+
+command: rules
+permission: ""
+cooldown: 0
+join: false
+first-join-only: false
+
+pages:
+  - - "<gradient:#5fb3a1:#3b7f9a><bold>Server rules</bold></gradient>"
+    - "<gray>Welcome, <white><player></white>!</gray>"
+    - "<gray>1. Be respectful to everyone."
+    - "<gray>2. No griefing, stealing or cheating."
+    - "<gray>3. Keep chat friendly and on topic."
+  - - "<gradient:#5fb3a1:#3b7f9a><bold>Server rules (2/2)</bold></gradient>"
+    - "<gray>4. No advertising other servers."
+    - "<gray>5. Follow staff instructions."
+    - "<gray>Questions? Ask in chat."

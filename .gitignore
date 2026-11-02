@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+.kotlin/
+build/
+out/
+
+# Local test servers and runtime output (scripts/new-server.sh, scripts/smoke.sh)
+run/
+*.log
+*.hprof
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# Operating systems
+.DS_Store
+Thumbs.db

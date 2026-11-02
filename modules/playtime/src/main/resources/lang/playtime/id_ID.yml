@@ -1,0 +1,18 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+# (colours are set in config.yml under "theme"). Prefer them over raw colours.
+self: "<prefix><muted>Waktu bermain: <highlight><total></highlight> total, <highlight><session></highlight> sesi ini, <highlight><today></highlight> hari ini."
+other: "<prefix><muted>Waktu bermain <player>: <highlight><total></highlight> total, <highlight><session></highlight> sesi ini, <highlight><today></highlight> hari ini."
+unknown: "<prefix><error>Tidak ada pemain bernama <highlight><player></highlight> yang pernah bergabung."
+invalid-period: "<prefix><error>Periode tidak dikenal. Gunakan <highlight>day</highlight>, <highlight>week</highlight>, <highlight>month</highlight>, atau <highlight>all</highlight>."
+top-loading: "<prefix><muted>Papan peringkat waktu bermain sedang diperbarui. Coba lagi sebentar lagi."
+top-empty: "<prefix><muted>Belum ada waktu bermain tercatat untuk periode ini."
+top-header: "<prefix><primary>Peringkat waktu bermain — <highlight><period></highlight>, halaman <highlight><page></highlight>"
+top-entry: "<prefix><muted><rank>. <highlight><player></highlight> <dark_gray>— <highlight><time></highlight>"
+reward: "<prefix><success>Hadiah waktu bermain <highlight><reward></highlight> diterima."
+edit-usage: "<prefix><muted>Penggunaan: <highlight>/editplaytime (pemain) (set|add|take) (durasi) [confirm]</highlight>."
+invalid-mode: "<prefix><error>Mode tidak dikenal. Gunakan <highlight>set</highlight>, <highlight>add</highlight>, atau <highlight>take</highlight>."
+edit-confirm: "<prefix><warning>Ini akan <highlight><mode> <amount></highlight> pada <highlight><player></highlight>. Klik <confirm> atau jalankan perintah yang sama lagi dalam <highlight><seconds></highlight> detik untuk konfirmasi."
+confirm-button: "<accent>[Konfirmasi]</accent>"
+confirm-hover: "<muted>Klik untuk menerapkan perubahan ini"
+edit-no-pending: "<prefix><error>Tidak ada perubahan waktu bermain yang menunggu konfirmasi."
+edit-done: "<prefix><success>Waktu bermain <highlight><player></highlight> diperbarui (<highlight><mode> <amount></highlight>). Total baru: <highlight><total></highlight>."

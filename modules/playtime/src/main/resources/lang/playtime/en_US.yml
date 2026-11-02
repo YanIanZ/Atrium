@@ -1,0 +1,18 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+# (colours are set in config.yml under "theme"). Prefer them over raw colours.
+self: "<prefix><muted>Playtime: <highlight><total></highlight> total, <highlight><session></highlight> this session, <highlight><today></highlight> today."
+other: "<prefix><muted><player>'s playtime: <highlight><total></highlight> total, <highlight><session></highlight> this session, <highlight><today></highlight> today."
+unknown: "<prefix><error>No player named <highlight><player></highlight> has joined this server."
+invalid-period: "<prefix><error>Unknown period. Use <highlight>day</highlight>, <highlight>week</highlight>, <highlight>month</highlight> or <highlight>all</highlight>."
+top-loading: "<prefix><muted>The playtime leaderboard is being refreshed. Try again in a moment."
+top-empty: "<prefix><muted>No playtime recorded for this period yet."
+top-header: "<prefix><primary>Playtime top — <highlight><period></highlight>, page <highlight><page></highlight>"
+top-entry: "<prefix><muted><rank>. <highlight><player></highlight> <dark_gray>— <highlight><time></highlight>"
+reward: "<prefix><success>Playtime reward <highlight><reward></highlight> received."
+edit-usage: "<prefix><muted>Usage: <highlight>/editplaytime (player) (set|add|take) (duration) [confirm]</highlight>."
+invalid-mode: "<prefix><error>Unknown mode. Use <highlight>set</highlight>, <highlight>add</highlight> or <highlight>take</highlight>."
+edit-confirm: "<prefix><warning>This will <highlight><mode> <amount></highlight> on <highlight><player></highlight>. Click <confirm> or run the same command again within <highlight><seconds></highlight>s to confirm."
+confirm-button: "<accent>[Confirm]</accent>"
+confirm-hover: "<muted>Click to apply this change"
+edit-no-pending: "<prefix><error>No matching playtime change is waiting for confirmation."
+edit-done: "<prefix><success>Playtime of <highlight><player></highlight> updated (<highlight><mode> <amount></highlight>). New total: <highlight><total></highlight>."

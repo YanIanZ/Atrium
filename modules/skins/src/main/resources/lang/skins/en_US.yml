@@ -1,0 +1,13 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+usage-skin: "<prefix><muted>Usage: <highlight>/skin (name) [player]</highlight> or <highlight>/skin reset [player]</highlight>."
+invalid-name: "<prefix><error>That is not a valid account name (3-16 letters, digits or _)."
+fetching: "<prefix><muted>Looking up the skin of <highlight><name></highlight>..."
+fetch-failed: "<prefix><error>The skin could not be looked up right now. Try again later."
+not-found: "<prefix><error>No skin found for <highlight><name></highlight>."
+changed: "<prefix><success>You now wear the skin of <highlight><name></highlight>."
+changed-other: "<prefix><success><highlight><player></highlight> now wears the skin of <highlight><name></highlight>."
+reset: "<prefix><success>Your skin has been reset."
+reset-other: "<prefix><success>Reset the skin of <highlight><player></highlight>."
+no-custom: "<prefix><muted><highlight><player></highlight> is not wearing a custom skin."
+failed: "<prefix><error>The skin could not be saved. See the server log."
+target-left: "<prefix><error>The target player disconnected before the skin was changed."

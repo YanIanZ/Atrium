@@ -1,0 +1,2 @@
+usage: "<prefix><muted>Usage: <primary>/tablist refresh</primary>."
+refreshed: "<prefix><success>The tab list of <highlight><players></highlight> online players will be re-sent on the next update."

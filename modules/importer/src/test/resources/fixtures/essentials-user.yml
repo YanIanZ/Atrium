@@ -1,0 +1,45 @@
+lastAccountName: Steve
+nickname: '&e[VIP] &aSteve'
+money: 1234.5
+homes:
+  home:
+    world: world
+    x: 10.5
+    y: 64.0
+    z: -3.25
+    yaw: 90.0
+    pitch: 12.5
+  nether:
+    world: 5f9d6a1e-1111-2222-3333-444455556666
+    world-name: world_nether
+    x: 1.0
+    y: 2.0
+    z: 3.0
+  broken:
+    world: world
+    x: not-a-number
+    y: 64.0
+    z: 0.0
+teleport:
+  lastLocation:
+    world: world
+    x: 1.0
+    y: 65.0
+    z: 2.0
+  logoutLocation:
+    world: world
+    x: 3.0
+    y: 66.0
+    z: 4.0
+timestamps:
+  login: 1600000000000
+  logout: 1600000100000
+  lastlogin: 1600000050000
+ignore:
+  - 11111111-1111-1111-1111-111111111111
+mail:
+  - Console|1600000000000|Welcome
+jailed: false
+muted: true
+ban:
+  reason: griefing

@@ -1,0 +1,23 @@
+# Atrium Vault: drop-in replacement for Vault. The name and main class are what other plugins look for.
+name: Vault
+version: '${version}'
+main: net.milkbowl.vault.Vault
+api-version: '26.1'
+load: STARTUP
+folia-supported: true
+description: Atrium Vault - Folia-ready, guarded drop-in replacement for Vault (ships VaultAPI ${vaultApiVersion}, LGPL-3.0).
+authors: [yanianz]
+website: https://github.com/yanianz
+commands:
+  vault-info:
+    description: Shows the Vault version, every registered Economy/Permission/Chat provider and the guard status.
+    usage: /<command>
+    permission: vault.admin
+  vault-convert:
+    description: Copies balances between two registered economy providers (dry run first, then confirm).
+    usage: /<command> <from> <to> [confirm]
+    permission: vault.admin
+permissions:
+  vault.admin:
+    description: Use /vault-info and /vault-convert.
+    default: op

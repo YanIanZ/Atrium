@@ -1,0 +1,91 @@
+# Atrium item prices. Edit, then run /atrium reload (or use /setworth in game).
+#
+# items:
+#   <material>: <price>          plain entry; matches ONLY the vanilla item (no custom model data,
+#                                item model, custom name, lore, enchantments or plugin data)
+#   <id>:                        detailed entry
+#     material: <material>       defaults to the id
+#     price: <price>
+#     custom-model-data: [1001]  exact tokens: numbers, s:<string>, b:<true|false>, c:#rrggbb
+#     item-model: <namespace:key>
+#     name: <exact plain-text custom name>
+#     enchantments: {sharpness: 5}   exact enchantment set
+#     accept: [lore, enchantments, name, custom-model-data, item-model, components]
+#                                attributes that may have ANY value (else the item must not have them)
+# enchantment-values:
+#   <enchantment>: <price per level>  added for entries that accept enchantments
+# A price of 0 makes an item unsellable.
+items:
+  cobblestone: 0.1
+  stone: 0.2
+  dirt: 0.05
+  sand: 0.2
+  gravel: 0.2
+  oak_log: 1
+  spruce_log: 1
+  birch_log: 1
+  jungle_log: 1
+  acacia_log: 1
+  dark_oak_log: 1
+  oak_planks: 0.25
+  coal: 2
+  charcoal: 1.5
+  raw_iron: 4
+  iron_ingot: 5
+  iron_block: 45
+  raw_copper: 1.5
+  copper_ingot: 2
+  raw_gold: 8
+  gold_ingot: 10
+  gold_block: 90
+  redstone: 1
+  lapis_lazuli: 2
+  quartz: 2
+  amethyst_shard: 3
+  emerald: 25
+  diamond: 100
+  diamond_block: 900
+  netherite_scrap: 250
+  netherite_ingot: 1100
+  wheat: 0.5
+  carrot: 0.4
+  potato: 0.4
+  beetroot: 0.4
+  sugar_cane: 0.5
+  pumpkin: 1
+  melon_slice: 0.2
+  cactus: 0.5
+  bamboo: 0.1
+  apple: 1
+  egg: 0.3
+  feather: 0.3
+  leather: 1.5
+  string: 0.5
+  bone: 0.5
+  rotten_flesh: 0.1
+  gunpowder: 1.5
+  spider_eye: 0.5
+  ender_pearl: 4
+  blaze_rod: 5
+  slime_ball: 2
+  ghast_tear: 10
+  beef: 1
+  porkchop: 1
+  chicken: 0.8
+  mutton: 0.8
+  cod: 0.8
+  salmon: 1
+  shulker_box: 50
+  diamond_sword: 150
+  diamond_pickaxe: 220
+  # Example: enchanted diamond swords sell for the sword price plus enchantment-values.
+  enchanted_diamond_sword:
+    material: diamond_sword
+    price: 150
+    accept: [enchantments]
+enchantment-values:
+  sharpness: 15
+  unbreaking: 10
+  mending: 50
+  efficiency: 15
+  fortune: 40

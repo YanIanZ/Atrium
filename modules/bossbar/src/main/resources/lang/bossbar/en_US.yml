@@ -1,0 +1,8 @@
+toggle-hidden: "<prefix><muted>Boss bar announcements are now hidden. Use <primary>/bossbars</primary> to show them again."
+toggle-shown: "<prefix><success>Boss bar announcements are now shown."
+toggle-save-failed: "<prefix><error>Your boss bar setting could not be saved and may be lost after you leave."
+message-sent: "<prefix><success>Boss bar message shown to <highlight><count></highlight> player(s) for <highlight><seconds></highlight> seconds."
+too-long: "<prefix><error>Boss bar messages can last at most <highlight><max></highlight> seconds."
+message-too-long: "<prefix><error>Boss bar messages can have at most <highlight><max></highlight> characters."
+empty-message: "<prefix><error>The boss bar message is empty."
+message-usage: "<prefix><muted>Usage: <primary>/bossbarmsg all <seconds> <message></primary> or <primary>/bossbarmsg [players] <seconds> <message></primary>."

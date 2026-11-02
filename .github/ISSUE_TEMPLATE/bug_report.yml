@@ -1,0 +1,36 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Atrium version
+      description: Output of /atrium version
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Server software and version
+      placeholder: Paper 26.1.2-74 / Folia 26.1.2-8 / SourbyCraft Build 50
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      render: text
+  - type: markdown
+    attributes:
+      value: "Security issues (dupes, permission bypasses, injection): do not open an issue, see SECURITY.md."

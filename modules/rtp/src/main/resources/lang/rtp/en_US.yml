@@ -1,0 +1,23 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+# (colours are set in config.yml under "theme"). Prefer them over raw colours.
+# Search
+searching: "<prefix><muted>Searching for a safe random location in <highlight><world></highlight>..."
+not-found: "<prefix><error>No safe location was found in <highlight><world></highlight>. Please try again."
+not-found-other: "<prefix><error>No safe location was found for <highlight><player></highlight> in <highlight><world></highlight>."
+busy-player: "<prefix><error>A random teleport for <highlight><player></highlight> is already being searched."
+busy-server: "<prefix><error>Too many random teleports are being searched right now. Try again in a moment."
+# Result
+teleported: "<prefix><success>Teleported to <highlight><to_x> <to_y> <to_z></highlight> in <highlight><to_world></highlight>."
+teleported-other: "<prefix><success>Sent <highlight><player></highlight> to <highlight><to_x> <to_y> <to_z></highlight> in <highlight><to_world></highlight>."
+# Restrictions
+unknown-world: "<prefix><error>There is no loaded world called <highlight><world></highlight>."
+world-disabled: "<prefix><error>Random teleport is not available in <highlight><world></highlight>."
+world-no-permission: "<prefix><error>You may not random teleport in <highlight><world></highlight>."
+other-world-denied: "<prefix><error>You can only random teleport in the world you are in."
+on-cooldown: "<prefix><error>You can random teleport in <highlight><world></highlight> again in <highlight><time></highlight>."
+# Cost
+insufficient-funds: "<prefix><error>A random teleport costs <highlight><cost></highlight>, you do not have enough."
+payment-failed: "<prefix><error>The payment failed, so you were not teleported."
+charged: "<prefix><muted><highlight><cost></highlight> was charged for the random teleport."
+refunded: "<prefix><muted>The teleport did not happen, so <highlight><cost></highlight> was refunded."
+refund-failed: "<prefix><error>The refund of <highlight><cost></highlight> failed. The error was logged for the server staff."

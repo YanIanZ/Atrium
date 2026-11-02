@@ -1,0 +1,75 @@
+name: Atrium
+version: '${version}'
+main: dev.yanianz.atrium.core.AtriumPlugin
+loader: dev.yanianz.atrium.core.boot.AtriumLoader
+api-version: '26.1'
+folia-supported: true
+description: Modular, Folia-native server essentials.
+authors: [yanianz]
+website: https://github.com/yanianz
+dependencies:
+  server:
+    Vault:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    LuckPerms:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    BlueMap:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    dynmap:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    squaremap:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    packetevents:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    DecentHolograms:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    FancyHolograms:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    Citizens:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    FancyNpcs:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    WorldGuard:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    GriefPrevention:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    Lands:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    Towny:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    floodgate:
+      load: BEFORE
+      required: false
+      join-classpath: true

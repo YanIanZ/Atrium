@@ -1,0 +1,3 @@
+usage: "<prefix><muted>Usage: <highlight><usage></highlight>"
+invalid-argument: "<prefix><error>Invalid value for <highlight><argument></highlight>. Usage: <highlight><usage></highlight>"
+unavailable: "<prefix><error>This command was removed from the configuration. It disappears after the next restart."

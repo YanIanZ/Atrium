@@ -1,0 +1,12 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+usage-signedit: "<prefix><muted>Penggunaan: <highlight>/signedit (1-4) (teks)</highlight>. Arahkan pandangan ke papan tanda dulu."
+muted: "<prefix><error>Kamu tidak bisa menulis di papan tanda saat dibisukan."
+no-sign: "<prefix><error>Arahkan pandangan langsung ke papan tanda dalam <highlight><reach></highlight> blok."
+too-long: "<prefix><error>Satu baris papan tanda maksimal <highlight><max></highlight> karakter."
+cancelled: "<prefix><error>Perubahan papan tanda dibatalkan oleh plugin perlindungan."
+waxed: "<prefix><error>Papan tanda ini sudah dilapisi lilin dan tidak bisa diedit."
+edited: "<prefix><success>Baris papan tanda <highlight><line></highlight> diperbarui."
+copied: "<prefix><success>Papan tanda disalin ke clipboard-mu."
+pasted: "<prefix><success>Papan tanda ditempel."
+paste-empty: "<prefix><error>Gunakan <highlight>/signcopy</highlight> pada papan tanda terlebih dahulu."
+disabled: "<prefix><error>Pengeditan papan tanda dinonaktifkan."

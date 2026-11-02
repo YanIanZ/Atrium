@@ -1,0 +1,4 @@
+toggle-hidden: "<prefix><muted>Your sidebar is now hidden. Use <primary>/sidebar</primary> to show it again."
+toggle-shown: "<prefix><success>Your sidebar is now shown."
+toggle-save-failed: "<prefix><error>Your sidebar setting could not be saved and may be lost after you leave."
+unsupported: "<prefix><muted>Sidebars are not available on this server; your preference was stored."

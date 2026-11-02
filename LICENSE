@@ -1,0 +1,30 @@
+Atrium Proprietary License
+
+Copyright (c) 2026 YanIanZ. All rights reserved.
+
+This repository and all files in it ("the Software"), except the third-party components listed in NOTICE, are the
+proprietary property of the copyright holder. The source code is published for transparency and review only.
+
+1. Permitted use. You may download the official release builds published at
+   https://github.com/YanIanZ/Atrium/releases and run them, unmodified, on Minecraft servers that you operate.
+
+2. Not permitted without prior written permission from the copyright holder:
+   a. copying, modifying, merging, translating or creating derivative works of the Software or any part of it;
+   b. distributing, publishing, sublicensing, selling, renting or otherwise making the Software, its source code or
+      its builds available to third parties, including re-uploading release files;
+   c. building and distributing your own binaries from this source code;
+   d. removing or altering copyright, license or attribution notices.
+
+3. Feedback. Issues and suggestions you submit may be used by the copyright holder without obligation.
+
+4. Third-party components keep their own licenses (see NOTICE). Nothing in this license restricts rights you have
+   under those licenses for those components.
+
+5. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+   LIMITED TO MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+   HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+   OR ITS USE.
+
+6. Termination. Any use in breach of this license ends your permission to use the Software.
+
+For other licensing, open an issue or contact the copyright holder through GitHub.

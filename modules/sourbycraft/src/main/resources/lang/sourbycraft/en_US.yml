@@ -1,0 +1,3 @@
+# The sourbycraft module talks to staff through the console log and /atrium profile (core messages).
+# This file exists so the bundle loads; add keys here when the module gets player-facing lines.
+{}

@@ -1,0 +1,13 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+usage-skin: "<prefix><muted>Penggunaan: <highlight>/skin (nama) [pemain]</highlight> atau <highlight>/skin reset [pemain]</highlight>."
+invalid-name: "<prefix><error>Nama akun tidak valid (3-16 huruf, angka, atau _)."
+fetching: "<prefix><muted>Mencari skin milik <highlight><name></highlight>..."
+fetch-failed: "<prefix><error>Skin tidak bisa dicari saat ini. Coba lagi nanti."
+not-found: "<prefix><error>Tidak ada skin untuk <highlight><name></highlight>."
+changed: "<prefix><success>Kamu sekarang memakai skin milik <highlight><name></highlight>."
+changed-other: "<prefix><success><highlight><player></highlight> sekarang memakai skin milik <highlight><name></highlight>."
+reset: "<prefix><success>Skinmu sudah dikembalikan."
+reset-other: "<prefix><success>Skin <highlight><player></highlight> sudah dikembalikan."
+no-custom: "<prefix><muted><highlight><player></highlight> tidak memakai skin khusus."
+failed: "<prefix><error>Skin tidak bisa disimpan. Lihat log server."
+target-left: "<prefix><error>Pemain target keluar sebelum skin diganti."

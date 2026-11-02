@@ -1,0 +1,23 @@
+# Tag tema: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+# (warna diatur di config.yml pada bagian "theme"). Gunakan ini alih-alih warna mentah.
+# Pencarian
+searching: "<prefix><muted>Mencari lokasi acak yang aman di <highlight><world></highlight>..."
+not-found: "<prefix><error>Tidak ditemukan lokasi aman di <highlight><world></highlight>. Silakan coba lagi."
+not-found-other: "<prefix><error>Tidak ditemukan lokasi aman untuk <highlight><player></highlight> di <highlight><world></highlight>."
+busy-player: "<prefix><error>Teleport acak untuk <highlight><player></highlight> masih dicari."
+busy-server: "<prefix><error>Terlalu banyak teleport acak yang sedang dicari. Coba lagi sebentar lagi."
+# Hasil
+teleported: "<prefix><success>Diteleportasi ke <highlight><to_x> <to_y> <to_z></highlight> di <highlight><to_world></highlight>."
+teleported-other: "<prefix><success><highlight><player></highlight> dikirim ke <highlight><to_x> <to_y> <to_z></highlight> di <highlight><to_world></highlight>."
+# Pembatasan
+unknown-world: "<prefix><error>Tidak ada world bernama <highlight><world></highlight> yang dimuat."
+world-disabled: "<prefix><error>Teleport acak tidak tersedia di <highlight><world></highlight>."
+world-no-permission: "<prefix><error>Kamu tidak boleh teleport acak di <highlight><world></highlight>."
+other-world-denied: "<prefix><error>Kamu hanya bisa teleport acak di world tempat kamu berada."
+on-cooldown: "<prefix><error>Kamu bisa teleport acak di <highlight><world></highlight> lagi dalam <highlight><time></highlight>."
+# Biaya
+insufficient-funds: "<prefix><error>Teleport acak berbiaya <highlight><cost></highlight>, uangmu tidak cukup."
+payment-failed: "<prefix><error>Pembayaran gagal, jadi kamu tidak diteleportasi."
+charged: "<prefix><muted><highlight><cost></highlight> dibayar untuk teleport acak."
+refunded: "<prefix><muted>Teleport tidak terjadi, jadi <highlight><cost></highlight> dikembalikan."
+refund-failed: "<prefix><error>Pengembalian <highlight><cost></highlight> gagal. Galatnya sudah dicatat untuk staf server."

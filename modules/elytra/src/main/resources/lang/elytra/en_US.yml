@@ -1,0 +1,21 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+# (colours are set in config.yml under "theme"). Prefer them over raw colours.
+status:
+  - "<prefix><primary>Elytra settings"
+  - "<secondary>  Sneak boost while gliding: <boost> <dark_gray>(/elytra boost)</dark_gray>"
+  - "<secondary>  Double-jump launch: <launch> <dark_gray>(/elytra launch)</dark_gray>"
+  - "<secondary>  Boost speed limit: <highlight><max_speed></highlight> blocks/s"
+state-on: "<success>on</success>"
+state-off: "<error>off</error>"
+state-disabled: "<muted>disabled on this server</muted>"
+state-no-permission: "<muted>no permission</muted>"
+feature-boost: "sneak boost"
+feature-launch: "double-jump launch"
+enabled: "<prefix><success>Elytra <highlight><feature></highlight> enabled."
+disabled: "<prefix><muted>Elytra <highlight><feature></highlight> disabled."
+save-failed: "<prefix><error>Your elytra settings could not be saved. The error was logged for the server staff."
+boosted: "<prefix><success>Boost! <highlight><speed></highlight> blocks/s"
+boost-max-speed: "<prefix><warning>You are already at top speed."
+boost-cooldown: "<prefix><error>Boost ready in <highlight><time></highlight>."
+launched: "<prefix><success>Launch!"
+launch-cooldown: "<prefix><error>Launch ready in <highlight><time></highlight>."

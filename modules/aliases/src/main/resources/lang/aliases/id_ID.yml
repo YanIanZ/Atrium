@@ -1,0 +1,3 @@
+usage: "<prefix><muted>Penggunaan: <highlight><usage></highlight>"
+invalid-argument: "<prefix><error>Nilai tidak valid untuk <highlight><argument></highlight>. Penggunaan: <highlight><usage></highlight>"
+unavailable: "<prefix><error>Perintah ini sudah dihapus dari konfigurasi. Perintah akan hilang setelah restart berikutnya."

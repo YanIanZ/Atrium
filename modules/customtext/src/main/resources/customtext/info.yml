@@ -1,0 +1,14 @@
+# Custom text example: a first-join hint only brand-new players receive.
+# It is also readable with /ctext info at any time (the join restriction does not limit the command).
+
+command: info
+permission: ""
+cooldown: 0
+join: true
+first-join-only: true
+
+pages:
+  - - "<gold><bold>First time here?</bold></gold>"
+    - "<gray>Start with <white>/ctext rules</white>."
+    - "<gray>Teleport around with <white>/spawn</white> and <white>/warp</white>."
+    - "<gray>Ask staff if anything is unclear."

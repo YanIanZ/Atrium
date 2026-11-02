@@ -1,0 +1,16 @@
+# Custom text example: a message of the day, sent on every join and available as /motd.
+# Only page 1 is shown on join; use /ctext motd [page] to read the rest.
+
+command: motd
+permission: ""
+cooldown: 30
+join: true
+first-join-only: false
+
+pages:
+  - - "<gradient:#5fb3a1:#3b7f9a><bold>Welcome to the server, <player>!</bold></gradient>"
+    - "<gray>Players online: <white><online></white></gray>"
+    - "<gray>You are in <white><world></white>.</gray>"
+    - "<gray>Read the <click:run_command:'/ctext rules'><aqua>rules</aqua></click> before you start."
+  - - "<gradient:#5fb3a1:#3b7f9a><bold>Today</bold></gradient>"
+    - "<gray>Use <white>/ctext list</white> to see every available text page."

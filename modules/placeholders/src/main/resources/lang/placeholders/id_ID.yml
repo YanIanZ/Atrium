@@ -1,0 +1,4 @@
+status-hooked: "<prefix><success>Ekspansi PlaceholderAPI 'atrium' sudah terdaftar."
+status-missing: "<prefix><warning>PlaceholderAPI tidak terpasang atau tidak aktif; placeholder 'atrium' tidak berfungsi."
+status-cached: "<prefix><muted>Pemain di cache placeholder: <highlight><count></highlight>."
+status-list: "<prefix><muted>Placeholder: <highlight><placeholders></highlight>"

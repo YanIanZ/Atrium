@@ -1,0 +1,10 @@
+kits:
+  starter:
+    delay: 600
+    items:
+      - stone 10
+      - bread 4
+  vip:
+    money: 100
+    items:
+      - diamond_sword 1

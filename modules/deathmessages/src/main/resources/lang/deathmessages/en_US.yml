@@ -1,0 +1,7 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+location: "<prefix><muted>You died at <highlight><death_world></highlight> <highlight><death_x></highlight>, <highlight><death_y></highlight>, <highlight><death_z></highlight>."
+stats-header: "<prefix><primary>Death statistics of <highlight><player></highlight>:"
+stats-kills: "<prefix><muted>Kills: <highlight><kills>"
+stats-deaths: "<prefix><muted>Deaths: <highlight><deaths>"
+stats-ratio: "<prefix><muted>K/D ratio: <highlight><ratio>"
+no-permission: "<prefix><error>You need <highlight><permission></highlight> to view another player's statistics."

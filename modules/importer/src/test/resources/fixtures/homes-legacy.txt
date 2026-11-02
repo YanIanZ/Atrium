@@ -1,0 +1,1 @@
+home$-p$-f$-AIR%%world:10.5:64:-5.25:12.5:45;base$-p$-f$-DIRT%%world_nether:0:70:0:-10:180;bad name$-p$-f$-AIR%%world:1:2:3:4:5

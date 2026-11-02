@@ -1,0 +1,59 @@
+# Example dialog. The file name (without .yml) is the dialog name: /dialog open example
+# Texts (title, body, labels, tooltips) are MiniMessage written by you; <player> is the viewer's name.
+# Values typed by players are NEVER parsed: they become {key} variables that the actions module inserts
+# literally (plain text in messages; in commands only letters, digits, single spaces and _.,:+-!? pass).
+#
+# Optional per-dialog keys:
+#   extends: <other>     inherit another dialog file: its title/body/buttons come first, a body/buttons/on-open
+#                        list is appended (parent first) and an input with the same key replaces the parent's one.
+#                        Cycles and unknown names are refused at load time.
+#   on-open: [ ... ]     action lines run once when the player opens the dialog (no input exists yet)
+#   cooldown: 5m         minimum time between two opens per player (0 or absent = no cooldown)
+title: "<gold>Hello, <player>!"
+# Permission needed to open this dialog (empty = anyone with atrium.dialog.open).
+permission: ""
+can-close-with-escape: true
+columns: 2
+body:
+  - "<gray>Pick a colour and tell us your favourite block."
+  - text: "<dark_gray>This is an example. Edit or delete plugins/Atrium/modules/dialogs/example.yml."
+    width: 250
+inputs:
+  - type: text
+    key: block
+    label: "Favourite block"
+    max-length: 24
+    # Full-match regular expression checked on the server. Default: default-text-pattern in dialogs.yml.
+    pattern: "[A-Za-z_ ]{1,24}"
+  - type: option
+    key: colour
+    label: "Colour"
+    options:
+      - id: red
+        label: "<red>Red"
+        initial: true
+      - id: green
+        label: "<green>Green"
+      - id: blue
+        label: "<blue>Blue"
+  - type: bool
+    key: loud
+    label: "Shout it"
+    on-true: "yes"
+    on-false: "no"
+  - type: number
+    key: amount
+    label: "How much"
+    start: 1
+    end: 10
+    step: 1
+    initial: 5
+buttons:
+  - label: "<green>Send"
+    tooltip: "Show the answer to yourself"
+    # Lines for the actions module: msg, console, player, sound, delay, ... (see the actions module).
+    actions:
+      - "msg: <gray>You like <white>{block}</white> in <white>{colour}</white> (x{amount}, loud: {loud})."
+  - label: "<red>Cancel"
+    actions:
+      - "msg: <gray>Maybe next time."

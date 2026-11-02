@@ -1,0 +1,25 @@
+# Atrium Vault configuration. Restart the server after changing it.
+
+guard:
+  # Register GuardedEconomy at the highest priority. Plugins asking Vault for an economy then get a wrapper that
+  # validates every call and forwards it to the best real economy provider (Atrium, EssentialsX, ...).
+  # false: plugins talk to the economy provider directly, exactly like original Vault.
+  enabled: true
+  # Largest amount accepted for a single withdraw/deposit. NaN, infinite and negative amounts are always rejected.
+  max-amount: 1.0E12
+  # Minimum seconds between two identical warnings (rejected input, provider exceptions).
+  error-log-interval-seconds: 30
+
+audit:
+  # Log every withdraw/deposit going through the guard to plugins/Vault/audit/audit.log (tab-separated:
+  # time, operation, account, world, amount, result, balance, caller plugin, message). Asynchronous and bounded:
+  # when the queue is full, entries are dropped and counted, the calling plugin never waits.
+  enabled: true
+  # Name the calling plugin with a short stack walk (cheap; set false to skip it).
+  caller-detection: true
+  # Maximum entries waiting to be written.
+  queue-capacity: 10000
+  # Rotate audit.log when it exceeds this size (MB) or the UTC day changes.
+  max-file-size-mb: 10
+  # Rotated files to keep.
+  max-files: 10

@@ -1,0 +1,12 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+broadcast-enter: "<prefix><warning><highlight><player></highlight> sekarang AFK."
+broadcast-enter-reason: "<prefix><warning><highlight><player></highlight> sekarang AFK: <highlight><message></highlight>"
+broadcast-leave: "<prefix><warning><highlight><player></highlight> tidak lagi AFK."
+toggle-on: "<prefix><warning>Kamu sekarang AFK. Bergerak atau kirim chat untuk kembali."
+toggle-off: "<prefix><success>Kamu tidak lagi AFK."
+title: "<prefix><warning>AFK"
+subtitle: "<prefix><muted>Kamu tidak aktif selama <highlight><minutes></highlight> menit."
+actionbar: "<prefix><warning>AFK selama <highlight><minutes></highlight> menit"
+kicked: "<prefix><error>Kamu dikeluarkan karena AFK selama <highlight><minutes></highlight> menit."
+message-too-long: "<prefix><error>Pesan AFK maksimal <highlight><max></highlight> karakter."
+cancelled: "<prefix><error>Perubahan status AFK dibatalkan."

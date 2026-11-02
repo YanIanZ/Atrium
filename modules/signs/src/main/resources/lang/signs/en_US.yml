@@ -1,0 +1,12 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+usage-signedit: "<prefix><muted>Usage: <highlight>/signedit (1-4) (text)</highlight>. Look at a sign first."
+muted: "<prefix><error>You cannot write on signs while muted."
+no-sign: "<prefix><error>Look directly at a sign within <highlight><reach></highlight> blocks."
+too-long: "<prefix><error>A sign line can have at most <highlight><max></highlight> characters."
+cancelled: "<prefix><error>The sign change was cancelled by a protection plugin."
+waxed: "<prefix><error>This sign is waxed and cannot be edited."
+edited: "<prefix><success>Sign line <highlight><line></highlight> updated."
+copied: "<prefix><success>Sign copied to your clipboard."
+pasted: "<prefix><success>Sign pasted."
+paste-empty: "<prefix><error>Use <highlight>/signcopy</highlight> on a sign first."
+disabled: "<prefix><error>Sign editing is disabled."

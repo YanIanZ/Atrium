@@ -1,0 +1,16 @@
+SpawnInfo:
+  Loc: world:0:65:0:0:0
+  Enabled: true
+  Lines:
+    - "&6Welcome"
+    - "&7to the server"
+    - "!nextpage!"
+    - "&aPage two"
+Disabled:
+  Loc: world:1:65:1:0:0
+  Enabled: false
+  Lines:
+    - "&cOff"
+Broken:
+  Lines:
+    - "x"

@@ -1,0 +1,21 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+# (warna diatur di config.yml pada bagian "theme"). Utamakan tag ini dibanding warna mentah.
+status:
+  - "<prefix><primary>Pengaturan elytra"
+  - "<secondary>  Dorongan sneak saat meluncur: <boost> <dark_gray>(/elytra boost)</dark_gray>"
+  - "<secondary>  Lompat ganda untuk meluncur: <launch> <dark_gray>(/elytra launch)</dark_gray>"
+  - "<secondary>  Batas kecepatan dorongan: <highlight><max_speed></highlight> blok/detik"
+state-on: "<success>aktif</success>"
+state-off: "<error>mati</error>"
+state-disabled: "<muted>dimatikan di server ini</muted>"
+state-no-permission: "<muted>tanpa izin</muted>"
+feature-boost: "dorongan sneak"
+feature-launch: "luncur lompat ganda"
+enabled: "<prefix><success>Elytra <highlight><feature></highlight> diaktifkan."
+disabled: "<prefix><muted>Elytra <highlight><feature></highlight> dimatikan."
+save-failed: "<prefix><error>Pengaturan elytra-mu tidak dapat disimpan. Kesalahannya sudah dicatat untuk staf server."
+boosted: "<prefix><success>Dorong! <highlight><speed></highlight> blok/detik"
+boost-max-speed: "<prefix><warning>Kamu sudah di kecepatan maksimum."
+boost-cooldown: "<prefix><error>Dorongan siap dalam <highlight><time></highlight>."
+launched: "<prefix><success>Meluncur!"
+launch-cooldown: "<prefix><error>Luncur siap dalam <highlight><time></highlight>."

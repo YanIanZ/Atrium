@@ -1,0 +1,14 @@
+Atrium Vault bundles, unmodified and without relocation, the compiled classes of
+
+    VaultAPI 1.7.1 (com.github.MilkBowl:VaultAPI:1.7.1)
+    Copyright (C) MilkBowl and the Vault contributors
+    https://github.com/MilkBowl/VaultAPI
+
+namely the packages net.milkbowl.vault.economy, net.milkbowl.vault.permission and net.milkbowl.vault.chat.
+VaultAPI is licensed under the GNU Lesser General Public License, version 3 (see LICENSE-VaultAPI-LGPL-3.0.txt,
+which incorporates the GNU General Public License, version 3: LICENSE-GPL-3.0.txt). Its corresponding source is
+available at https://github.com/MilkBowl/VaultAPI (tag 1.7.1). You may replace these classes with a modified version
+of the library: they are loaded as ordinary classes from this jar under their original names.
+
+All other classes in this jar (net.milkbowl.vault.Vault and everything under dev.yanianz.atrium.vault) are original
+Atrium code, not derived from Vault, and are not covered by the VaultAPI license.

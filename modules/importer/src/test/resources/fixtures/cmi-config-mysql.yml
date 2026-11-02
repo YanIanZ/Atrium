@@ -1,0 +1,8 @@
+MySQL:
+  Enabled: true
+  Host: db.example
+  Port: 3307
+  Database: cmi_data
+  User: importer
+  Password: super-secret
+  TablePrefix: cmi_

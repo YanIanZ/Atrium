@@ -1,0 +1,4 @@
+status-hooked: "<prefix><success>The 'atrium' PlaceholderAPI expansion is registered."
+status-missing: "<prefix><warning>PlaceholderAPI is not installed or not enabled; the 'atrium' placeholders are inactive."
+status-cached: "<prefix><muted>Players in the placeholder cache: <highlight><count></highlight>."
+status-list: "<prefix><muted>Placeholders: <highlight><placeholders></highlight>"

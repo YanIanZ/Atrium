@@ -1,0 +1,12 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+broadcast-enter: "<prefix><warning><highlight><player></highlight> is now AFK."
+broadcast-enter-reason: "<prefix><warning><highlight><player></highlight> is now AFK: <highlight><message></highlight>"
+broadcast-leave: "<prefix><warning><highlight><player></highlight> is no longer AFK."
+toggle-on: "<prefix><warning>You are now AFK. Move or chat to return."
+toggle-off: "<prefix><success>You are no longer AFK."
+title: "<prefix><warning>AFK"
+subtitle: "<prefix><muted>You have been idle for <highlight><minutes></highlight> minutes."
+actionbar: "<prefix><warning>AFK for <highlight><minutes></highlight> minutes"
+kicked: "<prefix><error>You were kicked for being AFK for <highlight><minutes></highlight> minutes."
+message-too-long: "<prefix><error>An AFK message may be at most <highlight><max></highlight> characters."
+cancelled: "<prefix><error>The AFK change was cancelled."

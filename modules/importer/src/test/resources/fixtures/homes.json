@@ -1,0 +1,5 @@
+{
+  "home": ["world:10.5:64:-5.25:12.5:45", "b"],
+  "farm": ["myT8Cworld:1:2:3:0:90", "f"],
+  "broken": ["not a location"]
+}

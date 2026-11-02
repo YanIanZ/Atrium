@@ -1,0 +1,13 @@
+# Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
+usage-discord: "<prefix><muted>Usage: <highlight>/discord status</highlight> or <highlight>/discord test (channel)</highlight>."
+status-header: "<prefix><primary>Discord relay:"
+# <error> below is the last-error placeholder, not the theme tag.
+status-entry: "<prefix><muted><channel>: <state> <dark_gray>| <muted>queue <queued>/<capacity> <dark_gray>| <muted>sent <sent> <dark_gray>| <muted>dropped <dropped> <dark_gray>| <muted>failed <failed> <dark_gray>| <muted>retries <retries> <dark_gray>| <muted>last: <error>"
+status-empty: "<prefix><warning>No Discord webhook is configured. Set one in modules/discord.yml."
+state-configured: "<success>configured <muted>(<highlight><mask></highlight>)"
+state-invalid: "<error>invalid <muted>(<highlight><reason></highlight>)"
+state-missing: "<dark_gray>not configured"
+test-queued: "<prefix><success>Test message queued for <highlight><channel></highlight> (<mask>)."
+no-webhook: "<prefix><error>No webhook is configured for <highlight><channel></highlight>."
+invalid-webhook: "<prefix><error>The <highlight><channel></highlight> webhook is invalid and was ignored: <reason>"
+unknown-channel: "<prefix><error>Unknown channel <highlight><channel></highlight>. Use one of: <highlight><channels></highlight>."

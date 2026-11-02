@@ -1,0 +1,12 @@
+warps:
+  shop:
+    world: world
+    x: 10.0
+    y: 65.0
+    z: -10.0
+    yaw: 90.0
+  bad:
+    world: world
+    x: nope
+    y: 64.0
+    z: 0.0
