@@ -182,10 +182,12 @@ final class UpdateChecker implements Listener {
         }
         ctx.track(ctx.scheduler().entityLater(player, () -> {
             if (player.isOnline()) {
-                ctx.messages().send(player, "performance.update-available",
+                // Renamed key (was update-available): existing lang files kept the old, broken click line.
+                ctx.messages().send(player, "performance.update-notice",
                         Msg.unparsed("latest", current.latest()),
                         Msg.unparsed("current", currentVersion),
-                        Msg.unparsed("url", current.url().isEmpty() ? "-" : current.url()));
+                        Msg.unparsed("url", current.url().isEmpty() ? "-" : current.url()),
+                        Msg.link("release_link", current.url()));
             }
         }, null, 40));
     }

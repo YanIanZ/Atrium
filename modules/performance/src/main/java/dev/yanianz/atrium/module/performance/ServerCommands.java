@@ -250,10 +250,11 @@ final class ServerCommands {
             return;
         }
         if (status.newer()) {
-            ctx.messages().send(sender, "performance.update-available",
+            ctx.messages().send(sender, "performance.update-notice",
                     Msg.unparsed("latest", status.latest()),
                     Msg.unparsed("current", updates.currentVersion()),
-                    Msg.unparsed("url", status.url().isEmpty() ? "-" : status.url()));
+                    Msg.unparsed("url", status.url().isEmpty() ? "-" : status.url()),
+                    Msg.link("release_link", status.url()));
         } else {
             ctx.messages().send(sender, "performance.update-latest", Msg.unparsed("current", updates.currentVersion()));
         }
