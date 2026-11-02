@@ -6,6 +6,7 @@
 | [COMMANDS.md](COMMANDS.md) | Every command with aliases, description and usage, grouped by module (generated) |
 | [PERMISSIONS.md](PERMISSIONS.md) | Every permission with its default and description, grouped by module (generated) |
 | [SOURBYCRAFT.md](SOURBYCRAFT.md) | SourbyCraft support: MultiProfile profile-scoped data, AWF worlds, economy with profile purses, region metrics |
+| [Aurora Identity integration RFC](proposals/aurora-identity-integration/README.md) | **Proposed only:** character creation Dialogs, identity UX, profile-scoped data, staff inspector and acceptance tests; no runtime feature implemented |
 | [ROADMAP.md](ROADMAP.md) | Development phases, what shipped in each, open items and known limits |
 
 `COMMANDS.md` and `PERMISSIONS.md` are generated with `/atrium docs` from the default configuration. Run
