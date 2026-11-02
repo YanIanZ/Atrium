@@ -45,6 +45,16 @@ public class WorldRule {
     @Comment("Target for FIXED gateways: world, x, y, z, yaw, pitch (for example \"world_nether, 0, 64, 0, 0, 0\").")
     public String gatewayTarget = "";
 
+    @Comment("Chance (0-100) that a death drop actually falls on the ground in this world.\n"
+            + "0 keeps every item, 100 is vanilla. Ignored when the inventory is kept.")
+    public double deathDropPercent = 100;
+
+    @Comment("Keep the inventory of a player who dies in this world, without needing a permission.")
+    public boolean keepInventoryOnDeath = false;
+
+    @Comment("Keep the experience level of a player who dies in this world, without needing a permission.")
+    public boolean keepExperienceOnDeath = false;
+
     double fallDamageMultiplier() {
         return multiplier(fallDamageMultiplier);
     }
@@ -55,6 +65,11 @@ public class WorldRule {
 
     int enderPearlCooldownSeconds() {
         return Math.max(0, Math.min(3600, enderPearlCooldownSeconds));
+    }
+
+    /** Percentage of the death drops that still falls on the ground (0-100). */
+    double deathDropPercent() {
+        return multiplier(deathDropPercent);
     }
 
     /** Forced game mode, or {@code null} when disabled or when the configured name is invalid. */

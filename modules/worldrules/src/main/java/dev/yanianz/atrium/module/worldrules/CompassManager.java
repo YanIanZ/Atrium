@@ -1,6 +1,7 @@
 package dev.yanianz.atrium.module.worldrules;
 
 import dev.yanianz.atrium.core.config.ConfigHandle;
+import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import dev.yanianz.atrium.core.scheduler.Scheduler;
 import dev.yanianz.atrium.core.scheduler.TaskHandle;
@@ -9,6 +10,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.kyori.adventure.bossbar.BossBar;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -18,6 +20,7 @@ import org.bukkit.inventory.ItemStack;
 /**
  * Compass targets. Tracking another player runs one bounded timer per tracker and stops as soon as the
  * tracker no longer holds a compass or the target leaves; there is no per-tick polling for idle players.
+ * The optional boss bar is updated by the same timer, on the holder's own thread.
  */
 final class CompassManager {
     enum Start {
@@ -39,7 +42,7 @@ final class CompassManager {
     /** Must run on the holder's own thread. */
     Start start(Player holder, Player target) {
         UUID id = holder.getUniqueId();
-        if (!holdsCompass(holder)) {
+        if (config.get().compass.requireItem && !holdsCompass(holder)) {
             return Start.NO_COMPASS;
         }
         Track existing = trackers.get(id);
@@ -53,6 +56,12 @@ final class CompassManager {
             stop(id, null);
         }
         Track track = new Track(target.getUniqueId());
+        if (config.get().compass.bossBar) {
+            BossBar.Color color = config.get().compass.barColor();
+            track.bar = BossBar.bossBar(ctx.messages().render(holder, "worldrules.compass-bar-unknown",
+                    Msg.unparsed("player", target.getName())), 1.0f, color, BossBar.Overlay.PROGRESS);
+            holder.showBossBar(track.bar);
+        }
         trackers.put(id, track);
         long period = config.get().compassRefreshTicks();
         track.task = ctx.track(ctx.scheduler().entityTimer(holder, () -> tick(id), () -> stop(id, null), 1, period));
@@ -75,7 +84,7 @@ final class CompassManager {
             stop(id, null);
             return;
         }
-        if (!holdsCompass(holder)) {
+        if (config.get().compass.requireItem && !holdsCompass(holder)) {
             stop(id, "worldrules.compass-item-lost");
             return;
         }
@@ -100,11 +109,12 @@ final class CompassManager {
                     stop(id, null);
                     return;
                 }
-                if (!holdsCompass(holder)) {
+                if (config.get().compass.requireItem && !holdsCompass(holder)) {
                     stop(id, "worldrules.compass-item-lost");
                     return;
                 }
                 holder.setCompassTarget(location);
+                updateBar(holder, track, target, location);
             }, () -> stop(id, null));
         }).exceptionally(error -> {
             Throwable cause = error instanceof CompletionException && error.getCause() != null
@@ -115,6 +125,27 @@ final class CompassManager {
             ctx.scheduler().entity(holder, () -> stop(id, "worldrules.compass-target-left"), null);
             return null;
         }).whenComplete((ignored, error) -> track.refreshing.set(false));
+    }
+
+    /** Runs on the holder's thread. */
+    private void updateBar(Player holder, Track track, Player target, Location location) {
+        BossBar bar = track.bar;
+        if (bar == null) {
+            return;
+        }
+        if (location.getWorld() == null || !location.getWorld().equals(holder.getWorld())) {
+            bar.name(ctx.messages().render(holder, "worldrules.compass-bar-other-world",
+                    Msg.unparsed("player", target.getName())));
+            return;
+        }
+        Location own = holder.getLocation();
+        double dx = location.getX() - own.getX();
+        double dz = location.getZ() - own.getZ();
+        String arrow = CompassBearing.arrow(dx, dz, own.getYaw());
+        String distance = CompassBearing.formatDistance(CompassBearing.distance(dx, dz));
+        bar.name(ctx.messages().render(holder, "worldrules.compass-bar",
+                Msg.unparsed("player", target.getName()), Msg.unparsed("arrow", arrow),
+                Msg.unparsed("distance", distance)));
     }
 
     private static boolean holdsCompass(Player player) {
@@ -133,9 +164,13 @@ final class CompassManager {
     void stopAll() {
         for (UUID id : trackers.keySet()) {
             Track track = trackers.remove(id);
-            if (track != null && track.task != null) {
+            if (track == null) {
+                continue;
+            }
+            if (track.task != null) {
                 track.task.cancel();
             }
+            hideBar(id, track);
         }
         trackers.clear();
     }
@@ -152,6 +187,7 @@ final class CompassManager {
         if (track.task != null) {
             track.task.cancel();
         }
+        hideBar(id, track);
         if (messageKey == null) {
             return;
         }
@@ -165,10 +201,24 @@ final class CompassManager {
         }
     }
 
+    private void hideBar(UUID id, Track track) {
+        BossBar bar = track.bar;
+        if (bar == null) {
+            return;
+        }
+        track.bar = null;
+        Player holder = Bukkit.getPlayer(id);
+        if (holder == null) {
+            return;
+        }
+        ctx.scheduler().entity(holder, () -> holder.hideBossBar(bar), null);
+    }
+
     private static final class Track {
         final UUID target;
         final AtomicBoolean refreshing = new AtomicBoolean();
         volatile TaskHandle task;
+        volatile BossBar bar;
 
         Track(UUID target) {
             this.target = target;
