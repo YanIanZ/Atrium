@@ -1,0 +1,16 @@
+# Older EssentialsX: the world is only stored as a UUID.
+spawns:
+  default:
+    world: 4d3c1b2a-9f8e-4a7b-8c6d-5e4f3a2b1c0d
+    x: -3.5
+    y: 64.0
+    z: 7.5
+    yaw: 90.0
+    pitch: 30.0
+  builders:
+    world: 99999999-9999-4999-8999-999999999999
+    x: 0.5
+    y: 100.0
+    z: 0.5
+    yaw: 0.0
+    pitch: 0.0

@@ -1,0 +1,19 @@
+# Excerpt of plugins/CMI/config.yml (CMI 9.x) after /cmi setspawn, /cmi setspawn -g:vip and /cmi setfirstspawn.
+# Locations are world;x;y;z;yaw;pitch.
+Spawn:
+  SpawnOnJoin: false
+  IgnoredWorlds: []
+  Main:
+    Location: world;-15.5;71.0;24.5;-89.4;12.9
+    RespawnLocation: true
+    Rng: 0
+  Groups:
+    vip:
+      Location: world_nether;10.5;65.0;10.5;180.0;0.0
+      RespawnLocation: false
+      Rng: 0
+  FirstSpawn:
+    Use: true
+    Location: world;100.5;70.0;-50.5;180.0;-10.0
+Newbie:
+  Kit: starter

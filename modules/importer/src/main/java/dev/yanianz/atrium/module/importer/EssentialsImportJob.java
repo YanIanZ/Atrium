@@ -1,7 +1,6 @@
 package dev.yanianz.atrium.module.importer;
 
 import dev.yanianz.atrium.api.moderation.PunishmentType;
-import dev.yanianz.atrium.api.teleport.SpawnAdminService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
 import dev.yanianz.atrium.api.user.AtriumUser;
 import dev.yanianz.atrium.core.module.ModuleContext;
@@ -352,34 +351,7 @@ final class EssentialsImportJob extends ExtendedImportJob {
             return;
         }
         String newbies = CmiNodeLocations.text(CmiNodeLocations.child(essentialsConfig(), "newbies"), "spawnpoint");
-        importSpawns(spawnRecords(points, newbies));
-    }
-
-    /**
-     * EssentialsSpawn keeps one spawn per permission group. Atrium has a default spawn, a first-join spawn
-     * and per-world spawns, so the {@code default} group becomes the default spawn, the group named by
-     * {@code newbies.spawnpoint} also becomes the first-join spawn, and other groups are reported.
-     */
-    List<SpawnRecord> spawnRecords(List<EssentialsSpawnParser.SpawnPoint> points, String newbies) {
-        List<SpawnRecord> out = new ArrayList<>();
-        EssentialsSpawnParser.SpawnPoint preferred = EssentialsSpawnParser.preferred(points);
-        for (EssentialsSpawnParser.SpawnPoint point : points) {
-            Optional<StoredLocation> resolved = worldIndex().resolve(point.location());
-            String label = "group " + point.group();
-            if (resolved.isEmpty()) {
-                out.add(new SpawnRecord(label, SpawnAdminService.Kind.DEFAULT, null, null,
-                        "spawn is in world '" + point.location().worldToken() + "' which is not loaded", null));
-                continue;
-            }
-            boolean main = point == preferred;
-            out.add(new SpawnRecord(label, SpawnAdminService.Kind.DEFAULT, null, resolved.get(), null,
-                    main ? null : "per-group spawn; Atrium has no group spawns (use a per-world spawn or a warp)"));
-            if (newbies != null && !newbies.equalsIgnoreCase("none") && point.group().equalsIgnoreCase(newbies)) {
-                out.add(new SpawnRecord("first-join (newbies.spawnpoint " + newbies + ")",
-                        SpawnAdminService.Kind.FIRST_JOIN, null, resolved.get(), null, null));
-            }
-        }
-        return out;
+        importSpawns(EssentialsSpawnParser.plan(points, newbies, worldIndex()));
     }
 
     // ---- kits ----

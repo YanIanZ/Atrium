@@ -31,7 +31,6 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -144,18 +143,18 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                 .build(), "Teleport to a warp, or send another player there"));
         ctx.command(CommandSpec.of(Cmds.literal("warps", PERM_WARP)
                 .executes(c -> show(c, null))
-                .then(Commands.argument("category", StringArgumentType.word()).suggests(categories())
+                .then(Commands.argument("category", StringArgumentType.word()).suggests(usableGroups())
                         .executes(c -> show(c, StringArgumentType.getString(c, "category"))))
                 .build(), "Open the warp menu (or list warps in chat), optionally for one category"));
         ctx.command(CommandSpec.of(Cmds.literal("warpgroups", PERM_WARPGROUPS)
                 .executes(this::warpGroups)
-                .then(Commands.argument("group", StringArgumentType.word()).suggests(categories())
+                .then(Commands.argument("group", StringArgumentType.word()).suggests(usableGroups())
                         .executes(c -> listText(c, StringArgumentType.getString(c, "group"))))
                 .build(), "List the warp groups (categories) with their warp counts", "warpgroup"));
         ctx.command(CommandSpec.of(Cmds.literal("setwarp")
                 .requires(c -> c.getSender().hasPermission(PERM_SETWARP) || c.getSender().hasPermission(PERM_CREATE))
                 .executes(c -> usage(c, "warps.usage-setwarp"))
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(manageableWarps())
+                .then(Commands.argument("name", StringArgumentType.word()).suggests(manageableWarps(PERM_SETWARP))
                         .executes(this::setWarp)
                         .then(Commands.argument("category", StringArgumentType.word()).suggests(categories())
                                 .executes(this::setWarp)))
@@ -163,12 +162,13 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
         ctx.command(CommandSpec.of(Cmds.literal("delwarp")
                 .requires(c -> c.getSender().hasPermission(PERM_DELWARP) || c.getSender().hasPermission(PERM_CREATE))
                 .executes(c -> usage(c, "warps.usage-delwarp"))
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(manageableWarps()).executes(this::delWarp))
+                .then(Commands.argument("name", StringArgumentType.word()).suggests(manageableWarps(PERM_DELWARP))
+                        .executes(this::delWarp))
                 .build(), "Delete a warp permanently", "removewarp", "rmwarp"));
         ctx.command(CommandSpec.of(Cmds.literal("renamewarp")
                 .requires(c -> c.getSender().hasPermission(PERM_SETWARP) || c.getSender().hasPermission(PERM_CREATE))
                 .executes(c -> usage(c, "warps.usage-renamewarp"))
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(manageableWarps())
+                .then(Commands.argument("name", StringArgumentType.word()).suggests(manageableWarps(PERM_SETWARP))
                         .executes(c -> usage(c, "warps.usage-renamewarp"))
                         .then(Commands.argument("new-name", StringArgumentType.word()).executes(this::renameWarp)))
                 .build(), "Rename a warp (its icon follows)"));
@@ -329,45 +329,64 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
     }
 
     boolean canUse(CommandSender sender, Warp warp) {
-        if (sender instanceof Player player && player.getUniqueId().equals(warp.creator())) {
-            return true; // a player can always use the warp they own
-        }
-        return !config.get().requirePerWarpPermission || sender.hasPermission(PERM_ALL) || sender.hasPermission(warp.permission());
+        return WarpSuggestions.canUse(viewer(sender), warp, config.get().requirePerWarpPermission);
     }
+
+    /** The sender as seen by the suggestion and access rules; permission checks only, no world or player state. */
+    static WarpSuggestions.Viewer viewer(CommandSender sender) {
+        return new WarpSuggestions.Viewer(sender instanceof Player player ? player.getUniqueId() : null,
+                sender::hasPermission);
+    }
+
+    /*
+     * Suggestion providers answer tab completion, which Paper/Folia may run off the sender's own thread. They
+     * only read the in-memory warp snapshot and permission checks: no world, no player state, no database.
+     */
 
     private SuggestionProvider<CommandSourceStack> usableWarps() {
         return (c, builder) -> {
-            CommandSender sender = c.getSource().getSender();
-            String typed = builder.getRemainingLowerCase();
-            manager.all().stream().filter(w -> canUse(sender, w)).map(Warp::name)
-                    .filter(n -> n.toLowerCase(Locale.ROOT).startsWith(typed)).sorted().forEach(builder::suggest);
+            WarpSuggestions.usable(manager.all(), viewer(c.getSource().getSender()),
+                    config.get().requirePerWarpPermission, builder.getRemaining()).forEach(builder::suggest);
             return builder.buildFuture();
         };
     }
 
     private SuggestionProvider<CommandSourceStack> allWarps() {
-        return Cmds.suggest(this::names);
-    }
-
-    /** Staff see every warp; a player with atrium.warps.create only sees the warps they own. */
-    private SuggestionProvider<CommandSourceStack> manageableWarps() {
         return (c, builder) -> {
-            CommandSender sender = c.getSource().getSender();
-            boolean staff = sender.hasPermission(PERM_SETWARP) || sender.hasPermission(PERM_DELWARP);
-            String typed = builder.getRemainingLowerCase();
-            manager.all().stream()
-                    .filter(w -> staff || (sender instanceof Player player
-                            && player.hasPermission(PERM_CREATE) && player.getUniqueId().equals(w.creator())))
-                    .map(Warp::name)
-                    .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(typed))
-                    .sorted(String.CASE_INSENSITIVE_ORDER)
+            WarpSuggestions.usable(manager.all(), WarpSuggestions.Viewer.ALL, false, builder.getRemaining())
                     .forEach(builder::suggest);
             return builder.buildFuture();
         };
     }
 
-    private SuggestionProvider<CommandSourceStack> categories() {
-        return Cmds.suggest(() -> manager.all().stream().map(Warp::category).distinct().sorted().toList());
+    /**
+     * Warps the sender may change with the command whose staff node is {@code adminPermission}: staff see every
+     * warp, a player with atrium.warps.create only the warps they own.
+     */
+    private SuggestionProvider<CommandSourceStack> manageableWarps(String adminPermission) {
+        return (c, builder) -> {
+            WarpSuggestions.manageable(manager.all(), viewer(c.getSource().getSender()), adminPermission,
+                    builder.getRemaining()).forEach(builder::suggest);
+            return builder.buildFuture();
+        };
+    }
+
+    /** Groups with at least one warp the sender can use (what /warpgroups lists); hidden groups stay hidden. */
+    private SuggestionProvider<CommandSourceStack> usableGroups() {
+        return (c, builder) -> {
+            WarpSuggestions.groups(manager.all(), viewer(c.getSource().getSender()),
+                    config.get().requirePerWarpPermission, builder.getRemaining()).forEach(builder::suggest);
+            return builder.buildFuture();
+        };
+    }
+
+    /** Category argument when creating or editing a warp: every existing category plus the default one. */
+    SuggestionProvider<CommandSourceStack> categories() {
+        return (c, builder) -> {
+            WarpSuggestions.categories(manager.all(), config.get().defaultCategory, builder.getRemaining())
+                    .forEach(builder::suggest);
+            return builder.buildFuture();
+        };
     }
 
     private int usage(CommandContext<CommandSourceStack> c, String key) {

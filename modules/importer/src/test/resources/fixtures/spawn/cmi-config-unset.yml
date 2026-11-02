@@ -1,0 +1,9 @@
+# CMI 9.x config.yml right after /cmi setspawn: no first spawn was ever set.
+Spawn:
+  SpawnOnJoin: false
+  Main:
+    Location: world;0.5;64.0;0.5;0.0;0.0
+    RespawnLocation: true
+  FirstSpawn:
+    Use: true
+    Location: ''

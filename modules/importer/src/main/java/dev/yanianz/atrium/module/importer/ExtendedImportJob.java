@@ -137,65 +137,37 @@ abstract class ExtendedImportJob extends ImportJob {
 
     // ---- spawn ----
 
-    /**
-     * One spawn point. {@code unsupported} is set when Atrium has no matching spawn kind (per-group spawns);
-     * the location is then reported so an admin can recreate it.
-     */
-    protected record SpawnRecord(String label, SpawnAdminService.Kind kind, String world, StoredLocation location,
-            String problem, String unsupported) {}
-
-    protected void importSpawns(List<SpawnRecord> spawns) {
+    protected void importSpawns(SpawnImport.Plan plan) {
+        plan.notes().forEach(report::note);
+        List<SpawnImport.Spawn> spawns = plan.spawns();
         beginPhase("spawn", spawns.size());
+        SpawnImport.Env env = new SpawnImport.Env() {
+            @Override
+            public StoredLocation byName(StoredLocation location) {
+                return ExtendedImportJob.this.byName(location);
+            }
+
+            @Override
+            public String worldProblem(StoredLocation location) {
+                return ExtendedImportJob.this.worldProblem(location);
+            }
+
+            @Override
+            public void awaitWrite(java.util.concurrent.CompletableFuture<Void> write, String what) {
+                ExtendedImportJob.this.awaitWrite(write, ImportCategory.SPAWN, what);
+            }
+        };
         int processed = 0;
-        for (SpawnRecord spawn : spawns) {
+        for (SpawnImport.Spawn spawn : spawns) {
             if (isCancelled()) {
                 break;
             }
             report.found(ImportCategory.SPAWN, 1);
-            importSpawn(spawn);
+            SpawnImport.apply(spawn, spawnAdmin, report, options.dryRun(), options.overwrite(), env);
             processed++;
         }
         if (processed > 0) {
             reportProgress(processed);
-        }
-    }
-
-    private void importSpawn(SpawnRecord spawn) {
-        if (spawn.problem() != null) {
-            report.invalid(ImportCategory.SPAWN, spawn.label(), spawn.problem());
-            return;
-        }
-        StoredLocation location = byName(spawn.location());
-        if (spawn.unsupported() != null) {
-            report.unsupported(ImportCategory.SPAWN, 1, spawn.unsupported());
-            report.issue(new ImportIssue(ImportCategory.SPAWN, spawn.label(), "not imported (" + spawn.unsupported()
-                    + "); it is at " + describe(location)));
-            return;
-        }
-        String problem = worldProblem(location);
-        if (problem != null) {
-            report.invalid(ImportCategory.SPAWN, spawn.label(), problem);
-            return;
-        }
-        if (spawnAdmin == null) {
-            report.unsupported(ImportCategory.SPAWN, 1, "teleport module (SpawnAdminService) not available");
-            return;
-        }
-        if (spawnAdmin.spawn(spawn.kind(), spawn.world()).isPresent() && !options.overwrite()) {
-            report.skipped(ImportCategory.SPAWN, 1, "Atrium already has this spawn set (use --overwrite)");
-            return;
-        }
-        if (options.dryRun()) {
-            report.imported(ImportCategory.SPAWN, 1);
-            return;
-        }
-        try {
-            awaitWrite(spawnAdmin.setSpawn(spawn.kind(), spawn.world(), location), ImportCategory.SPAWN,
-                    "spawn " + spawn.label());
-            report.imported(ImportCategory.SPAWN, 1);
-            report.note("Spawn '" + spawn.label() + "' set to " + describe(location));
-        } catch (StepFailed failure) {
-            report.failed(ImportCategory.SPAWN, spawn.label(), failure.getMessage());
         }
     }
 

@@ -1,0 +1,27 @@
+# plugins/Essentials/spawn.yml as written by EssentialsX 2.20+ (/setspawn [group]).
+# "world" is the world UUID, "world-name" its folder name.
+spawns:
+  default:
+    world: 4d3c1b2a-9f8e-4a7b-8c6d-5e4f3a2b1c0d
+    world-name: world
+    x: 12.5
+    y: 72.0
+    z: -340.5
+    yaw: -90.0
+    pitch: 12.5
+  newbies:
+    world: 4d3c1b2a-9f8e-4a7b-8c6d-5e4f3a2b1c0d
+    world-name: world
+    x: 200.5
+    y: 80.0
+    z: 200.5
+    yaw: 45.0
+    pitch: -5.0
+  vip:
+    world: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+    world-name: world_nether
+    x: 10.5
+    y: 65.0
+    z: 10.5
+    yaw: 180.0
+    pitch: 0.0

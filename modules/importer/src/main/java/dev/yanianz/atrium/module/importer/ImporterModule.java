@@ -393,14 +393,7 @@ public final class ImporterModule implements AtriumModule {
 
     private Path resolveSpawnFolder(Path essentialsFolder) {
         String configured = config.get().essentialsSpawnFolder();
-        Path folder;
-        if (!configured.isBlank()) {
-            folder = absolute(configured);
-        } else {
-            Path parent = essentialsFolder.getParent() == null ? pluginsDirectory() : essentialsFolder.getParent();
-            folder = parent.resolve("EssentialsSpawn");
-        }
-        return Files.isDirectory(folder) ? folder.toAbsolutePath() : null;
+        return EssentialsSpawnParser.spawnFolder(essentialsFolder, configured.isBlank() ? null : absolute(configured));
     }
 
     private Path resolveFolder(String configured, String defaultName) {

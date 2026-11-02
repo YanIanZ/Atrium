@@ -1,0 +1,20 @@
+# Older CMI (8.x) config.yml: separate World/X/Y/Z/Pitch/Yaw keys; first spawn never set.
+Spawn:
+  SpawnOnJoin: false
+  Main:
+    World: Theia
+    X: -1306.836024430177
+    Y: 77.0
+    Z: -692.5003481315823
+    Pitch: -4.8099575
+    Yaw: -89.920135
+  FirstSpawn:
+    Use: true
+    World: None
+    X: 0.0
+    Y: 0.0
+    Z: 0.0
+    Pitch: 0.0
+    Yaw: 0.0
+Newbie:
+  Kit: Spawn

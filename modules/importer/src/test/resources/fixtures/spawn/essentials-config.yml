@@ -1,0 +1,9 @@
+# Excerpt of plugins/Essentials/config.yml
+ops-name-color: '4'
+teleport-cooldown: 0
+newbies:
+  announce-format: '&dWelcome {DISPLAYNAME}&d to the server!'
+  spawnpoint: newbies
+  kit: tools
+respawn-at-home: false
+spawn-on-join: false

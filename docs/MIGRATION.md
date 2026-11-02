@@ -50,7 +50,7 @@ source has no such data
 | `nicks` | ✔ database | ✔ `userdata/*.yml` | – | – | – |
 | `playtime` | ✔ database | – | – | – | – |
 | `holograms` | ✔ `Saves/Holograms.yml` | – | – | – | – |
-| `spawn` | ✔ `config.yml` (main and first-join spawn) | ◐ `EssentialsSpawn/spawn.yml` | – | – | – |
+| `spawn` | ✔ `config.yml` (main and first-join spawn) | ◐ `Essentials/spawn.yml` | – | – | – |
 | `kits` | ◐ `Kits/*.yml` | ◐ `kits.yml` | – | – | – |
 | `jails` | ◐ `Saves/Jails.yml` | ◐ `jail.yml` / `jails.yml` | – | – | – |
 | `punishments` | ◐ mutes + vanilla ban lists | ✔ mutes, jail sentences, bans + vanilla ban lists | – | ✔ bans, temp bans, IP bans | – |

@@ -54,7 +54,7 @@ final class CmiImportJob extends ExtendedImportJob {
             readConfig();
         }
         if (options.includes(ImportCategory.SPAWN) && cmiConfig != null) {
-            importSpawns(spawnRecords(CmiSpawnParser.parse(cmiConfig)));
+            importSpawns(CmiSpawnParser.plan(CmiSpawnParser.parse(cmiConfig)));
         }
         if (options.includes(ImportCategory.KITS)) {
             importKits();
@@ -111,17 +111,6 @@ final class CmiImportJob extends ExtendedImportJob {
             ctx.logger().error("Reading {} failed", file, e);
             report.failed(ImportCategory.SPAWN, "config.yml", "cannot read file: " + describe(e));
         }
-    }
-
-    private List<SpawnRecord> spawnRecords(CmiSpawnParser.Result parsed) {
-        List<SpawnRecord> out = new ArrayList<>();
-        for (CmiSpawnParser.ParsedSpawn spawn : parsed.spawns()) {
-            out.add(new SpawnRecord(spawn.label(), spawn.kind(), null, spawn.location(), spawn.problem(), null));
-        }
-        if (out.isEmpty()) {
-            report.note("CMI config.yml has no Spawn.Main or Spawn.FirstSpawn location");
-        }
-        return out;
     }
 
     private void noteSourceShape(CmiDatabaseSource source) {

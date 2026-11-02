@@ -14,8 +14,8 @@ public class ImporterConfig {
             + "plugins/Essentials. A relative path is resolved against the plugins folder.")
     public String essentialsFolder = "";
 
-    @Comment("EssentialsSpawn data folder (it contains spawn.yml). Leave empty to use\n"
-            + "plugins/EssentialsSpawn next to Essentials.")
+    @Comment("Folder that contains EssentialsSpawn's spawn.yml. Leave empty to use the Essentials folder\n"
+            + "(EssentialsSpawn writes plugins/Essentials/spawn.yml), or plugins/EssentialsSpawn when only that exists.")
     public String essentialsSpawnFolder = "";
 
     @Comment("PlayerVaultsX vault folder (it contains <uuid>.yml files). Leave empty to use\n"
