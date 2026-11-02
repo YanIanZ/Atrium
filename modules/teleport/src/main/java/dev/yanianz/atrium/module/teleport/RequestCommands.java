@@ -1,11 +1,15 @@
 package dev.yanianz.atrium.module.teleport;
 
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.yanianz.atrium.api.chat.IgnoreService;
 import dev.yanianz.atrium.api.teleport.TeleportOptions;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportCause;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportResult;
+import dev.yanianz.atrium.api.user.AtriumUser;
+import dev.yanianz.atrium.api.user.PlayerRef;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.config.ConfigHandle;
@@ -20,8 +24,14 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -42,6 +52,11 @@ final class RequestCommands implements Listener {
     static final String PERM_TPDENY = "atrium.tpdeny";
     static final String PERM_TPACANCEL = "atrium.tpacancel";
     static final String PERM_TPTOGGLE = "atrium.tptoggle";
+    static final String PERM_TPABLOCK = "atrium.tpablock";
+    static final String PERM_TPAUNBLOCK = "atrium.tpaunblock";
+    static final String PERM_TPABLOCK_LIST = "atrium.tpablock.list";
+    /** Staff may ask players who put them on their /tpablock list anyway. */
+    static final String PERM_TPABLOCK_BYPASS = "atrium.tpablock.bypass";
     /** Numeric: atrium.tpa.max.<n> raises the /tpa reach. */
     static final String PERM_TPA_MAX = "atrium.tpa.max";
 
@@ -89,6 +104,19 @@ final class RequestCommands implements Listener {
         ctx.command(CommandSpec.of(Cmds.literal("tptoggle", PERM_TPTOGGLE)
                 .executes(this::toggle)
                 .build(), "Allow or refuse teleport requests"));
+        ctx.command(CommandSpec.of(Cmds.literal("tpablock", PERM_TPABLOCK)
+                .executes(c -> usage(c, "teleport.usage-tpablock"))
+                .then(Cmds.literal("list", PERM_TPABLOCK_LIST).executes(this::blockList))
+                .then(Commands.argument("player", StringArgumentType.word())
+                        .suggests(Cmds.knownPlayers(ctx.users()))
+                        .executes(this::block))
+                .build(), "Silently ignore teleport requests from a player"));
+        ctx.command(CommandSpec.of(Cmds.literal("tpaunblock", PERM_TPAUNBLOCK)
+                .executes(c -> usage(c, "teleport.usage-tpaunblock"))
+                .then(Commands.argument("player", StringArgumentType.word())
+                        .suggests(blockedNames())
+                        .executes(this::unblock))
+                .build(), "Allow teleport requests from a blocked player again"));
     }
 
     /** A bare root command explains itself instead of failing silently. */
@@ -169,12 +197,26 @@ final class RequestCommands implements Listener {
 
     /** Stores the request and tells both sides. Also used by /tpaall. */
     private void sendRequest(Player self, Player target, Type type) {
+        // A blocked requester gets the same reply as everyone else; the target never sees the request.
+        if (blocked(self, target)) {
+            long seconds = Math.max(5, config.get().requests.expireSeconds);
+            messages.send(self, "teleport.request-sent", Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
+            return;
+        }
         Request request = book.add(self.getUniqueId(), target.getUniqueId(), type);
         long seconds = Duration.between(request.created(), request.expires()).toSeconds();
         messages.send(self, "teleport.request-sent", Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
         messages.send(target, type == Type.TPA ? "teleport.tpa-received" : "teleport.tpahere-received",
                 Msg.unparsed("player", self.getName()), Msg.number("seconds", seconds));
         target.sendMessage(buttons(target, self.getName()));
+    }
+
+    /** The target put the requester on /tpablock; staff with the bypass permission ignore the list. */
+    private boolean blocked(Player self, Player target) {
+        if (self.hasPermission(PERM_TPABLOCK_BYPASS)) {
+            return false;
+        }
+        return service.state(target).map(state -> state.blocks(self.getUniqueId())).orElse(false);
     }
 
     /** /tpaall: asks every online player who accepts requests to come to the sender. */
@@ -194,6 +236,9 @@ final class RequestCommands implements Listener {
                 continue;
             }
             if (ignored.isPresent() && ignored.get().isIgnoring(other.getUniqueId(), self.getUniqueId())) {
+                continue;
+            }
+            if (blocked(self, other)) {
                 continue;
             }
             sendRequest(self, other, Type.TPAHERE);
@@ -283,6 +328,143 @@ final class RequestCommands implements Listener {
             messages.send(receiver, "teleport.request-cancelled-receiver", Msg.unparsed("player", self.getName()));
         }
         return Cmds.OK;
+    }
+
+    // ---- /tpablock and /tpaunblock ----
+
+    /** Resolves an online or offline name, then runs the change on the sender's own thread. */
+    private void resolveAndRun(Player self, String name, Consumer<PlayerRef> action) {
+        ctx.users().resolveAccount(name, true).whenComplete((found, error) -> {
+            if (error != null) {
+                ctx.logger().error("Could not resolve the player name '{}' for /tpablock", name, error);
+                messages.send(self, "core.error");
+                return;
+            }
+            if (found.isEmpty()) {
+                messages.send(self, "teleport.player-unknown", Msg.unparsed("player", name));
+                return;
+            }
+            ctx.scheduler().entity(self, () -> {
+                if (self.isOnline()) {
+                    action.accept(found.get());
+                }
+            }, null);
+        });
+    }
+
+    private int block(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player self = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "player");
+        resolveAndRun(self, name, target -> {
+            if (target.uuid().equals(self.getUniqueId())) {
+                messages.send(self, "teleport.tpablock-self");
+                return;
+            }
+            try {
+                AtriumUser user = ctx.users().user(self);
+                TeleportState current = user.get(service.store().component);
+                if (current.blocks(target.uuid())) {
+                    messages.send(self, "teleport.tpablock-already", Msg.unparsed("player", target.name()));
+                    return;
+                }
+                int max = Math.max(1, Math.min(200, config.get().requests.maxBlocked));
+                if (current.blockedRequests().size() >= max) {
+                    messages.send(self, "teleport.tpablock-limit", Msg.number("max", max));
+                    return;
+                }
+                Set<UUID> blocked = new LinkedHashSet<>(current.blockedRequests());
+                blocked.add(target.uuid());
+                user.update(service.store().component, state -> state.withBlockedRequests(blocked));
+                saveAndReport(self, target.name(), "teleport.tpablock-added");
+            } catch (IllegalStateException e) {
+                ctx.logger().error("Teleport data of {} is not loaded for /tpablock", self.getName(), e);
+                messages.send(self, "core.error");
+            }
+        });
+        return Cmds.OK;
+    }
+
+    private int unblock(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player self = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "player");
+        resolveAndRun(self, name, target -> {
+            try {
+                AtriumUser user = ctx.users().user(self);
+                TeleportState current = user.get(service.store().component);
+                if (!current.blocks(target.uuid())) {
+                    messages.send(self, "teleport.tpaunblock-not-blocked", Msg.unparsed("player", target.name()));
+                    return;
+                }
+                Set<UUID> blocked = new LinkedHashSet<>(current.blockedRequests());
+                blocked.remove(target.uuid());
+                user.update(service.store().component, state -> state.withBlockedRequests(blocked));
+                saveAndReport(self, target.name(), "teleport.tpaunblock-removed");
+            } catch (IllegalStateException e) {
+                ctx.logger().error("Teleport data of {} is not loaded for /tpaunblock", self.getName(), e);
+                messages.send(self, "core.error");
+            }
+        });
+        return Cmds.OK;
+    }
+
+    /** Confirms the change only after the component was stored. */
+    private void saveAndReport(Player self, String targetName, String key) {
+        ctx.users().saveNow(self.getUniqueId()).whenComplete((ignored, error) -> {
+            if (error != null) {
+                ctx.logger().error("Saving the /tpablock list of {} failed", self.getName(), error);
+                messages.send(self, "teleport.save-failed");
+                return;
+            }
+            messages.send(self, key, Msg.unparsed("player", targetName));
+        });
+    }
+
+    private int blockList(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player self = cmds.player(c.getSource());
+        Set<UUID> blocked;
+        try {
+            blocked = ctx.users().user(self).get(service.store().component).blockedRequests();
+        } catch (IllegalStateException e) {
+            ctx.logger().error("Teleport data of {} is not loaded for /tpablock list", self.getName(), e);
+            throw cmds.fail(c.getSource(), "core.error");
+        }
+        if (blocked.isEmpty()) {
+            messages.send(self, "teleport.tpablock-empty");
+            return Cmds.OK;
+        }
+        List<String> names = new ArrayList<>(blocked.stream().map(RequestCommands::nameOf).toList());
+        names.sort(Comparator.comparing(String::toLowerCase));
+        messages.send(self, "teleport.tpablock-list-header", Msg.number("count", names.size()));
+        for (String name : names) {
+            messages.send(self, "teleport.tpablock-list-entry", Msg.unparsed("player", name));
+        }
+        return Cmds.OK;
+    }
+
+    private static String nameOf(UUID uuid) {
+        String name = Bukkit.getOfflinePlayer(uuid).getName();
+        return name == null || name.isBlank() ? uuid.toString() : name;
+    }
+
+    /** Tab completion for /tpaunblock: only the names on the sender's own list. */
+    private SuggestionProvider<CommandSourceStack> blockedNames() {
+        return (c, builder) -> {
+            if (c.getSource().getSender() instanceof Player self) {
+                ctx.users().cached(self.getUniqueId()).ifPresent(user -> {
+                    String typed = builder.getRemainingLowerCase();
+                    try {
+                        user.get(service.store().component).blockedRequests().stream()
+                                .map(RequestCommands::nameOf)
+                                .filter(name -> name.toLowerCase().startsWith(typed))
+                                .sorted(String.CASE_INSENSITIVE_ORDER)
+                                .forEach(builder::suggest);
+                    } catch (IllegalStateException e) {
+                        // The teleport component is not registered (module disabling); no suggestions.
+                    }
+                });
+            }
+            return builder.buildFuture();
+        };
     }
 
     private int toggle(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {

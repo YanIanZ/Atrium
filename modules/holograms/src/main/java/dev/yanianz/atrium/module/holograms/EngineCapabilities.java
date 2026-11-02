@@ -10,7 +10,7 @@ import java.util.Locale;
  * richer engine restores the feature.
  */
 record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perViewerText, boolean clickActions,
-        boolean itemLines, boolean blockLines, boolean lineOffsets, boolean perViewerVisibility,
+        boolean itemLines, boolean blockLines, boolean imageLines, boolean lineOffsets, boolean perViewerVisibility,
         boolean dynamicText, boolean animations, boolean lineEvents) {
 
     /** Capabilities with a stable key used by the lang files. */
@@ -21,6 +21,7 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
         CLICK_ACTIONS("click-actions"),
         ITEM_LINES("item-lines"),
         BLOCK_LINES("block-lines"),
+        IMAGE_LINES("image-lines"),
         LINE_OFFSETS("line-offsets"),
         PER_VIEWER_VISIBILITY("per-viewer-visibility"),
         DYNAMIC_TEXT("dynamic-text"),
@@ -39,7 +40,7 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
     }
 
     static EngineCapabilities nativeEngine() {
-        return new EngineCapabilities(true, true, true, true, true, true, true, true, true, true, true);
+        return new EngineCapabilities(true, true, true, true, true, true, true, true, true, true, true, true);
     }
 
     /**
@@ -48,7 +49,7 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
      * reproduced.
      */
     static EngineCapabilities decentHolograms() {
-        return new EngineCapabilities(true, true, false, false, true, false, false, true, false, false, false);
+        return new EngineCapabilities(true, true, false, false, true, false, false, false, true, false, false, false);
     }
 
     /**
@@ -56,7 +57,7 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
      * controls who sees the hologram.
      */
     static EngineCapabilities fancyHolograms() {
-        return new EngineCapabilities(false, false, false, false, false, false, false, true, false, false, false);
+        return new EngineCapabilities(false, false, false, false, false, false, false, false, true, false, false, false);
     }
 
     boolean supports(Feature feature) {
@@ -67,6 +68,7 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
             case CLICK_ACTIONS -> clickActions;
             case ITEM_LINES -> itemLines;
             case BLOCK_LINES -> blockLines;
+            case IMAGE_LINES -> imageLines;
             case LINE_OFFSETS -> lineOffsets;
             case PER_VIEWER_VISIBILITY -> perViewerVisibility;
             case DYNAMIC_TEXT -> dynamicText;

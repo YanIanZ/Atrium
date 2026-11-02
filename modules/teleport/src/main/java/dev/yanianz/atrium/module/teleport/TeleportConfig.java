@@ -134,6 +134,9 @@ public class TeleportConfig {
         @Comment("Items that may not be held while sending a request (material names, e.g. ENDER_PEARL).\n"
                 + "Useful against exploits that hand an item over right after the teleport.")
         public List<String> blockedMaterials = new ArrayList<>();
+
+        @Comment("How many players one player may block with /tpablock (1-200).")
+        public int maxBlocked = 200;
     }
 
     @ConfigSerializable

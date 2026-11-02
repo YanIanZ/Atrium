@@ -396,6 +396,7 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
         boolean perViewerText = false;
         boolean item = false;
         boolean block = false;
+        boolean image = false;
         boolean offset = false;
         boolean lineEvents = false;
         for (List<HoloLine> page : hologram.pages()) {
@@ -412,6 +413,7 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
                     case LineContent.Item ignored -> item = true;
                     case LineContent.SavedItem ignored -> item = true;
                     case LineContent.Head ignored -> item = true;
+                    case LineContent.Image ignored -> image = true;
                     case LineContent.Icon ignored -> item = true;
                     case LineContent.Block ignored -> block = true;
                 }
@@ -428,6 +430,9 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
         }
         if (block && !capabilities().blockLines()) {
             missing.add("block lines");
+        }
+        if (image && !capabilities().imageLines()) {
+            missing.add("image lines");
         }
         if (offset && !capabilities().lineOffsets()) {
             missing.add("line offsets");

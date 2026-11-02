@@ -62,6 +62,8 @@ final class MirrorText {
             case LineContent.Item item -> item(item.material(), capabilities, format);
             case LineContent.SavedItem saved -> item(savedMaterial(saved.base64(), logger), capabilities, format);
             case LineContent.Head head -> item(Material.PLAYER_HEAD.name(), capabilities, format);
+            case LineContent.Image image -> serialize(format, Component.text("[image] " + image.kind().key()
+                    + " " + image.player()));
             case LineContent.Icon icon -> item(Material.PAPER.name(), capabilities, format);
             case LineContent.Block block -> serialize(format, Component.text("[block] " + block.blockData()));
         };

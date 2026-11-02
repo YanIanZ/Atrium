@@ -41,6 +41,7 @@ public final class HologramsModule implements AtriumModule, HologramService, Lis
     private Displays displays;
     private ViewerTracker tracker;
     private EngineController engines;
+    private SkinCache skins;
 
     @Override
     public String id() {
@@ -60,7 +61,9 @@ public final class HologramsModule implements AtriumModule, HologramService, Lis
         ctx.migrate(HologramStorage.MIGRATIONS);
 
         TextRenderer renderer = new TextRenderer(ctx.messages(), ctx.logger());
-        this.displays = new Displays(ctx, config::get, renderer, new NamespacedKey(ctx.plugin(), "hologram"));
+        SkinCache skins = new SkinCache(ctx, config::get, ctx.dataDirectory().resolve("skins"));
+        this.skins = skins;
+        this.displays = new Displays(ctx, config::get, renderer, skins, new NamespacedKey(ctx.plugin(), "hologram"));
         this.manager = new HologramManager(new HologramStorage(ctx.database(), ctx.logger()), this::changed);
         List<Hologram> loaded = manager.load(() -> defaults).get(30, TimeUnit.SECONDS);
         this.tracker = new ViewerTracker(ctx, displays, config::get);
@@ -95,6 +98,9 @@ public final class HologramsModule implements AtriumModule, HologramService, Lis
 
     @Override
     public void disable() {
+        if (skins != null) {
+            skins.stop();
+        }
         if (engines != null) {
             engines.stop();
         } else if (displays != null) {

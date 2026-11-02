@@ -45,6 +45,7 @@ final class Displays implements Listener {
     private final ModuleContext ctx;
     private final Supplier<HologramsConfig> config;
     private final TextRenderer renderer;
+    private final SkinCache skins;
     private final NamespacedKey tagKey;
     private final Map<String, HologramRuntime> runtimes = new ConcurrentHashMap<>();
     private final Map<ChunkKey, Set<String>> byChunk = new ConcurrentHashMap<>();
@@ -53,10 +54,12 @@ final class Displays implements Listener {
     private volatile Layout.Metrics metrics;
     private volatile @Nullable ViewerTracker tracker;
 
-    Displays(ModuleContext ctx, Supplier<HologramsConfig> config, TextRenderer renderer, NamespacedKey tagKey) {
+    Displays(ModuleContext ctx, Supplier<HologramsConfig> config, TextRenderer renderer, SkinCache skins,
+            NamespacedKey tagKey) {
         this.ctx = ctx;
         this.config = config;
         this.renderer = renderer;
+        this.skins = skins;
         this.tagKey = tagKey;
         this.metrics = config.get().metrics();
     }
@@ -75,6 +78,10 @@ final class Displays implements Listener {
 
     TextRenderer renderer() {
         return renderer;
+    }
+
+    SkinCache skins() {
+        return skins;
     }
 
     Layout.Metrics metrics() {

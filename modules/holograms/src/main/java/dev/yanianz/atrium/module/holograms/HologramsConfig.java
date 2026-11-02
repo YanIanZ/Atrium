@@ -71,6 +71,26 @@ public class HologramsConfig {
                 "10001: paper", "10002: player_head"));
     }
 
+    @Comment("Player skin images for #img:head/bust/body lines. Native engine only.")
+    public Images images = new Images();
+
+    @ConfigSerializable
+    public static class Images {
+        @Comment("Download the skin from the texture URL in the player's Mojang profile. Off = every image line\n"
+                + "uses the built-in default skin. The URL must be https://textures.minecraft.net/...; no other host\n"
+                + "is contacted. Offline-mode servers always use the default skin.")
+        public boolean fetchSkins = true;
+
+        @Comment("Largest accepted skin PNG in bytes (1 KiB-1 MiB).")
+        public int maxBytes = 65_536;
+
+        @Comment("Connect and read timeout in seconds (1-60).")
+        public int timeoutSeconds = 8;
+
+        @Comment("Hours a downloaded skin stays in the memory and disk cache (1-8760).")
+        public int cacheHours = 168;
+    }
+
     String fillerChar() {
         return filler == null || filler.isEmpty() ? " " : filler.substring(0, 1);
     }

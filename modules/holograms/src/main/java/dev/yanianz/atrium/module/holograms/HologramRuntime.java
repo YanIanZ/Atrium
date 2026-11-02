@@ -116,8 +116,29 @@ final class HologramRuntime {
         HologramSettings s = next.settings();
         Layout.Metrics metrics = displays.metrics();
         for (List<HoloLine> page : next.pages()) {
+            // Image lines become one text row per skin row; a missing skin shows a placeholder until it loads.
+            List<HoloLine> expanded = new ArrayList<>(page.size());
+            for (HoloLine line : page) {
+                if (line.content() instanceof LineContent.Image image) {
+                    java.util.Optional<List<String>> rows = displays.skins().rows(image, () -> {
+                        Hologram current = definition;
+                        if (current != null) {
+                            update(current);
+                        }
+                    });
+                    if (rows.isPresent()) {
+                        for (String row : rows.get()) {
+                            expanded.add(HoloLine.of(row));
+                        }
+                    } else {
+                        expanded.add(HoloLine.of("<muted>Loading skin...</muted>"));
+                    }
+                } else {
+                    expanded.add(line);
+                }
+            }
             // Rainbow markers and %filler% are prepared once per edit, so layout sizes match what is rendered.
-            List<HoloLine> prepared = LineText.preparePage(page, displays.renderer()::visibleChars,
+            List<HoloLine> prepared = LineText.preparePage(expanded, displays.renderer()::visibleChars,
                     displays.fillerChar());
             for (HoloLine line : prepared) {
                 if (line.content() instanceof LineContent.Text(String template)) {

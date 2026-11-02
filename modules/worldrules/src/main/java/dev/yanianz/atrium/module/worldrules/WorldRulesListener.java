@@ -2,10 +2,13 @@ package dev.yanianz.atrium.module.worldrules;
 
 import com.destroystokyo.paper.event.entity.EntityTeleportEndGatewayEvent;
 import com.destroystokyo.paper.event.player.PlayerTeleportEndGatewayEvent;
+import dev.yanianz.atrium.api.worldrules.ArmorChangeEvent;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -246,20 +249,36 @@ final class WorldRulesListener implements Listener {
         if (!(event.getEntity() instanceof Player player)) {
             return;
         }
-        boolean armorChanged = false;
-        for (EquipmentSlot slot : event.getEquipmentChanges().keySet()) {
-            if (slot == EquipmentSlot.HEAD || slot == EquipmentSlot.CHEST
-                    || slot == EquipmentSlot.LEGS || slot == EquipmentSlot.FEET) {
-                armorChanged = true;
-                break;
+        List<ArmorChange> armorChanges = new ArrayList<>();
+        for (Map.Entry<EquipmentSlot, EntityEquipmentChangedEvent.EquipmentChange> entry
+                : event.getEquipmentChanges().entrySet()) {
+            EquipmentSlot slot = entry.getKey();
+            if (ArmorChangeEvent.isArmorSlot(slot)) {
+                // Copies now: the map belongs to the event and is not safe to read later on another thread.
+                EntityEquipmentChangedEvent.EquipmentChange change = entry.getValue();
+                armorChanges.add(new ArmorChange(slot, change.oldItem().clone(), change.newItem().clone()));
             }
         }
-        if (!armorChanged || animation.updating(player)) {
+        if (armorChanges.isEmpty() || animation.updating(player)) {
             return;
         }
-        // Deferred so every slot of a multi-piece swap is already applied (/hat, dispenser, inventory).
-        ctx.scheduler().entity(player, () -> armor.evaluate(player), null);
+        // Not cancellable: the change already happened. Fired per slot on the player's own thread, then the
+        // armour-set evaluation runs after every piece of a multi-slot swap is applied (/hat, dispenser, inventory).
+        ctx.scheduler().entity(player, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            for (ArmorChange change : armorChanges) {
+                Bukkit.getPluginManager().callEvent(
+                        new ArmorChangeEvent(player, change.slot(), change.oldItem(), change.newItem()));
+            }
+            armor.evaluate(player);
+        }, null);
     }
+
+    /** One armour slot of a multi-slot swap, captured before the listener returns. */
+    private record ArmorChange(EquipmentSlot slot, org.bukkit.inventory.ItemStack oldItem,
+            org.bukkit.inventory.ItemStack newItem) {}
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onItemBreak(PlayerItemBreakEvent event) {

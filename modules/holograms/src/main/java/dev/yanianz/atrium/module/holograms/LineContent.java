@@ -24,6 +24,7 @@ sealed interface LineContent {
     String ITEM_STACK = "#itemstack:";
     String BLOCK = "#block:";
     String HEAD = "#head:";
+    String IMAGE = "#img:";
     String IMAGE_HEAD = "#img:head";
     String IN_HAND = "#iteminhand";
     String CMD = "#cmd:";
@@ -50,6 +51,9 @@ sealed interface LineContent {
     /** A player head; an empty name means the viewer. */
     record Head(String player) implements LineContent {}
 
+    /** The front of a player skin rendered as coloured text pixels. */
+    record Image(String player, SkinKind kind, int size) implements LineContent {}
+
     record Icon(IconKind kind, int customModelData) implements LineContent {}
 
     /** Throws {@link IllegalArgumentException} when a prefix is present but its value is invalid. */
@@ -70,15 +74,8 @@ sealed interface LineContent {
         if (lower.startsWith(HEAD)) {
             return new Head(player(value(raw, HEAD)));
         }
-        if (lower.startsWith(IMAGE_HEAD)) {
-            String rest = raw.substring(IMAGE_HEAD.length());
-            if (rest.startsWith(":")) {
-                return new Head(player(rest.substring(1).trim()));
-            }
-            if (rest.isBlank()) {
-                return new Head("");
-            }
-            throw new IllegalArgumentException(IMAGE_HEAD + " takes an optional :player");
+        if (lower.startsWith(IMAGE)) {
+            return image(raw);
         }
         if (lower.equals(IN_HAND) || lower.equals("%iteminhand%")) {
             return new Icon(IconKind.HAND, 0);
@@ -93,6 +90,48 @@ sealed interface LineContent {
         return new Text(raw);
     }
 
+    /**
+     * {@code #img:head} keeps its old meaning (a head item of the viewer); {@code #img:<kind>:<player>[:<size>]}
+     * is an image line. The size (1-4) repeats every skin pixel.
+     */
+    private static LineContent image(String raw) {
+        String rest = raw.substring(IMAGE.length()).strip();
+        String[] parts = rest.split(":", -1);
+        String kindName = parts.length == 0 ? "" : parts[0];
+        if (parts.length == 1) {
+            if (kindName.equalsIgnoreCase("head")) {
+                return new Head("");
+            }
+            throw new IllegalArgumentException(IMAGE + kindName + " needs a player name");
+        }
+        SkinKind kind = SkinKind.parse(kindName);
+        String name = player(parts[1]);
+        if (name.isEmpty()) {
+            throw new IllegalArgumentException(IMAGE + kind.key() + " needs a player name");
+        }
+        int size = 1;
+        if (parts.length >= 3) {
+            size = size(parts[2]);
+        }
+        if (parts.length > 3) {
+            throw new IllegalArgumentException(IMAGE + kind.key() + " takes :player[:size]");
+        }
+        return new Image(name, kind, size);
+    }
+
+    private static int size(String value) {
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value.strip());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("image size must be a whole number from 1 to 4");
+        }
+        if (parsed < 1 || parsed > 4) {
+            throw new IllegalArgumentException("image size must be a whole number from 1 to 4");
+        }
+        return parsed;
+    }
+
     private static String value(String raw, String prefix) {
         String value = raw.substring(prefix.length()).trim();
         if (value.isEmpty()) {
@@ -102,7 +141,7 @@ sealed interface LineContent {
     }
 
     private static String player(String name) {
-        String value = name.strip();
+        String value = name == null ? "" : name.strip();
         if (value.isEmpty()) {
             return "";
         }

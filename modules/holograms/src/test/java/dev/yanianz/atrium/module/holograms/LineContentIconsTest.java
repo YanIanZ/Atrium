@@ -21,7 +21,14 @@ class LineContentIconsTest {
         LineContent content = LineContent.parse("#img:head");
         assertEquals(new LineContent.Head(""), content);
         assertTrue(content.viewerDependent());
-        assertEquals(new LineContent.Head("Alex"), LineContent.parse("#img:head:Alex"));
+    }
+
+    @Test
+    void imageLinesCarryKindPlayerAndSize() {
+        assertEquals(new LineContent.Image("Alex", SkinKind.HEAD, 1), LineContent.parse("#img:head:Alex"));
+        assertEquals(new LineContent.Image("Alex", SkinKind.BUST, 2), LineContent.parse("#img:bust:Alex:2"));
+        assertEquals(new LineContent.Image("Alex", SkinKind.BODY, 4), LineContent.parse("#img:body:Alex:4"));
+        assertFalse(LineContent.parse("#img:body:Alex").viewerDependent());
     }
 
     @Test
@@ -45,6 +52,11 @@ class LineContentIconsTest {
         assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#head:"));
         assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#head:bad name"));
         assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#img:head:bad name"));
+        assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#img:bust"));
+        assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#img:body:Alex:0"));
+        assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#img:body:Alex:5"));
+        assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#img:body:Alex:big"));
+        assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#img:legs:Alex"));
         assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#cmd:abc"));
         assertThrows(IllegalArgumentException.class, () -> LineContent.parse("#cmd:-4"));
     }

@@ -25,7 +25,9 @@ final class TeleportStore {
             Migration.of(2, "back history and persisted cooldowns",
                     "ALTER TABLE {prefix}teleport_players ADD COLUMN back_history TEXT",
                     "CREATE TABLE {prefix}teleport_cooldowns (uuid CHAR(36) NOT NULL, cause VARCHAR(32) NOT NULL, "
-                            + "expires_at BIGINT NOT NULL, PRIMARY KEY (uuid, cause))"));
+                            + "expires_at BIGINT NOT NULL, PRIMARY KEY (uuid, cause))"),
+            Migration.of(3, "per-player teleport request block list",
+                    "ALTER TABLE {prefix}teleport_players ADD COLUMN tpa_blocked TEXT"));
 
     /** Spawn ids. World spawns are {@code world:<name>}. */
     static final String DEFAULT_SPAWN = "default";
@@ -46,7 +48,7 @@ final class TeleportStore {
     CompletableFuture<TeleportState> load(UUID uuid) {
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement("SELECT back_location, back_death, back_time, accepts_requests, "
-                    + "back_history FROM " + db.table("teleport_players") + " WHERE uuid = ?")) {
+                    + "back_history, tpa_blocked FROM " + db.table("teleport_players") + " WHERE uuid = ?")) {
                 ps.setString(1, uuid.toString());
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
@@ -60,7 +62,8 @@ final class TeleportStore {
                             history = new BackHistory(List.of(new BackHistory.Entry(legacy.get(), rs.getBoolean(2), rs.getLong(3))));
                         }
                     }
-                    return new TeleportState(history, rs.getBoolean(4));
+                    return new TeleportState(history, rs.getBoolean(4),
+                            TeleportState.decodeBlockedRequests(rs.getString(6)));
                 }
             }
         });
@@ -68,15 +71,17 @@ final class TeleportStore {
 
     CompletableFuture<Void> save(UUID uuid, TeleportState state) {
         String sql = db.dialect().upsert(db.table("teleport_players"),
-                "uuid, back_location, back_death, back_time, accepts_requests, back_history", "?, ?, ?, ?, ?, ?", "uuid",
-                "back_location, back_death, back_time, accepts_requests, back_history");
+                "uuid, back_location, back_death, back_time, accepts_requests, back_history, tpa_blocked",
+                "?, ?, ?, ?, ?, ?, ?", "uuid",
+                "back_location, back_death, back_time, accepts_requests, back_history, tpa_blocked");
         Optional<BackHistory.Entry> latest = state.back().latest();
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement(sql)) {
                 // back_location/back_death/back_time keep mirroring the newest entry for older readers.
                 Database.bind(ps, uuid.toString(), latest.map(e -> e.location().encode()).orElse(null),
                         latest.map(BackHistory.Entry::death).orElse(false), latest.map(BackHistory.Entry::recordedAt).orElse(0L),
-                        state.acceptsRequests(), state.back().isEmpty() ? null : state.back().encode());
+                        state.acceptsRequests(), state.back().isEmpty() ? null : state.back().encode(),
+                        state.encodeBlockedRequests());
                 ps.executeUpdate();
             }
             return null;

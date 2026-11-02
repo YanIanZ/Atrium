@@ -21,8 +21,8 @@ public final class TeleportModule implements AtriumModule {
     @Override
     public String description() {
         return "Teleports: /tp /tphere /tpall /tppos /tpo /tpallworld /tpbypass /jump /down /tpa /tpahere /tpaall "
-                + "/tpaccept /tpdeny /tpacancel /tptoggle /back /dback /resetback /top /spawn /setspawn, "
-                + "sign elevators and launchpads";
+                + "/tpaccept /tpdeny /tpacancel /tptoggle /tpablock /tpaunblock /back /dback /resetback /top /spawn "
+                + "/setspawn, sign elevators and launchpads";
     }
 
     @Override
@@ -94,6 +94,14 @@ public final class TeleportModule implements AtriumModule {
         ctx.permission(RequestCommands.PERM_TPDENY, PermissionDefault.TRUE, "Deny teleport requests");
         ctx.permission(RequestCommands.PERM_TPACANCEL, PermissionDefault.TRUE, "Cancel own teleport requests");
         ctx.permission(RequestCommands.PERM_TPTOGGLE, PermissionDefault.TRUE, "Refuse or allow teleport requests");
+        ctx.permission(RequestCommands.PERM_TPABLOCK, PermissionDefault.TRUE,
+                "Silently ignore teleport requests from a player (/tpablock)");
+        ctx.permission(RequestCommands.PERM_TPAUNBLOCK, PermissionDefault.TRUE,
+                "Allow teleport requests from a blocked player again (/tpaunblock)");
+        ctx.permission(RequestCommands.PERM_TPABLOCK_LIST, PermissionDefault.TRUE,
+                "See your own /tpablock list");
+        ctx.permission(RequestCommands.PERM_TPABLOCK_BYPASS, PermissionDefault.OP,
+                "Send teleport requests to players who blocked you");
         ctx.permission(RequestCommands.PERM_TPA_MAX + ".unlimited", PermissionDefault.OP,
                 "Send /tpa requests without a distance limit");
         ctx.permission(SpawnCommands.PERM_SPAWN, PermissionDefault.TRUE, "Teleport to the spawn");

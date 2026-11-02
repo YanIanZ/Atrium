@@ -233,7 +233,12 @@ final class HologramCommands {
     /** Refuses a line kind the active engine cannot show (item/block lines are native/DH features). */
     private void checkLine(CommandSourceStack source, String raw) throws CommandSyntaxException {
         LineContent content = LineContent.parse(raw);
-        if (content.isItemLike()) {
+        if (content instanceof LineContent.Image) {
+            requireFeature(source, EngineCapabilities.Feature.IMAGE_LINES);
+            if (!Bukkit.getServer().getOnlineMode()) {
+                messages.send(source.getSender(), "holograms.image-offline-default");
+            }
+        } else if (content.isItemLike()) {
             requireFeature(source, EngineCapabilities.Feature.ITEM_LINES);
         } else if (content instanceof LineContent.Block) {
             requireFeature(source, EngineCapabilities.Feature.BLOCK_LINES);
@@ -327,6 +332,14 @@ final class HologramCommands {
                 // The name pattern is already enforced by the parser; nothing else to look up.
                 if (!head.player().isEmpty() && !LineContent.PLAYER_NAME.matcher(head.player()).matches()) {
                     throw new IllegalArgumentException("invalid player name " + head.player());
+                }
+            }
+            case LineContent.Image image -> {
+                if (!LineContent.PLAYER_NAME.matcher(image.player()).matches()) {
+                    throw new IllegalArgumentException("invalid player name " + image.player());
+                }
+                if (image.size() < 1 || image.size() > 4) {
+                    throw new IllegalArgumentException("image size must be from 1 to 4");
                 }
             }
             case LineContent.Icon icon -> {

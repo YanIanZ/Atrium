@@ -22,6 +22,7 @@ class EngineCapabilitiesTest {
         assertFalse(capabilities.supports(EngineCapabilities.Feature.PER_VIEWER_TEXT));
         assertFalse(capabilities.supports(EngineCapabilities.Feature.CLICK_ACTIONS));
         assertFalse(capabilities.supports(EngineCapabilities.Feature.BLOCK_LINES));
+        assertFalse(capabilities.supports(EngineCapabilities.Feature.IMAGE_LINES));
         assertFalse(capabilities.supports(EngineCapabilities.Feature.LINE_OFFSETS));
         assertFalse(capabilities.supports(EngineCapabilities.Feature.DYNAMIC_TEXT));
     }
