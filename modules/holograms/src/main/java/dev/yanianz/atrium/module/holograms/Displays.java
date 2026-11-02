@@ -81,6 +81,15 @@ final class Displays implements Listener {
         return metrics;
     }
 
+    /** Material for a {@code #cmd:<n>} icon line, or null when the value is not configured. */
+    org.bukkit.@Nullable Material iconMaterial(int customModelData) {
+        return config.get().iconMaterial(customModelData);
+    }
+
+    String fillerChar() {
+        return config.get().fillerChar();
+    }
+
     int tickPeriod() {
         return Math.max(1, Math.min(200, config.get().hologramTickPeriod));
     }

@@ -1,9 +1,12 @@
 package dev.yanianz.atrium.module.performance;
 
+import dev.yanianz.atrium.api.serverlist.ServerListService;
+import dev.yanianz.atrium.api.vanish.VanishService;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import dev.yanianz.atrium.core.scheduler.TaskHandle;
+import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.permissions.PermissionDefault;
 
@@ -13,13 +16,23 @@ import org.bukkit.permissions.PermissionDefault;
  *   <li>{@code /lag}: one-shot Paper/Folia TPS, MSPT, memory and world counts.</li>
  *   <li>{@code /groundclean}: region-scoped removal of old drops with an optional countdown schedule.</li>
  *   <li>Optional per-chunk caps for animals, monsters, items and minecarts.</li>
+ *   <li>The server list: MOTD override, online/max numbers and a vanished-free player sample.</li>
+ *   <li>{@code /viewdistance}, {@code /maxplayers}, the release check and the optional console filter.</li>
  * </ul>
  */
 public final class PerformanceModule implements AtriumModule {
+    private static final String PERM_UPDATES_NOTIFY = UpdateChecker.PERM_NOTIFY;
+
     private ModuleContext ctx;
     private ConfigHandle<PerformanceConfig> config;
     private GroundCleanManager groundClean;
     private EntityLimitListener entityLimits;
+    private ServerMOTD motd;
+    private ServerListListener serverList;
+    private UpdateChecker updateChecker;
+    private PluginErrorLog errorLog;
+    private ConsoleFilterInstaller consoleFilter;
+    private volatile LogRules logRules = LogRules.disabled();
     private TaskHandle schedule;
     private volatile boolean stopped;
 
@@ -30,7 +43,7 @@ public final class PerformanceModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "Lag diagnostics, ground cleanup and per-chunk entity limits";
+        return "Lag diagnostics, ground cleanup, entity limits, server list and view distance";
     }
 
     @Override
@@ -45,6 +58,23 @@ public final class PerformanceModule implements AtriumModule {
         ctx.listen(entityLimits);
         LagReporter lag = new LagReporter(ctx, config::get, entityLimits);
 
+        this.motd = new ServerMOTD(ctx.dataDirectory().resolve("motd.yml"), ctx.scheduler(), ctx.logger());
+        VanishService vanish = ctx.services().get(VanishService.class).orElse(null);
+        this.serverList = new ServerListListener(ctx, config::get, motd, vanish);
+        ctx.listen(serverList);
+        ctx.service(ServerListService.class, new ServerListListener.Service(motd, serverList));
+
+        this.updateChecker = new UpdateChecker(ctx, config::get);
+        ctx.listen(updateChecker);
+        updateChecker.start();
+
+        this.errorLog = new PluginErrorLog(config.get().consoleLog.recentSize());
+        this.logRules = buildRules();
+        this.consoleFilter = new ConsoleFilterInstaller(() -> logRules, errorLog, ctx.logger());
+        if (logRules.enabled() && !consoleFilter.install()) {
+            ctx.logger().warn("console-log is enabled but the filter is inactive");
+        }
+
         ctx.permission("atrium.lag", PermissionDefault.OP,
                 "Show TPS, tick time, memory and loaded entity counts");
         ctx.permission("atrium.groundclean", PermissionDefault.OP,
@@ -55,15 +85,51 @@ public final class PerformanceModule implements AtriumModule {
                 "Show the recent /groundclean history");
         ctx.permission("atrium.groundclean.protect", PermissionDefault.TRUE,
                 "Keep dropped items within a radius of you during ground cleanup");
+        ctx.permission("atrium.maxplayers", PermissionDefault.OP,
+                "Change the player cap the server list reports");
+        ctx.permission("atrium.viewdistance", PermissionDefault.TRUE,
+                "Change your own view distance");
+        ctx.permission("atrium.viewdistance.others", PermissionDefault.OP,
+                "Change another player's view distance");
+        ctx.permission("atrium.viewdistance.world", PermissionDefault.OP,
+                "Change the view distance of a world");
+        ctx.permission("atrium.viewdistance.global", PermissionDefault.OP,
+                "Change the view distance of every loaded world");
+        ctx.permission("atrium.updates", PermissionDefault.OP,
+                "Show and re-run the release check");
+        ctx.permission(PERM_UPDATES_NOTIFY, PermissionDefault.OP,
+                "Receive the newer-release notice when joining");
+        ctx.permission("atrium.consolefilter", PermissionDefault.OP,
+                "Inspect the console filter and the recent problems");
 
+        Supplier<LogRules> rules = () -> logRules;
         new PerformanceCommands(ctx, config, groundClean, lag, store).register();
+        new ServerCommands(ctx, config, serverList, updateChecker, errorLog, rules).register();
         startSchedule();
+    }
+
+    private LogRules buildRules() {
+        return LogRules.build(config.get().consoleLog,
+                (key, problem) -> ctx.logger().warn("console-log {} ignored: {}", key, problem));
     }
 
     @Override
     public void reload() {
         if (groundClean != null) {
             groundClean.reload();
+        }
+        // The recent list keeps its entries; only the rules change on a reload.
+        logRules = buildRules();
+        if (consoleFilter != null) {
+            if (logRules.enabled()) {
+                consoleFilter.install();
+            } else {
+                consoleFilter.uninstall();
+            }
+        }
+        if (updateChecker != null) {
+            updateChecker.stop();
+            updateChecker.start();
         }
         startSchedule();
     }
@@ -114,6 +180,13 @@ public final class PerformanceModule implements AtriumModule {
         if (schedule != null) {
             schedule.cancel();
             schedule = null;
+        }
+        if (updateChecker != null) {
+            updateChecker.stop();
+        }
+        if (consoleFilter != null) {
+            consoleFilter.uninstall();
+            consoleFilter = null;
         }
         if (groundClean != null) {
             groundClean.shutdown();

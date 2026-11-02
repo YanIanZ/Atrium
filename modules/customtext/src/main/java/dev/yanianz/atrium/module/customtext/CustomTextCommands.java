@@ -10,6 +10,7 @@ import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
+import dev.yanianz.atrium.api.serverlist.ServerListService;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
@@ -106,6 +107,71 @@ final class CustomTextCommands {
 
     private int editUsage(CommandContext<CommandSourceStack> c) {
         ctx.messages().send(c.getSource().getSender(), "customtext.edit-usage");
+        return Cmds.OK;
+    }
+
+    /** {@code /setmotd}: the MOTD is owned by the performance module, so this only talks to its service. */
+    void registerMotd() {
+        ctx.command(CommandSpec.of(Cmds.literal("setmotd", CustomTextModule.PERM_SETMOTD)
+                .executes(this::motdShow)
+                .then(Cmds.literal("off").executes(this::motdOff))
+                .then(Commands.argument("text", StringArgumentType.greedyString())
+                        .executes(this::motdSet))
+                .build(), "Change the server-list MOTD (two lines, MiniMessage)", "motdset"));
+    }
+
+    private int motdShow(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ServerListService service = ctx.services().get(ServerListService.class).orElse(null);
+        if (service == null) {
+            ctx.messages().send(sender, "customtext.setmotd-unavailable");
+            return Cmds.OK;
+        }
+        if (!service.motdEnabled() || service.motdLines().isEmpty()) {
+            ctx.messages().send(sender, "customtext.setmotd-none");
+            ctx.messages().send(sender, "customtext.setmotd-usage");
+            return Cmds.OK;
+        }
+        ctx.messages().send(sender, "customtext.setmotd-current");
+        int line = 1;
+        int online = org.bukkit.Bukkit.getOnlinePlayers().size();
+        int max = org.bukkit.Bukkit.getMaxPlayers();
+        for (String raw : service.motdLines()) {
+            sender.sendMessage(ctx.messages().render(sender, "customtext.setmotd-line",
+                    Msg.number("line", line++), Msg.component("text", ctx.messages().parseTrusted(raw,
+                            Msg.number("online", online), Msg.number("max", max)))));
+        }
+        ctx.messages().send(sender, "customtext.setmotd-usage");
+        return Cmds.OK;
+    }
+
+    private int motdSet(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ServerListService service = ctx.services().get(ServerListService.class).orElse(null);
+        if (service == null) {
+            ctx.messages().send(sender, "customtext.setmotd-unavailable");
+            return Cmds.OK;
+        }
+        List<String> lines = MotdInput.parse(StringArgumentType.getString(c, "text"));
+        if (lines.isEmpty()) {
+            ctx.messages().send(sender, "customtext.setmotd-empty");
+            return Cmds.OK;
+        }
+        service.setMotd(lines).whenComplete((ignored, error) -> module.reply(sender,
+                error == null ? "customtext.setmotd-saved" : "customtext.setmotd-failed",
+                Msg.number("lines", lines.size()), Msg.unparsed("motd", String.join(" / ", lines))));
+        return Cmds.OK;
+    }
+
+    private int motdOff(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ServerListService service = ctx.services().get(ServerListService.class).orElse(null);
+        if (service == null) {
+            ctx.messages().send(sender, "customtext.setmotd-unavailable");
+            return Cmds.OK;
+        }
+        service.setMotdEnabled(false).whenComplete((ignored, error) -> module.reply(sender,
+                error == null ? "customtext.setmotd-off" : "customtext.setmotd-failed"));
         return Cmds.OK;
     }
 
@@ -287,8 +353,7 @@ final class CustomTextCommands {
         return Commands.literal(alias)
                 .requires(source -> {
                     TextDefinition text = module.textForAlias(alias);
-                    return text != null
-                            && (text.permission().isEmpty() || source.getSender().hasPermission(text.permission()));
+                    return text != null && text.maySee(source.getSender()::hasPermission);
                 })
                 .executes(c -> showAlias(c, alias, 1, false, null))
                 .then(Commands.argument("page", IntegerArgumentType.integer())
@@ -321,7 +386,7 @@ final class CustomTextCommands {
                     Msg.unparsed("permission", CustomTextModule.PERM_OTHERS));
         }
         Player viewer = target != null ? target : (sender instanceof Player player ? player : null);
-        if (viewer != null && !text.permission().isEmpty() && !viewer.hasPermission(text.permission())) {
+        if (viewer != null && !text.maySee(viewer::hasPermission)) {
             throw cmds.fail(source, "customtext.no-permission", Msg.unparsed("name", name));
         }
         // A cooldown only guards a plain open; clicking prev/next always works and cannot brick navigation.
@@ -348,7 +413,7 @@ final class CustomTextCommands {
 
     private int list(CommandContext<CommandSourceStack> c) {
         CommandSender sender = c.getSource().getSender();
-        List<TextDefinition> all = module.texts();
+        List<TextDefinition> all = module.allTexts();
         if (all.isEmpty()) {
             ctx.messages().send(sender, "customtext.list-empty");
             return Cmds.OK;
@@ -365,9 +430,12 @@ final class CustomTextCommands {
                 line = line.append(ctx.messages().render(sender,
                         text.firstJoinOnly() ? "customtext.list-join-first" : "customtext.list-join"));
             }
-            if (!text.permission().isEmpty()) {
+            if (text.hidden()) {
+                line = line.append(ctx.messages().render(sender, "customtext.list-hidden"));
+            }
+            if (!text.permissions().isEmpty()) {
                 line = line.append(ctx.messages().render(sender, "customtext.list-permission",
-                        Msg.unparsed("permission", text.permission())));
+                        Msg.unparsed("permission", text.permissionLabel())));
             }
             sender.sendMessage(line);
         }
@@ -393,8 +461,7 @@ final class CustomTextCommands {
             return true;
         }
         // A file can grant access with its own permission even when atrium.ctext itself is not given.
-        return module.texts().stream()
-                .anyMatch(text -> !text.permission().isEmpty() && sender.hasPermission(text.permission()));
+        return module.allTexts().stream().anyMatch(text -> text.maySee(sender::hasPermission));
     }
 
     private SuggestionProvider<CommandSourceStack> names() {

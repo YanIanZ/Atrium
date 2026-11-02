@@ -49,6 +49,7 @@ final class HologramRuntime {
     private volatile List<Layout> layouts;
     private volatile boolean hasTokens;
     private volatile boolean hasViewerTag;
+    private volatile boolean hasViewerItems;
     private final AtomicLong version = new AtomicLong();
     private final Set<UUID> reserved = ConcurrentHashMap.newKeySet();
     private final Object reserveLock = new Object();
@@ -60,7 +61,7 @@ final class HologramRuntime {
     // ---- region state, guarded by this ----
     private boolean spawned;
     private @Nullable Location base;
-    private final View shared = new View();
+    private View shared;
     private @Nullable Interaction interaction;
     private Layout.@Nullable Box interactionBox;
     private final Map<UUID, View> personalViews = new HashMap<>();
@@ -68,6 +69,7 @@ final class HologramRuntime {
     private long ticks;
     private long lastPageTick;
     private long lastTextTick;
+    private long fadeStart;
     private boolean renderedPersonalMode;
     private @Nullable TaskHandle timer;
 
@@ -75,6 +77,7 @@ final class HologramRuntime {
         this.displays = displays;
         this.key = definition.key();
         this.location = definition.location();
+        this.shared = new View(displays);
         define(definition, false);
     }
 
@@ -108,23 +111,28 @@ final class HologramRuntime {
     private void define(Hologram next, boolean rebuild) {
         boolean tokens = false;
         boolean viewer = false;
-        for (List<HoloLine> page : next.pages()) {
-            for (HoloLine line : page) {
-                if (line.content() instanceof LineContent.Text(String template)) {
-                    tokens |= PlaceholderText.hasTokens(template);
-                    viewer |= PlaceholderText.hasViewerTag(template);
-                }
-            }
-        }
+        boolean items = false;
         List<Layout> computed = new ArrayList<>();
         HologramSettings s = next.settings();
         Layout.Metrics metrics = displays.metrics();
         for (List<HoloLine> page : next.pages()) {
-            computed.add(Layout.of(page, s.scale(), s.lineSpacing(), s.lineWidth(), metrics, displays.renderer()::visibleChars));
+            // Rainbow markers and %filler% are prepared once per edit, so layout sizes match what is rendered.
+            List<HoloLine> prepared = LineText.preparePage(page, displays.renderer()::visibleChars,
+                    displays.fillerChar());
+            for (HoloLine line : prepared) {
+                if (line.content() instanceof LineContent.Text(String template)) {
+                    tokens |= PlaceholderText.hasTokens(template);
+                    viewer |= PlaceholderText.hasViewerTag(template);
+                }
+                items |= line.content().viewerDependent();
+            }
+            computed.add(Layout.of(prepared, s.scale(), s.lineSpacing(), s.lineWidth(), metrics,
+                    displays.renderer()::visibleChars));
         }
         this.layouts = List.copyOf(computed);
         this.hasTokens = tokens;
         this.hasViewerTag = viewer;
+        this.hasViewerItems = items;
         this.definition = next;
         version.incrementAndGet();
         if (rebuild) {
@@ -137,7 +145,7 @@ final class HologramRuntime {
         return switch (definition.settings().perViewer()) {
             case ON -> true;
             case OFF -> false;
-            case AUTO -> hasViewerTag || (hasTokens && displays.renderer().papiEnabled());
+            case AUTO -> hasViewerTag || hasViewerItems || (hasTokens && displays.renderer().papiEnabled());
         };
     }
 
@@ -194,7 +202,7 @@ final class HologramRuntime {
 
     /** Region. */
     synchronized void spawnIfLoaded() {
-        if (retired || spawned) {
+        if (retired || spawned || !definition.settings().enabled()) {
             return;
         }
         Optional<Location> at = resolveBase();
@@ -218,6 +226,7 @@ final class HologramRuntime {
         ticks = 0;
         lastPageTick = 0;
         lastTextTick = 0;
+        fadeStart = 0;
         sharedPage = Pages.clamp(sharedPage, layouts.size());
         sharedPageView = sharedPage;
         renderShared();
@@ -262,6 +271,11 @@ final class HologramRuntime {
         if (retired) {
             return;
         }
+        if (!definition.settings().enabled()) {
+            // /holo setting <name> enabled false parks the hologram without touching its data.
+            despawn();
+            return;
+        }
         if (!spawned) {
             spawnIfLoaded();
             return;
@@ -297,6 +311,7 @@ final class HologramRuntime {
             sharedPageView = sharedPage;
             personalPages.replaceAll((uuid, page) -> Pages.next(page, pages));
             version.incrementAndGet(); // personal viewers re-render their next page
+            fadeStart = ticks;
             render = true;
         } else if (dynamicText() && s.updateInterval() > 0 && ticks - lastTextTick >= s.updateInterval()) {
             render = true;
@@ -304,7 +319,10 @@ final class HologramRuntime {
         boolean respawned = false;
         if (render) {
             respawned = renderShared();
+        } else if (fading()) {
+            shared.animate(fadeFactor());
         }
+        rotate();
         if (clickable() && (interaction == null || !interaction.isValid())) {
             respawned |= updateInteraction();
         }
@@ -343,8 +361,36 @@ final class HologramRuntime {
         boolean personal = personalMode();
         renderedPersonalMode = personal;
         lastTextTick = ticks;
-        boolean hidden = personal || !d.settings().permission().isEmpty();
-        return shared.apply(base.clone(), layout, texts, d.settings(), !hidden, this::tag, displays.logger());
+        boolean hidden = personal || !d.settings().permission().isEmpty() || !d.settings().enabled();
+        return shared.apply(base.clone(), layout, texts, d.settings(), !hidden, fadeFactor(), this::tag,
+                displays.logger(), null);
+    }
+
+    /** Fade multiplier of the running page fade (1 when no fade is configured). */
+    private float fadeFactor() {
+        return Animation.fade(ticks - fadeStart, definition.settings().fadeTicks());
+    }
+
+    private boolean fading() {
+        return spawned && Animation.fading(ticks, fadeStart, definition.settings().fadeTicks());
+    }
+
+    /** Region: rotation for a FIXED or HORIZONTAL billboard; other billboards face the viewer instead. */
+    private void rotate() {
+        float speed = definition.settings().rotateDegreesPerSecond();
+        if (speed == 0f) {
+            return;
+        }
+        var billboard = definition.settings().billboard();
+        if (billboard != org.bukkit.entity.Display.Billboard.FIXED
+                && billboard != org.bukkit.entity.Display.Billboard.HORIZONTAL) {
+            return;
+        }
+        float yaw = Animation.yaw(location.yaw(), speed, ticks);
+        shared.rotate(yaw, 0f);
+        for (View view : personalViews.values()) {
+            view.rotate(yaw, 0f);
+        }
     }
 
     /** Region. Returns true when the interaction entity was (re)spawned. */
@@ -415,6 +461,7 @@ final class HologramRuntime {
                 int count = layouts.size();
                 sharedPage = Pages.clamp(op.applyAsInt(sharedPage, count), count);
                 sharedPageView = sharedPage;
+                fadeStart = ticks;
                 boolean respawned = renderShared();
                 publish();
                 if (respawned) {
@@ -490,17 +537,21 @@ final class HologramRuntime {
         for (Layout.TextElement text : layout.textElements()) {
             texts.add(displays.renderer().render(text.lines(), viewer));
         }
-        onRegion(() -> applyPersonal(uuid, layout, texts));
+        // Inventory and profile are read here, on the player's own thread, never on the region.
+        View.ViewerItems items = new View.ViewerItems(viewer.getInventory().getItemInMainHand(),
+                viewer.getPlayerProfile(), viewer.getName());
+        onRegion(() -> applyPersonal(uuid, layout, texts, items));
     }
 
     /** Region. */
-    private synchronized void applyPersonal(UUID viewer, Layout layout, List<Component> texts) {
+    private synchronized void applyPersonal(UUID viewer, Layout layout, List<Component> texts,
+            View.ViewerItems items) {
         if (!spawned || retired || !reserved.contains(viewer) || texts.size() != layout.textElementCount()) {
             return;
         }
-        View view = personalViews.computeIfAbsent(viewer, uuid -> new View());
-        boolean respawned = view.apply(base.clone(), layout, texts, definition.settings(), false, this::tag,
-                displays.logger());
+        View view = personalViews.computeIfAbsent(viewer, id -> new View(displays));
+        boolean respawned = view.apply(base.clone(), layout, texts, definition.settings(), false, fadeFactor(),
+                this::tag, displays.logger(), items);
         if (respawned || !snapshot.personal().containsKey(viewer)) {
             publish();
             displays.nudge(viewer);

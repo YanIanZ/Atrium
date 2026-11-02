@@ -53,6 +53,46 @@ public class HologramsConfig {
     @Comment("Holograms per page of /holo list.")
     public int listPageSize = 10;
 
+    @Comment("Require atrium.holograms.see.<name> (lower-case name) in addition to the permission setting of\n"
+            + "each hologram. Off by default: an existing server keeps its current visibility.")
+    public boolean perHologramPermission = false;
+
+    @Comment("Character used to expand %filler% in a line (the page width comes from its longest line).")
+    public String filler = " ";
+
+    @Comment("Materials for icon lines that name a custom model data value (#cmd:<n>).")
+    public Icons icons = new Icons();
+
+    @ConfigSerializable
+    public static class Icons {
+        @Comment("From custom model data to a material key, for example \"12345: diamond_sword\".\n"
+                + "Values are the material shown; the custom model data itself stays on the item in the resource pack.")
+        public java.util.List<String> customModelData = new java.util.ArrayList<>(java.util.List.of(
+                "10001: paper", "10002: player_head"));
+    }
+
+    String fillerChar() {
+        return filler == null || filler.isEmpty() ? " " : filler.substring(0, 1);
+    }
+
+    /** Material for a {@code #cmd:<n>} icon line; null when the value is not configured. */
+    org.bukkit.Material iconMaterial(int customModelData) {
+        String key = Integer.toString(customModelData);
+        for (String entry : icons.customModelData) {
+            if (entry == null) {
+                continue;
+            }
+            int colon = entry.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            if (entry.substring(0, colon).strip().equals(key)) {
+                return org.bukkit.Material.matchMaterial(entry.substring(colon + 1).strip());
+            }
+        }
+        return null;
+    }
+
     @ConfigSerializable
     public static class Defaults {
         @Comment("How lines turn to the viewer: CENTER, VERTICAL, HORIZONTAL or FIXED (uses the creator's yaw).")
@@ -97,6 +137,16 @@ public class HologramsConfig {
 
         @Comment("Per-viewer copies: AUTO (when the text has placeholders), ON or OFF.")
         public String perViewer = "AUTO";
+
+        @Comment("Show the hologram. Off parks it (no entities, no clicks) but keeps every line and setting.")
+        public boolean enabled = true;
+
+        @Comment("Degrees per second around the vertical axis for new holograms (0 = still). Only a FIXED or\n"
+                + "HORIZONTAL billboard visibly turns; the others face the viewer.")
+        public float rotateSpeed = 0f;
+
+        @Comment("Ticks a new page needs to grow to full size after a page change (0 = instant).")
+        public int fadeTicks = 0;
     }
 
     @ConfigSerializable
@@ -130,6 +180,9 @@ public class HologramsConfig {
             {Setting.PAGE_INTERVAL, Integer.toString(defaults.pageInterval)},
             {Setting.CLICK_COOLDOWN, Integer.toString(defaults.clickCooldown)},
             {Setting.CLICK_PAGES, Boolean.toString(defaults.clickPages)}, {Setting.PER_VIEWER, defaults.perViewer},
+            {Setting.ENABLED, Boolean.toString(defaults.enabled)},
+            {Setting.ROTATE_SPEED, Float.toString(defaults.rotateSpeed)},
+            {Setting.FADE_TICKS, Integer.toString(defaults.fadeTicks)},
         };
         for (Object[] entry : entries) {
             Setting setting = (Setting) entry[0];

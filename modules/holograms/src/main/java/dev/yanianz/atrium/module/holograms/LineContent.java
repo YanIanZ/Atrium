@@ -1,6 +1,8 @@
 package dev.yanianz.atrium.module.holograms;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * What one hologram line shows. Parsed from the stored raw string:
@@ -8,6 +10,11 @@ import java.util.Locale;
  *   <li>{@code #item:<material>}: an item ({@code #item:diamond_sword}).</li>
  *   <li>{@code #itemstack:<base64>}: a saved item stack (written by {@code /holo addline <name> #hand}).</li>
  *   <li>{@code #block:<block data>}: a block ({@code #block:oak_stairs[facing=east]}).</li>
+ *   <li>{@code #head:<player>}, {@code #img:head:<player>}: the head of a player; without a name the head of
+ *       the viewer ({@code #img:head}).</li>
+ *   <li>{@code #iteminhand} or {@code %itemInHand%}: the item the viewer holds (native per-viewer copy).</li>
+ *   <li>{@code #cmd:<n>} or {@code %CustomModelData:<n>%}: an item resolved from the configured
+ *       custom-model-data table.</li>
  *   <li>anything else: a MiniMessage text template. A leading {@code \#} escapes a literal {@code #}.</li>
  * </ul>
  * Pure: nothing here touches the server, so values are validated separately before they are stored.
@@ -16,6 +23,21 @@ sealed interface LineContent {
     String ITEM = "#item:";
     String ITEM_STACK = "#itemstack:";
     String BLOCK = "#block:";
+    String HEAD = "#head:";
+    String IMAGE_HEAD = "#img:head";
+    String IN_HAND = "#iteminhand";
+    String CMD = "#cmd:";
+
+    /** Names that can be resolved to a head without any lookup; nothing that could break out of a profile. */
+    Pattern PLAYER_NAME = Pattern.compile("[A-Za-z0-9_.]{1,16}");
+    Pattern CUSTOM_MODEL_DATA = Pattern.compile("(?i)^%CustomModelData:(\\d{1,9})%$");
+
+    enum IconKind {
+        /** The main-hand item of the viewer; needs a per-viewer copy. */
+        HAND,
+        /** An item from the configured custom-model-data table. */
+        CUSTOM_MODEL_DATA
+    }
 
     record Text(String template) implements LineContent {}
 
@@ -25,12 +47,17 @@ sealed interface LineContent {
 
     record Block(String blockData) implements LineContent {}
 
-    /** Throws {@link IllegalArgumentException} when a prefix is present but its value is empty. */
+    /** A player head; an empty name means the viewer. */
+    record Head(String player) implements LineContent {}
+
+    record Icon(IconKind kind, int customModelData) implements LineContent {}
+
+    /** Throws {@link IllegalArgumentException} when a prefix is present but its value is invalid. */
     static LineContent parse(String raw) {
         if (raw.startsWith("\\#")) {
             return new Text(raw.substring(1));
         }
-        String lower = raw.toLowerCase(Locale.ROOT);
+        String lower = raw.toLowerCase(Locale.ROOT).strip();
         if (lower.startsWith(ITEM_STACK)) {
             return new SavedItem(value(raw, ITEM_STACK));
         }
@@ -39,6 +66,29 @@ sealed interface LineContent {
         }
         if (lower.startsWith(BLOCK)) {
             return new Block(value(raw, BLOCK));
+        }
+        if (lower.startsWith(HEAD)) {
+            return new Head(player(value(raw, HEAD)));
+        }
+        if (lower.startsWith(IMAGE_HEAD)) {
+            String rest = raw.substring(IMAGE_HEAD.length());
+            if (rest.startsWith(":")) {
+                return new Head(player(rest.substring(1).trim()));
+            }
+            if (rest.isBlank()) {
+                return new Head("");
+            }
+            throw new IllegalArgumentException(IMAGE_HEAD + " takes an optional :player");
+        }
+        if (lower.equals(IN_HAND) || lower.equals("%iteminhand%")) {
+            return new Icon(IconKind.HAND, 0);
+        }
+        if (lower.startsWith(CMD)) {
+            return new Icon(IconKind.CUSTOM_MODEL_DATA, number(value(raw, CMD)));
+        }
+        Matcher model = CUSTOM_MODEL_DATA.matcher(raw.strip());
+        if (model.matches()) {
+            return new Icon(IconKind.CUSTOM_MODEL_DATA, number(model.group(1)));
         }
         return new Text(raw);
     }
@@ -51,7 +101,42 @@ sealed interface LineContent {
         return value;
     }
 
+    private static String player(String name) {
+        String value = name.strip();
+        if (value.isEmpty()) {
+            return "";
+        }
+        if (!PLAYER_NAME.matcher(value).matches()) {
+            throw new IllegalArgumentException("a player name may only contain a-z, A-Z, 0-9, _ and . (1-16)");
+        }
+        return value;
+    }
+
+    private static int number(String value) {
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value.strip());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("custom model data must be a whole number");
+        }
+        if (parsed < 0) {
+            throw new IllegalArgumentException("custom model data must not be negative");
+        }
+        return parsed;
+    }
+
     default boolean isText() {
         return this instanceof Text;
+    }
+
+    /** True when the appearance depends on the viewer, i.e. the hologram needs a copy per viewer. */
+    default boolean viewerDependent() {
+        return this instanceof Icon icon && icon.kind() == IconKind.HAND
+                || this instanceof Head head && head.player().isEmpty();
+    }
+
+    /** Item-like lines are rendered by an ItemDisplay. */
+    default boolean isItemLike() {
+        return this instanceof Item || this instanceof SavedItem || this instanceof Head || this instanceof Icon;
     }
 }

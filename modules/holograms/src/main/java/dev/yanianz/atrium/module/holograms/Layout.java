@@ -40,7 +40,7 @@ record Layout(List<Element> elements, double width, double height) {
     }
 
     /** {@code y} is the bottom of the text (a TextDisplay grows upwards from its origin). */
-    record TextElement(List<String> lines, int visualLines, float x, float y, float z, double width, double height)
+    record TextElement(List<HoloLine> lines, int visualLines, float x, float y, float z, double width, double height)
             implements Element {
         TextElement {
             lines = List.copyOf(lines);
@@ -96,17 +96,17 @@ record Layout(List<Element> elements, double width, double height) {
             if (content.isText()) {
                 int visual = 0;
                 double widest = 0;
-                List<String> templates = new ArrayList<>();
+                List<HoloLine> lines = new ArrayList<>(group.size());
                 for (HoloLine line : group) {
                     String template = ((LineContent.Text) line.content()).template();
-                    templates.add(template);
+                    lines.add(line);
                     double unwrapped = Math.max(0, visibleChars.applyAsInt(template)) * metrics.charWidth();
                     visual += Math.max(1, (int) Math.ceil(unwrapped / wrapWidth - 1e-9));
                     widest = Math.max(widest, Math.min(unwrapped, wrapWidth));
                 }
                 double height = visual * metrics.lineHeight() * scale;
                 double width = widest * scale;
-                element = new TextElement(templates, visual, first.offsetX(), (float) (y + first.offsetY()),
+                element = new TextElement(lines, visual, first.offsetX(), (float) (y + first.offsetY()),
                         first.offsetZ(), width, height);
             } else if (content instanceof LineContent.Block block) {
                 double size = metrics.blockSize() * scale;

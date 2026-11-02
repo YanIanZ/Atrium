@@ -11,7 +11,7 @@ import java.util.Locale;
  */
 record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perViewerText, boolean clickActions,
         boolean itemLines, boolean blockLines, boolean lineOffsets, boolean perViewerVisibility,
-        boolean dynamicText) {
+        boolean dynamicText, boolean animations, boolean lineEvents) {
 
     /** Capabilities with a stable key used by the lang files. */
     enum Feature {
@@ -23,7 +23,9 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
         BLOCK_LINES("block-lines"),
         LINE_OFFSETS("line-offsets"),
         PER_VIEWER_VISIBILITY("per-viewer-visibility"),
-        DYNAMIC_TEXT("dynamic-text");
+        DYNAMIC_TEXT("dynamic-text"),
+        ANIMATIONS("animations"),
+        LINE_EVENTS("line-events");
 
         final String key;
 
@@ -37,23 +39,24 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
     }
 
     static EngineCapabilities nativeEngine() {
-        return new EngineCapabilities(true, true, true, true, true, true, true, true, true);
+        return new EngineCapabilities(true, true, true, true, true, true, true, true, true, true, true);
     }
 
     /**
      * DecentHolograms has pages (also per viewer) and item lines. Its text is rendered by DecentHolograms
-     * itself, so Atrium's per-viewer placeholders, click actions and line offsets cannot be reproduced.
+     * itself, so Atrium's per-viewer placeholders, click actions, line offsets and animations cannot be
+     * reproduced.
      */
     static EngineCapabilities decentHolograms() {
-        return new EngineCapabilities(true, true, false, false, true, false, false, true, false);
+        return new EngineCapabilities(true, true, false, false, true, false, false, true, false, false, false);
     }
 
     /**
-     * FancyHolograms text holograms: one text block, no pages, no item or block lines. Atrium still controls
-     * who sees the hologram.
+     * FancyHolograms text holograms: one text block, no pages, no item or block lines, no animations. Atrium still
+     * controls who sees the hologram.
      */
     static EngineCapabilities fancyHolograms() {
-        return new EngineCapabilities(false, false, false, false, false, false, false, true, false);
+        return new EngineCapabilities(false, false, false, false, false, false, false, true, false, false, false);
     }
 
     boolean supports(Feature feature) {
@@ -67,6 +70,8 @@ record EngineCapabilities(boolean pages, boolean perViewerPages, boolean perView
             case LINE_OFFSETS -> lineOffsets;
             case PER_VIEWER_VISIBILITY -> perViewerVisibility;
             case DYNAMIC_TEXT -> dynamicText;
+            case ANIMATIONS -> animations;
+            case LINE_EVENTS -> lineEvents;
         };
     }
 

@@ -174,7 +174,8 @@ final class DecentHologramsEngine extends MirroredEngine {
         }
         mirror.setDefaultVisibleState(false);
 
-        List<List<String>> pages = MirrorText.pages(hologram, renderer, capabilities(), format(), ctx.logger());
+        List<List<String>> pages = MirrorText.pages(hologram, renderer, capabilities(), format(), config.get().fillerChar(),
+                ctx.logger());
         if (pages.isEmpty()) {
             pages = List.of(List.of());
         }

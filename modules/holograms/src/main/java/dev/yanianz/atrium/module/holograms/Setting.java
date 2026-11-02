@@ -140,6 +140,36 @@ enum Setting {
         @Override Object parse(String raw) {
             return parseFloat(raw, 0f, 32f);
         }
+    },
+    /** Off parks the hologram: no entities, no click box, no per-viewer work. Data is kept. */
+    ENABLED("enabled", "true") {
+        @Override Object parse(String raw) {
+            return parseBoolean(raw);
+        }
+
+        @Override List<String> suggestions() {
+            return List.of("true", "false");
+        }
+    },
+    /** Degrees per second around the vertical axis; 0 keeps the hologram still. Negative turns the other way. */
+    ROTATE_SPEED("rotate-speed", "0") {
+        @Override Object parse(String raw) {
+            return parseFloat(raw, -360f, 360f);
+        }
+
+        @Override List<String> suggestions() {
+            return List.of("0", "10", "30", "90");
+        }
+    },
+    /** Ticks the new page needs to grow to its full size after a page change; 0 renders instantly. */
+    FADE_TICKS("fade-ticks", "0") {
+        @Override Object parse(String raw) {
+            return parseInt(raw, 0, 200);
+        }
+
+        @Override List<String> suggestions() {
+            return List.of("0", "10", "20", "40");
+        }
     };
 
     enum PerViewer { AUTO, ON, OFF }

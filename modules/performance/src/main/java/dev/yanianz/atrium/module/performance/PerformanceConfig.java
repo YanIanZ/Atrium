@@ -17,6 +17,19 @@ public class PerformanceConfig {
     @Comment("Optional per-chunk entity caps. Disabled by default; every cap of 0 disables that category.")
     public EntityLimits entityLimits = new EntityLimits();
 
+    @Comment("What the server list (multiplayer screen) shows. The MOTD text itself is stored in\n"
+            + "plugins/Atrium/data/performance/motd.yml so that /setmotd can change it without rewriting this file.")
+    public ServerList serverList = new ServerList();
+
+    @Comment("Limits used by /viewdistance. The client only accepts 2-32 chunks.")
+    public ViewDistance viewDistance = new ViewDistance();
+
+    @Comment("Checks the GitHub releases of the Atrium repository for a newer version. Never downloads anything.")
+    public Updates updates = new Updates();
+
+    @Comment("Optional log4j filter that hides noisy console lines and keeps the recent problems for /consolefilter.")
+    public ConsoleLog consoleLog = new ConsoleLog();
+
     @ConfigSerializable
     public static class Lag {
         @Comment("Seconds to wait for region and world samples before reporting partial values (1-30).")
@@ -175,5 +188,136 @@ public class PerformanceConfig {
 
     static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    @ConfigSerializable
+    public static class ServerList {
+        @Comment("Handle the server-list ping at all. Off leaves the event untouched.")
+        public boolean enabled = true;
+
+        @Comment("Remove vanished players from the player sample and from the online count. Off by default:\n"
+                + "the vanish module already does this (vanish.yml -> hide-from-server-list) and subtracting twice\n"
+                + "would show a too low number.")
+        public boolean hideVanished = false;
+
+        @Comment("Number manipulations. An override of -1 means 'not set'.")
+        public Counts counts = new Counts();
+
+        @ConfigSerializable
+        public static class Counts {
+            @Comment("Added to the online count reported to the client (-1000..1000).")
+            public int onlineOffset = 0;
+
+            @Comment("Reported online count, replacing the real one (-1 = off, 0..10000).")
+            public int onlineOverride = -1;
+
+            @Comment("Added to the maximum player count (-1000..1000).")
+            public int maxOffset = 0;
+
+            @Comment("Reported maximum, replacing the real one (-1 = off, 1..10000).")
+            public int maxOverride = -1;
+
+            int onlineOffset() {
+                return clamp(onlineOffset, -1000, 1000);
+            }
+
+            int maxOffset() {
+                return clamp(maxOffset, -1000, 1000);
+            }
+
+            int onlineOverride() {
+                return onlineOverride < 0 ? -1 : clamp(onlineOverride, 0, 10_000);
+            }
+
+            int maxOverride() {
+                return maxOverride < 0 ? -1 : clamp(maxOverride, 1, 10_000);
+            }
+        }
+    }
+
+    @ConfigSerializable
+    public static class ViewDistance {
+        @Comment("Lowest distance accepted for a player, a world and the server (clamped to the client's 2-32).")
+        public int min = 2;
+
+        @Comment("Highest distance accepted for a player, a world and the server (2-32).")
+        public int max = 32;
+
+        int min() {
+            return clamp(min, 2, 32);
+        }
+
+        int max() {
+            return clamp(Math.max(max, min()), 2, 32);
+        }
+    }
+
+    @ConfigSerializable
+    public static class Updates {
+        @Comment("Periodically ask GitHub for the newest release. Only the public releases API is called\n"
+                + "and the answer is only shown in chat; nothing is ever downloaded or installed.")
+        public boolean enabled = true;
+
+        @Comment("Repository checked, as owner/name.")
+        public String repository = "YanIanZ/Atrium";
+
+        @Comment("Also check once when the server starts.")
+        public boolean checkOnStart = true;
+
+        @Comment("Hours between checks (1-168).")
+        public int intervalHours = 6;
+
+        @Comment("Seconds to wait for GitHub before giving up (3-60).")
+        public int timeoutSeconds = 10;
+
+        @Comment("Tell players with atrium.updates.notify about a newer release when they join.")
+        public boolean notifyOnJoin = true;
+
+        int intervalHours() {
+            return clamp(intervalHours, 1, 168);
+        }
+
+        int timeoutSeconds() {
+            return clamp(timeoutSeconds, 3, 60);
+        }
+    }
+
+    @ConfigSerializable
+    public static class ConsoleLog {
+        @Comment("Install the log4j filter. Off by default: hiding console lines surprises existing setups.")
+        public boolean enabled = false;
+
+        @Comment("Also hide lines that carry a stack trace. Off is safer: a real failure must stay visible.")
+        public boolean hideErrors = false;
+
+        @Comment("Recent problems kept for /consolefilter recent (10-1000).")
+        public int recentSize = 100;
+
+        @Comment("Rules are checked in order and the first match wins. 'contains' is a plain substring match\n"
+                + "(case-insensitive), 'regex' a Java regular expression. action: hide or tag. A tag prefix is\n"
+                + "written in front of the line in /consolefilter recent.")
+        public List<ConsoleRule> rules = new ArrayList<>();
+
+        int recentSize() {
+            return clamp(recentSize, 10, 1000);
+        }
+    }
+
+    @ConfigSerializable
+    public static class ConsoleRule {
+        @Comment("Substring or regular expression to match against the whole log line.")
+        public String pattern = "";
+
+        @Comment("contains or regex.")
+        public String mode = "contains";
+
+        @Comment("hide or tag.")
+        public String action = "hide";
+
+        @Comment("Prefix shown for a 'tag' rule (for example [noisy]).")
+        public String tag = "";
+
+        @Comment("Only apply the rule to loggers whose name starts with this. Empty = every logger.")
+        public String loggerPrefix = "";
     }
 }

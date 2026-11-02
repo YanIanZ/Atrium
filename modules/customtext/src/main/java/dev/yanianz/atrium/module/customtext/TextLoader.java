@@ -60,6 +60,10 @@ final class TextLoader {
     }
 
     static Result load(Path folder) throws IOException {
+        return load(folder, TextParser.DEFAULT_AUTO_PAGE_LINES);
+    }
+
+    static Result load(Path folder, int autoPageLines) throws IOException {
         Files.createDirectories(folder);
         List<Path> files;
         try (Stream<Path> stream = Files.list(folder)) {
@@ -86,7 +90,7 @@ final class TextLoader {
                     continue;
                 }
                 ConfigurationNode root = YamlConfigurationLoader.builder().path(file).build().load();
-                TextParser.Parsed parsed = TextParser.parse(id, root);
+                TextParser.Parsed parsed = TextParser.parse(id, root, autoPageLines);
                 TextDefinition definition = parsed.definition();
                 boolean aliasRegistered = true;
                 if (!definition.command().isEmpty()) {
@@ -121,8 +125,8 @@ final class TextLoader {
     }
 
     private static TextDefinition withoutCommand(TextDefinition text) {
-        return new TextDefinition(text.name(), "", text.permission(), text.join(), text.firstJoinOnly(),
-                text.cooldownSeconds(), text.pages());
+        return new TextDefinition(text.name(), "", text.permissions(), text.join(), text.firstJoinOnly(),
+                text.cooldownSeconds(), text.hidden(), text.pages());
     }
 
     private static String deepestMessage(Throwable error) {

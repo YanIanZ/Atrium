@@ -20,7 +20,7 @@ class LayoutTest {
         Layout layout = layout(lines("aaaa", "bb", "cccccc"), 1f, 0f, 200);
         assertEquals(1, layout.elements().size());
         Layout.TextElement text = (Layout.TextElement) layout.elements().getFirst();
-        assertEquals(List.of("aaaa", "bb", "cccccc"), text.lines());
+        assertEquals(List.of("aaaa", "bb", "cccccc"), text.lines().stream().map(HoloLine::raw).toList());
         assertEquals(3, text.visualLines());
         assertEquals(0.75, layout.height(), EPS);
         assertEquals(6 * 0.15, layout.width(), EPS);

@@ -89,6 +89,12 @@ final class HologramCommands {
         root.then(Cmds.literal("setline").then(name().then(line().then(text().executes(this::setLine)))));
         root.then(Cmds.literal("insertline").then(name().then(line().then(text().executes(this::insertLine)))));
         root.then(Cmds.literal("removeline").then(name().then(line().executes(this::removeLine))));
+        root.then(Cmds.literal("linehover").then(name().then(line()
+                .then(Commands.argument("hover", StringArgumentType.greedyString())
+                        .executes(this::lineHover)))));
+        root.then(Cmds.literal("lineclick").then(name().then(line()
+                .then(Commands.argument("command", StringArgumentType.greedyString())
+                        .executes(this::lineClick)))));
         root.then(Cmds.literal("lineoffset").then(name().then(line()
                 .then(Commands.argument("x", FloatArgumentType.floatArg(-16, 16))
                         .then(Commands.argument("y", FloatArgumentType.floatArg(-16, 16))
@@ -227,10 +233,14 @@ final class HologramCommands {
     /** Refuses a line kind the active engine cannot show (item/block lines are native/DH features). */
     private void checkLine(CommandSourceStack source, String raw) throws CommandSyntaxException {
         LineContent content = LineContent.parse(raw);
-        if (content instanceof LineContent.Item || content instanceof LineContent.SavedItem) {
+        if (content.isItemLike()) {
             requireFeature(source, EngineCapabilities.Feature.ITEM_LINES);
         } else if (content instanceof LineContent.Block) {
             requireFeature(source, EngineCapabilities.Feature.BLOCK_LINES);
+        }
+        if (content.viewerDependent()) {
+            // #iteminhand and #img:head without a name only make sense with a copy per viewer.
+            requireFeature(source, EngineCapabilities.Feature.PER_VIEWER_TEXT);
         }
     }
 
@@ -261,6 +271,16 @@ final class HologramCommands {
                 // AUTO degrades to shared text on engines without per-viewer text; ON explicitly requests it.
                 if (value == Setting.PerViewer.ON) {
                     requireFeature(source, EngineCapabilities.Feature.PER_VIEWER_TEXT);
+                }
+            }
+            case ROTATE_SPEED -> {
+                if ((Float) value != 0f) {
+                    requireFeature(source, EngineCapabilities.Feature.ANIMATIONS);
+                }
+            }
+            case FADE_TICKS -> {
+                if ((Integer) value > 0) {
+                    requireFeature(source, EngineCapabilities.Feature.ANIMATIONS);
                 }
             }
             default -> {
@@ -301,6 +321,17 @@ final class HologramCommands {
                     ItemStack.deserializeBytes(Base64.getDecoder().decode(saved.base64()));
                 } catch (RuntimeException e) {
                     throw new IllegalArgumentException("unreadable saved item");
+                }
+            }
+            case LineContent.Head head -> {
+                // The name pattern is already enforced by the parser; nothing else to look up.
+                if (!head.player().isEmpty() && !LineContent.PLAYER_NAME.matcher(head.player()).matches()) {
+                    throw new IllegalArgumentException("invalid player name " + head.player());
+                }
+            }
+            case LineContent.Icon icon -> {
+                if (icon.kind() == LineContent.IconKind.CUSTOM_MODEL_DATA && icon.customModelData() < 0) {
+                    throw new IllegalArgumentException("custom model data must not be negative");
                 }
             }
         }
@@ -479,6 +510,110 @@ final class HologramCommands {
         }), "holograms.line-offset", Msg.unparsed("name", name), Msg.number("line", line),
                 Msg.unparsed("x", Float.toString(x)), Msg.unparsed("y", Float.toString(y)), Msg.unparsed("z", Float.toString(z)));
         return Cmds.OK;
+    }
+
+    /** Sets the hover text of one line, or clears it with 'none'. Native engines only. */
+    private int lineHover(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        requireFeature(c.getSource(), EngineCapabilities.Feature.LINE_EVENTS);
+        String name = nameArg(c);
+        int line = IntegerArgumentType.getInteger(c, "line");
+        String raw = StringArgumentType.getString(c, "hover").strip();
+        String hover = raw.equalsIgnoreCase("none") ? "" : raw;
+        if (!hover.isEmpty() && !isTextLine(name, line)) {
+            throw cmds.fail(c.getSource(), "holograms.line-not-text", Msg.number("line", line));
+        }
+        if (hover.length() > config.get().maxLineLength) {
+            throw cmds.fail(c.getSource(), "holograms.invalid-line",
+                    Msg.unparsed("reason", "longer than " + config.get().maxLineLength + " characters"));
+        }
+        report(c.getSource().getSender(), manager.edit(name, current -> {
+            if (current == null) {
+                return Change.fail(Outcome.NOT_FOUND);
+            }
+            List<List<HoloLine>> pages = current.mutablePages();
+            var position = LineIndex.locate(pages, line);
+            if (position.isEmpty()) {
+                return Change.fail(Outcome.NO_SUCH_LINE);
+            }
+            List<HoloLine> page = pages.get(position.get().page());
+            HoloLine old = page.get(position.get().index());
+            if (!old.content().isText()) {
+                return Change.fail(Outcome.INVALID);
+            }
+            page.set(position.get().index(), old.withHover(hover));
+            return Change.ok(current.withPages(pages));
+        }), hover.isEmpty() ? "holograms.line-hover-cleared" : "holograms.line-hover-set",
+                Msg.unparsed("name", name), Msg.number("line", line));
+        return Cmds.OK;
+    }
+
+    /** Sets the click command of one line, or clears it with 'none'. Native engines only. */
+    private int lineClick(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        requireFeature(c.getSource(), EngineCapabilities.Feature.LINE_EVENTS);
+        String name = nameArg(c);
+        int line = IntegerArgumentType.getInteger(c, "line");
+        String raw = StringArgumentType.getString(c, "command").strip();
+        String command;
+        try {
+            command = raw.equalsIgnoreCase("none") ? "" : validateClick(raw);
+        } catch (IllegalArgumentException e) {
+            throw cmds.fail(c.getSource(), "holograms.invalid-line", Msg.unparsed("reason", e.getMessage()));
+        }
+        if (!command.isEmpty() && !isTextLine(name, line)) {
+            throw cmds.fail(c.getSource(), "holograms.line-not-text", Msg.number("line", line));
+        }
+        report(c.getSource().getSender(), manager.edit(name, current -> {
+            if (current == null) {
+                return Change.fail(Outcome.NOT_FOUND);
+            }
+            List<List<HoloLine>> pages = current.mutablePages();
+            var position = LineIndex.locate(pages, line);
+            if (position.isEmpty()) {
+                return Change.fail(Outcome.NO_SUCH_LINE);
+            }
+            List<HoloLine> page = pages.get(position.get().page());
+            HoloLine old = page.get(position.get().index());
+            if (!old.content().isText()) {
+                return Change.fail(Outcome.INVALID);
+            }
+            page.set(position.get().index(), old.withClick(command));
+            return Change.ok(current.withPages(pages));
+        }), command.isEmpty() ? "holograms.line-click-cleared" : "holograms.line-click-set",
+                Msg.unparsed("name", name), Msg.number("line", line), Msg.unparsed("command", command));
+        return Cmds.OK;
+    }
+
+    /** True when the numbered line exists and is text (only text can carry hover text or a click). */
+    private boolean isTextLine(String name, int line) {
+        return manager.get(name).map(hologram -> {
+            var position = LineIndex.locate(hologram.pages(), line);
+            return position.map(index -> hologram.pages().get(index.page()).get(index.index()).content().isText())
+                    .orElse(false);
+        }).orElse(false);
+    }
+
+    /**
+     * A click command is stored without the leading slash and must stay one printable line: a newline would let a
+     * stored line become a second command, and a section sign would smuggle legacy colour codes into the client.
+     */
+    static String validateClick(String raw) {
+        String command = raw.strip();
+        if (command.startsWith("/")) {
+            command = command.substring(1).strip();
+        }
+        if (command.isEmpty()) {
+            throw new IllegalArgumentException("the command is empty");
+        }
+        if (command.length() > 256) {
+            throw new IllegalArgumentException("longer than 256 characters");
+        }
+        for (int i = 0; i < command.length(); i++) {
+            char c = command.charAt(i);
+            if (c < 0x20 || c == 0x7f || c == '\u00a7') {
+                throw new IllegalArgumentException("control characters and section signs are not allowed");
+            }
+        }
+        return command;
     }
 
     // ---- pages ----
@@ -696,6 +831,12 @@ final class HologramCommands {
                 String shown = raw.startsWith(LineContent.ITEM_STACK) ? LineContent.ITEM_STACK + "<" + raw.length() + " chars>" : raw;
                 if (line.hasOffset()) {
                     shown += "  [offset " + line.offsetX() + " " + line.offsetY() + " " + line.offsetZ() + "]";
+                }
+                if (!line.hover().isEmpty()) {
+                    shown += "  [hover " + line.hover() + "]";
+                }
+                if (!line.click().isEmpty()) {
+                    shown += "  [click /" + line.click() + "]";
                 }
                 messages.send(sender, "holograms.info-line", Msg.number("line", number++), Msg.unparsed("text", shown));
             }

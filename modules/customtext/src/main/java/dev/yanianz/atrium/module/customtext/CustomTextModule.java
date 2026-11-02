@@ -5,6 +5,7 @@ import com.mojang.brigadier.tree.LiteralCommandNode;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.config.ConfigHandle;
+import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -44,6 +45,7 @@ public final class CustomTextModule implements AtriumModule, Listener {
     static final String PERM_RELOAD = "atrium.ctext.reload";
     static final String PERM_EDIT = "atrium.ctext.edit";
     static final String PERM_BYPASS_COOLDOWN = "atrium.ctext.bypass.cooldown";
+    static final String PERM_SETMOTD = "atrium.setmotd";
 
     private static final int MAX_JOIN_DELAY_TICKS = 1200;
     private static final List<String> EXAMPLES = List.of("rules.yml", "motd.yml", "info.yml");
@@ -83,11 +85,12 @@ public final class CustomTextModule implements AtriumModule, Listener {
         ctx.permission(PERM_RELOAD, PermissionDefault.OP, "Reload the custom text files");
         ctx.permission(PERM_EDIT, PermissionDefault.OP, "Edit custom text pages in game");
         ctx.permission(PERM_BYPASS_COOLDOWN, PermissionDefault.OP, "Bypass custom text view cooldowns");
+        ctx.permission(PERM_SETMOTD, PermissionDefault.OP, "Change the server-list MOTD");
 
         createExamples();
         TextLoader.Result result;
         try {
-            result = TextLoader.load(folder);
+            result = TextLoader.load(folder, config.get().autoPageLines());
         } catch (IOException e) {
             ctx.logger().error("Cannot read the custom text folder {}; starting without texts", folder, e);
             result = TextLoader.Result.empty();
@@ -97,6 +100,7 @@ public final class CustomTextModule implements AtriumModule, Listener {
         this.commands = new CustomTextCommands(this);
         commands.registerRoot();
         commands.registerEdit();
+        commands.registerMotd();
         for (String alias : aliasTargets.keySet()) {
             ctx.command(aliasCommand(alias));
         }
@@ -108,7 +112,7 @@ public final class CustomTextModule implements AtriumModule, Listener {
     public void reload() {
         // /atrium reload: keep the previous texts when the folder cannot be read.
         try {
-            apply(TextLoader.load(folder));
+            apply(TextLoader.load(folder, config.get().autoPageLines()));
         } catch (IOException e) {
             ctx.logger().error("Cannot reload the custom texts; keeping the previous texts", e);
         }
@@ -144,8 +148,14 @@ public final class CustomTextModule implements AtriumModule, Listener {
 
     List<TextDefinition> visible(CommandSender sender) {
         return texts.values().stream()
-                .filter(text -> text.permission().isEmpty() || sender.hasPermission(text.permission()))
+                .filter(text -> !text.hidden())
+                .filter(text -> text.maySee(sender::hasPermission))
                 .toList();
+    }
+
+    /** Every text, hidden ones included; the admin list shows them with a marker. */
+    List<TextDefinition> allTexts() {
+        return List.copyOf(texts.values());
     }
 
     CustomTextConfig config() {
@@ -205,7 +215,7 @@ public final class CustomTextModule implements AtriumModule, Listener {
     CompletableFuture<TextLoader.Result> reloadAsync() {
         return ctx.scheduler().supplyIo(() -> {
             synchronized (fileLock) {
-                TextLoader.Result result = TextLoader.load(folder);
+                TextLoader.Result result = TextLoader.load(folder, config.get().autoPageLines());
                 apply(result);
                 return result;
             }
@@ -228,7 +238,7 @@ public final class CustomTextModule implements AtriumModule, Listener {
                     throw new IllegalStateException("text file is missing: " + file);
                 }
                 List<List<String>> pages = TextYaml.editPages(file, edit);
-                TextLoader.Result result = TextLoader.load(folder);
+                TextLoader.Result result = TextLoader.load(folder, config.get().autoPageLines());
                 apply(result);
                 return new AppliedPages(result, pages);
             }
@@ -251,8 +261,9 @@ public final class CustomTextModule implements AtriumModule, Listener {
         boolean firstJoin = !player.hasPlayedBefore();
         List<TextDefinition> selected = texts.values().stream()
                 .filter(TextDefinition::join)
+                .filter(text -> !text.hidden())
                 .filter(text -> !text.firstJoinOnly() || firstJoin)
-                .filter(text -> text.permission().isEmpty() || player.hasPermission(text.permission()))
+                .filter(text -> text.maySee(player::hasPermission))
                 .toList();
         if (selected.isEmpty()) {
             return;
@@ -266,6 +277,43 @@ public final class CustomTextModule implements AtriumModule, Listener {
                 renderer.send(player, player, text, 1, false);
             }
         }, null, delay));
+    }
+
+    // ---- first join broadcast ----
+
+    /**
+     * Broadcasts the configured first-join lines. {@code [totalUsers]} and {@code [online]} are replaced with
+     * numbers, {@code <player>} with the untrusted name. The broadcast runs on the global thread, which owns the
+     * online count and the broadcast itself.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onFirstJoin(PlayerJoinEvent event) {
+        CustomTextConfig.FirstJoin cfg = config.get().firstJoin;
+        if (!cfg.enabled || event.getPlayer().hasPlayedBefore()) {
+            return;
+        }
+        List<String> lines = cfg.message;
+        if (lines.isEmpty()) {
+            return;
+        }
+        String name = event.getPlayer().getName();
+        ctx.scheduler().global(() -> {
+            int online = org.bukkit.Bukkit.getOnlinePlayers().size();
+            // How many accounts Atrium knows. The name index answers without touching storage; this runs once
+            // per first join, so building the list is acceptable.
+            int total = ctx.users().knownAccounts(Integer.MAX_VALUE).size();
+            for (String line : lines) {
+                if (line == null || line.isBlank()) {
+                    continue;
+                }
+                String prepared = line.replace("[online]", Integer.toString(online))
+                        .replace("[totalUsers]", Integer.toString(total));
+                org.bukkit.Bukkit.getServer().sendMessage(ctx.messages().parseTrusted(prepared,
+                        Msg.unparsed("player", name),
+                        Msg.number("online", online),
+                        Msg.number("total", total)));
+            }
+        });
     }
 
     // ---- examples ----

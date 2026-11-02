@@ -28,6 +28,7 @@ import org.jspecify.annotations.Nullable;
  */
 abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
     protected final ModuleContext ctx;
+    protected final Supplier<HologramsConfig> config;
     protected final TextRenderer renderer;
     private final Map<String, Hologram> known = new ConcurrentHashMap<>();
     private final MirrorViewer viewer;
@@ -39,6 +40,7 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
 
     MirroredEngine(ModuleContext ctx, Supplier<HologramsConfig> config, TextRenderer renderer, boolean pageCycling) {
         this.ctx = ctx;
+        this.config = config;
         this.renderer = renderer;
         this.viewer = new MirrorViewer(ctx, config, this, pageCycling);
         this.ownership = MirrorOwnership.forKind(kind());
@@ -374,7 +376,8 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
 
     private String fingerprint(Hologram hologram) {
         return Reconcile.fingerprint(hologram.location(),
-                MirrorText.pages(hologram, renderer, capabilities(), format(), ctx.logger()));
+                MirrorText.pages(hologram, renderer, capabilities(), format(), config.get().fillerChar(),
+                        ctx.logger()));
     }
 
     private void warnWorld(Hologram hologram) {
@@ -394,6 +397,7 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
         boolean item = false;
         boolean block = false;
         boolean offset = false;
+        boolean lineEvents = false;
         for (List<HoloLine> page : hologram.pages()) {
             for (HoloLine line : page) {
                 if (line.hasOffset()) {
@@ -407,7 +411,12 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
                     }
                     case LineContent.Item ignored -> item = true;
                     case LineContent.SavedItem ignored -> item = true;
+                    case LineContent.Head ignored -> item = true;
+                    case LineContent.Icon ignored -> item = true;
                     case LineContent.Block ignored -> block = true;
+                }
+                if (line.hasEvents()) {
+                    lineEvents = true;
                 }
             }
         }
@@ -422,6 +431,9 @@ abstract class MirroredEngine implements HologramEngine, MirrorViewer.Host {
         }
         if (offset && !capabilities().lineOffsets()) {
             missing.add("line offsets");
+        }
+        if (lineEvents && !capabilities().lineEvents()) {
+            missing.add("per-line hover and click");
         }
         if (!capabilities().pages() && hologram.pages().size() > 1) {
             missing.add("pages after the first");

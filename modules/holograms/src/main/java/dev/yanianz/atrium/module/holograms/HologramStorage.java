@@ -31,6 +31,11 @@ final class HologramStorage {
                 "CREATE TABLE {prefix}holograms_lines (hologram VARCHAR(32) NOT NULL, page INT NOT NULL, "
                         + "line INT NOT NULL, content " + text + " NOT NULL, off_x FLOAT NOT NULL, off_y FLOAT NOT NULL, "
                         + "off_z FLOAT NOT NULL, PRIMARY KEY (hologram, page, line))");
+    }), new Migration(2, "hologram line hover and click", dialect -> {
+        String text = dialect == Dialect.MYSQL ? "MEDIUMTEXT" : "TEXT";
+        return List.of(
+                "ALTER TABLE {prefix}holograms_lines ADD COLUMN hover " + text + " NULL",
+                "ALTER TABLE {prefix}holograms_lines ADD COLUMN click " + text + " NULL");
     }));
 
     private final Database db;
@@ -45,8 +50,8 @@ final class HologramStorage {
     CompletableFuture<List<Hologram>> loadAll(Supplier<HologramSettings> defaults) {
         return db.query(c -> {
             Map<String, List<List<HoloLine>>> lines = new HashMap<>();
-            try (PreparedStatement ps = c.prepareStatement("SELECT hologram, page, line, content, off_x, off_y, off_z FROM "
-                    + db.table("holograms_lines") + " ORDER BY hologram, page, line");
+            try (PreparedStatement ps = c.prepareStatement("SELECT hologram, page, line, content, off_x, off_y, off_z, "
+                    + "hover, click FROM " + db.table("holograms_lines") + " ORDER BY hologram, page, line");
                     ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     List<List<HoloLine>> pages = lines.computeIfAbsent(rs.getString(1), k -> new ArrayList<>());
@@ -54,7 +59,8 @@ final class HologramStorage {
                     while (pages.size() <= page) {
                         pages.add(new ArrayList<>());
                     }
-                    pages.get(page).add(new HoloLine(rs.getString(4), rs.getFloat(5), rs.getFloat(6), rs.getFloat(7)));
+                    pages.get(page).add(new HoloLine(rs.getString(4), rs.getFloat(5), rs.getFloat(6), rs.getFloat(7),
+                            rs.getString(8), rs.getString(9)));
                 }
             }
             List<Hologram> holograms = new ArrayList<>();
@@ -121,12 +127,14 @@ final class HologramStorage {
             }
             deleteLines(c, hologram.key());
             try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + db.table("holograms_lines")
-                    + " (hologram, page, line, content, off_x, off_y, off_z) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                    + " (hologram, page, line, content, off_x, off_y, off_z, hover, click) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 for (int page = 0; page < hologram.pages().size(); page++) {
                     List<HoloLine> lines = hologram.pages().get(page);
                     for (int i = 0; i < lines.size(); i++) {
                         HoloLine line = lines.get(i);
-                        Database.bind(ps, hologram.key(), page, i, line.raw(), line.offsetX(), line.offsetY(), line.offsetZ());
+                        Database.bind(ps, hologram.key(), page, i, line.raw(), line.offsetX(), line.offsetY(),
+                                line.offsetZ(), line.hover(), line.click());
                         ps.addBatch();
                     }
                 }

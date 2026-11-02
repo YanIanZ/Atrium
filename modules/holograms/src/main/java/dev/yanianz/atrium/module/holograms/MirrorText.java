@@ -37,11 +37,13 @@ final class MirrorText {
      * External pages. Engines without pages only receive the first page; the rest stays in Atrium storage.
      */
     static List<List<String>> pages(Hologram hologram, TextRenderer renderer, EngineCapabilities capabilities,
-            Format format, Logger logger) {
+            Format format, String fillerChar, Logger logger) {
         List<List<String>> result = new ArrayList<>();
         for (List<HoloLine> page : hologram.pages()) {
-            List<String> lines = new ArrayList<>(page.size());
-            for (HoloLine line : page) {
+            // The same rainbow and %filler% preparation the native engine applies, so both look alike.
+            List<HoloLine> prepared = LineText.preparePage(page, renderer::visibleChars, fillerChar);
+            List<String> lines = new ArrayList<>(prepared.size());
+            for (HoloLine line : prepared) {
                 lines.add(line(line, renderer, capabilities, format, logger));
             }
             result.add(List.copyOf(lines));
@@ -59,6 +61,8 @@ final class MirrorText {
             case LineContent.Text text -> serialize(format, renderer.renderLine(text.template(), null));
             case LineContent.Item item -> item(item.material(), capabilities, format);
             case LineContent.SavedItem saved -> item(savedMaterial(saved.base64(), logger), capabilities, format);
+            case LineContent.Head head -> item(Material.PLAYER_HEAD.name(), capabilities, format);
+            case LineContent.Icon icon -> item(Material.PAPER.name(), capabilities, format);
             case LineContent.Block block -> serialize(format, Component.text("[block] " + block.blockData()));
         };
     }

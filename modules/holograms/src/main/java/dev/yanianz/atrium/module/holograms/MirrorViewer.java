@@ -133,6 +133,13 @@ final class MirrorViewer implements Listener {
         long now = System.nanoTime();
         for (Hologram hologram : host.holograms()) {
             HologramSettings settings = hologram.settings();
+            if (!settings.enabled()) {
+                continue;
+            }
+            if (config.get().perHologramPermission
+                    && !player.hasPermission(ViewerTracker.PER_HOLOGRAM_PERMISSION + hologram.key())) {
+                continue;
+            }
             StoredLocation location = hologram.location();
             if (!location.world().equals(at.getWorld().getName())) {
                 continue;

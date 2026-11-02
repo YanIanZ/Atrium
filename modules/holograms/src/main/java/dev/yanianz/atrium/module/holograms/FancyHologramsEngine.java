@@ -184,7 +184,8 @@ final class FancyHologramsEngine extends MirroredEngine {
             display.setScale(new Vector3f(scale, scale, scale));
         }
         if (data instanceof TextHologramData text) {
-            List<List<String>> pages = MirrorText.pages(hologram, renderer, capabilities(), format(), ctx.logger());
+            List<List<String>> pages = MirrorText.pages(hologram, renderer, capabilities(), format(),
+                    config.get().fillerChar(), ctx.logger());
             text.setText(pages.isEmpty() ? List.of() : pages.get(0));
             text.setTextAlignment(settings.alignment());
             text.setTextShadow(settings.shadow());

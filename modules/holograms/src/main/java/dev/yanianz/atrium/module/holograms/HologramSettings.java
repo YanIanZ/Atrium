@@ -164,6 +164,18 @@ final class HologramSettings {
         return (Float) values.get(Setting.INTERACTION_HEIGHT);
     }
 
+    boolean enabled() {
+        return (Boolean) values.get(Setting.ENABLED);
+    }
+
+    float rotateDegreesPerSecond() {
+        return (Float) values.get(Setting.ROTATE_SPEED);
+    }
+
+    int fadeTicks() {
+        return (Integer) values.get(Setting.FADE_TICKS);
+    }
+
     @Override
     public boolean equals(Object other) {
         return other instanceof HologramSettings s && s.values.equals(values);

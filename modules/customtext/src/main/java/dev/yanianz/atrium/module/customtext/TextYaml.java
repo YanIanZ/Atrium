@@ -34,12 +34,12 @@ final class TextYaml {
         return next;
     }
 
-    /** The pages currently stored in the file, validated by the same parser as a full load. */
+    /** The pages currently stored in the file, read without consuming directive lines. */
     static List<List<String>> readPages(Path file) throws IOException {
         try {
             ConfigurationNode root = ConfigService.loader(file).load();
-            String name = file.getFileName().toString().replaceFirst("\\.yml$", "");
-            return TextParser.parse(name, root).definition().pages();
+            return new java.util.ArrayList<>(TextParser.readPages(root.node("pages")).stream()
+                    .map(java.util.ArrayList::new).toList());
         } catch (TextSyntaxException e) {
             throw new IOException("cannot read the pages of " + file + ": " + e.getMessage(), e);
         } catch (org.spongepowered.configurate.ConfigurateException e) {

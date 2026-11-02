@@ -39,6 +39,8 @@ import org.bukkit.event.player.PlayerQuitEvent;
  * cost of one set of display entities per viewer in range. The cap and the view range bound that cost.
  */
 final class ViewerTracker implements Listener {
+    /** Prefix of the per-hologram permission, followed by the lower-case hologram name. */
+    static final String PER_HOLOGRAM_PERMISSION = "atrium.holograms.see.";
     /** State of one watched hologram for one player. Touched only on that player's thread. */
     private static final class Watch {
         final HologramRuntime runtime;
@@ -162,6 +164,13 @@ final class ViewerTracker implements Listener {
                 continue;
             }
             HologramSettings s = runtime.definition().settings();
+            if (!s.enabled()) {
+                continue;
+            }
+            if (config.get().perHologramPermission
+                    && !player.hasPermission(PER_HOLOGRAM_PERMISSION + runtime.key)) {
+                continue;
+            }
             StoredLocation l = runtime.location;
             double dx = l.x() - at.getX();
             double dy = l.y() - at.getY();

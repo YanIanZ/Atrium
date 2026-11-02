@@ -44,13 +44,38 @@ final class TextRenderer {
         return cache.computeIfAbsent(template, PlaceholderText::prepare);
     }
 
-    /** One multi-line component for a merged text element. */
-    Component render(List<String> lines, @Nullable Player viewer) {
+    /** One multi-line component for a merged text element, with the per-line hover and click events. */
+    Component render(List<HoloLine> lines, @Nullable Player viewer) {
         List<Component> parts = new ArrayList<>(lines.size());
-        for (String line : lines) {
+        for (HoloLine line : lines) {
             parts.add(renderLine(line, viewer));
         }
         return Component.join(net.kyori.adventure.text.JoinConfiguration.newlines(), parts);
+    }
+
+    /** One line including its optional hover text and click command. */
+    Component renderLine(HoloLine line, @Nullable Player viewer) {
+        Component component = switch (line.content()) {
+            case LineContent.Text text -> renderLine(text.template(), viewer);
+            default -> Component.text(line.raw());
+        };
+        return withEvents(component, line, viewer);
+    }
+
+    private Component withEvents(Component component, HoloLine line, @Nullable Player viewer) {
+        Component result = component;
+        if (!line.hover().isEmpty()) {
+            result = result.hoverEvent(net.kyori.adventure.text.event.HoverEvent.showText(
+                    renderLine(line.hover(), viewer)));
+        }
+        if (!line.click().isEmpty() && viewer != null) {
+            java.util.Optional<String> command = ClickAction.fill(line.click(), viewer.getName(),
+                    viewer.getUniqueId());
+            if (command.isPresent()) {
+                result = result.clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/" + command.get()));
+            }
+        }
+        return result;
     }
 
     Component renderLine(String template, @Nullable Player viewer) {
