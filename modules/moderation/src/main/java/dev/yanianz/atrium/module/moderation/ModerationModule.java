@@ -79,6 +79,7 @@ public final class ModerationModule implements AtriumModule {
         // v4 of the jail schema is applied separately: it inspects the table so it can be re-run after a
         // partially applied MySQL migration (see JailStore.ensureEditorColumns).
         JailStore.ensureEditorColumns(ctx.database()).get(30, TimeUnit.SECONDS);
+        JailStore.ensureStateColumns(ctx.database()).get(30, TimeUnit.SECONDS);
         PunishmentStore store = new PunishmentStore(ctx.database());
         JailStore jails = new JailStore(ctx.database());
         jails.load().get(30, TimeUnit.SECONDS);

@@ -79,6 +79,47 @@ final class JailStore {
         });
     }
 
+    /**
+     * Repairs {@code moderation_state} when an earlier development build created it without some columns
+     * (seen as "no such column: expires_at"). Released schemas already have them, so this is a no-op there.
+     * Runs after the migrations; never touches the schema version.
+     */
+    static CompletableFuture<Void> ensureStateColumns(Database db) {
+        return db.transaction(connection -> {
+            String table = db.table("moderation_state");
+            Set<String> existing;
+            try {
+                existing = columns(connection, table);
+            } catch (SQLException missingTable) {
+                return null; // created by migration 5; nothing to repair
+            }
+            Map<String, String> wanted = stateColumns();
+            List<String> clauses = wanted.keySet().stream()
+                    .filter(name -> !existing.contains(name.toLowerCase(Locale.ROOT)))
+                    .map(name -> "ADD COLUMN " + name + " " + wanted.get(name))
+                    .toList();
+            List<String> statements = clauses.isEmpty() ? List.of()
+                    : db.dialect() == Dialect.MYSQL
+                            ? List.of("ALTER TABLE " + table + " " + String.join(", ", clauses))
+                            : clauses.stream().map(clause -> "ALTER TABLE " + table + " " + clause).toList();
+            for (String statement : statements) {
+                try (Statement st = connection.createStatement()) {
+                    st.executeUpdate(statement);
+                }
+            }
+            return null;
+        });
+    }
+
+    /** Columns of {@code moderation_state} besides its key, nullable so they can be added to existing rows. */
+    static Map<String, String> stateColumns() {
+        Map<String, String> columns = new LinkedHashMap<>();
+        columns.put("expires_at", "BIGINT");
+        columns.put("reason", "VARCHAR(512)");
+        columns.put("actor_name", "VARCHAR(64)");
+        return columns;
+    }
+
     /** Column name to definition, in the order the columns are added. */
     static Map<String, String> editorColumns(Dialect dialect) {
         Map<String, String> columns = new LinkedHashMap<>();

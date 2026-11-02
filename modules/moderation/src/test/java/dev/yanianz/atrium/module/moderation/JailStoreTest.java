@@ -131,6 +131,34 @@ class JailStoreTest {
     }
 
     @Test
+    void anIncompleteStateTableFromADevelopmentBuildIsRepaired() throws Exception {
+        // A development build created moderation_state without expires_at/reason ("no such column").
+        Path dev = folder.resolve("dev-state");
+        java.nio.file.Files.createDirectories(dev);
+        try (Database other = new Database(new CoreConfig.Database(), dev, executor,
+                LoggerFactory.getLogger("state-repair-test"))) {
+            other.migrate("moderation", PunishmentStore.MIGRATIONS);
+            other.update("DROP TABLE {prefix}moderation_state").join();
+            other.update("CREATE TABLE {prefix}moderation_state (state_key VARCHAR(32) NOT NULL PRIMARY KEY, "
+                    + "actor_name VARCHAR(64) NOT NULL)").join();
+
+            JailStore.ensureStateColumns(other).join();
+            JailStore.ensureStateColumns(other).join(); // idempotent
+
+            other.update("INSERT INTO {prefix}moderation_state (state_key, expires_at, reason, actor_name) "
+                    + "VALUES (?, ?, ?, ?)", "chat", 123L, "test", "Console").join();
+            Long expires = other.query(c -> {
+                try (var ps = c.prepareStatement(other.expand(
+                        "SELECT expires_at FROM {prefix}moderation_state WHERE state_key = 'chat'"));
+                        var rs = ps.executeQuery()) {
+                    return rs.next() ? rs.getLong(1) : null;
+                }
+            }).join();
+            assertEquals(123L, expires);
+        }
+    }
+
+    @Test
     void mysqlV4IsOneAlterStatement() {
         List<String> missing = List.copyOf(JailStore.editorColumns(Dialect.MYSQL).keySet());
         List<String> mysql = JailStore.alterStatements(Dialect.MYSQL, "atrium_moderation_jails", missing);
