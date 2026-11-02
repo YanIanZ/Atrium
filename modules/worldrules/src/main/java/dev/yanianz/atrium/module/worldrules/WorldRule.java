@@ -1,5 +1,7 @@
 package dev.yanianz.atrium.module.worldrules;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import org.bukkit.GameMode;
 import org.spongepowered.configurate.objectmapping.ConfigSerializable;
@@ -39,6 +41,54 @@ public class WorldRule {
     @Comment("Prevent damage between two players in this world. Projectiles are checked too.")
     public boolean disablePvp = false;
 
+    @Comment("Flight in this world: DEFAULT, ALLOW or DENY.\n"
+            + "ALLOW lets survival players fly, DENY stops players from starting or keeping flight.\n"
+            + "Creative/spectator keep their flight and atrium.worldrules.fly.bypass is exempt.")
+    public String fly = "DEFAULT";
+
+    @Comment("World-wide damage immunity: DEFAULT, ON or OFF. ON protects every player in this world.")
+    public String godMode = "DEFAULT";
+
+    @Comment("Deny flight above this Y level; 0 disables the limit. The Nether roof is at Y=127.\n"
+            + "Only affects players who are flying or gliding when they cross the limit.")
+    public int flyAboveRoofHeight = 0;
+
+    @Comment("Block ender pearl teleports in this world.")
+    public boolean disableEnderPearls = false;
+
+    @Comment("Stop players from dropping items in this world.")
+    public boolean disableItemDrop = false;
+
+    @Comment("Stop players from picking up items in this world.")
+    public boolean disableItemPickup = false;
+
+    @Comment("Stop fire from spreading to other blocks. Existing fire keeps burning.")
+    public boolean disableFireSpread = false;
+
+    @Comment("Stop explosions from breaking blocks. Entity damage from the explosion is unchanged.")
+    public boolean disableExplosionBlockDamage = false;
+
+    @Comment("Stop leaves from decaying in this world.")
+    public boolean disableLeafDecay = false;
+
+    @Comment("Stop players from trampling farmland in this world.")
+    public boolean disableCropTrample = false;
+
+    @Comment("Stop new nether or end portals from being created by fire in this world.")
+    public boolean disablePortalCreation = false;
+
+    @Comment("Mob categories that never spawn in this world: MONSTER, ANIMAL, WATER, AMBIENT, OTHER or ALL.")
+    public List<String> blockMobSpawns = new ArrayList<>();
+
+    @Comment("Also block spawner and trial spawner spawns in this world.")
+    public boolean blockSpawnerMobs = false;
+
+    @Comment("How fast daytime passes in this world (0-100). 1 is vanilla, 2 twice as fast, 0.5 half speed, 0 pauses daytime.")
+    public double dayTimeMultiplier = 1.0;
+
+    @Comment("How fast nighttime passes in this world (0-100). Same scale as day-time-multiplier.")
+    public double nightTimeMultiplier = 1.0;
+
     @Comment("End gateway behaviour: NORMAL, DISABLED or FIXED.")
     public String endGateway = "NORMAL";
 
@@ -70,6 +120,34 @@ public class WorldRule {
     /** Percentage of the death drops that still falls on the ground (0-100). */
     double deathDropPercent() {
         return multiplier(deathDropPercent);
+    }
+
+    FlightMode flightMode() {
+        return FlightMode.parse(fly);
+    }
+
+    GodMode godMode() {
+        return GodMode.parse(godMode);
+    }
+
+    /** Configured roof limit, or 0 when the limit is disabled. */
+    int flyAboveRoofHeight() {
+        return Math.max(0, flyAboveRoofHeight);
+    }
+
+    double dayTimeMultiplier() {
+        return timeMultiplier(dayTimeMultiplier);
+    }
+
+    double nightTimeMultiplier() {
+        return timeMultiplier(nightTimeMultiplier);
+    }
+
+    private static double timeMultiplier(double value) {
+        if (!Double.isFinite(value)) {
+            return 1.0;
+        }
+        return Math.max(0.0, Math.min(100.0, value));
     }
 
     /** Forced game mode, or {@code null} when disabled or when the configured name is invalid. */
@@ -113,6 +191,40 @@ public class WorldRule {
                 return valueOf(value.trim().toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 return NORMAL;
+            }
+        }
+    }
+
+    enum FlightMode {
+        DEFAULT,
+        ALLOW,
+        DENY;
+
+        static FlightMode parse(String value) {
+            if (value == null) {
+                return DEFAULT;
+            }
+            try {
+                return valueOf(value.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                return DEFAULT;
+            }
+        }
+    }
+
+    enum GodMode {
+        DEFAULT,
+        ON,
+        OFF;
+
+        static GodMode parse(String value) {
+            if (value == null) {
+                return DEFAULT;
+            }
+            try {
+                return valueOf(value.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                return DEFAULT;
             }
         }
     }

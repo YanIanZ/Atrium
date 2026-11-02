@@ -1,5 +1,6 @@
 package dev.yanianz.atrium.module.worldrules;
 
+import dev.yanianz.atrium.api.worldrules.ArmorEffectService;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
@@ -16,6 +17,9 @@ public final class WorldRulesModule implements AtriumModule {
     private PlayerRulesListener playerRules;
     private SleepListener sleep;
     private ResurrectionManager resurrection;
+    private LeatherAnimationManager animation;
+    private WorldFlagsListener flags;
+    private TimeRateManager timeRate;
 
     @Override
     public String id() {
@@ -39,15 +43,21 @@ public final class WorldRulesModule implements AtriumModule {
         this.armor = new ArmorEffectManager(ctx, config);
         this.armor.recompile();
         this.compass = new CompassManager(ctx, config);
-        this.listener = new WorldRulesListener(ctx, config, armor, compass);
+        this.animation = new LeatherAnimationManager(ctx, config);
+        this.listener = new WorldRulesListener(ctx, config, armor, compass, animation);
         this.times = new PlayerTimeManager(ctx, store);
         this.playerRules = new PlayerRulesListener(ctx, config, times);
         this.sleep = new SleepListener(ctx, config);
         this.resurrection = new ResurrectionManager(ctx, config);
+        this.flags = new WorldFlagsListener(ctx, config, animation);
+        this.timeRate = new TimeRateManager(ctx, config);
         ctx.listen(listener);
         ctx.listen(playerRules);
         ctx.listen(sleep);
         ctx.listen(resurrection);
+        ctx.listen(flags);
+        ctx.service(ArmorEffectService.class, armor::refresh);
+        this.timeRate.recompile();
 
         ctx.permission("atrium.gamerule", PermissionDefault.OP, "Read and change world game rules");
         ctx.permission("atrium.compass", PermissionDefault.TRUE, "Point your own compass");
@@ -70,6 +80,12 @@ public final class WorldRulesModule implements AtriumModule {
                 "Use commands while lying in a bed");
         ctx.permission(ResurrectionManager.PERM_USE, PermissionDefault.TRUE,
                 "Use the custom totem resurrection");
+        ctx.permission(WorldFlagsListener.FLY_BYPASS, PermissionDefault.OP,
+                "Ignore a world's flight limit");
+        ctx.permission(LeatherAnimationManager.PERMISSION, PermissionDefault.TRUE,
+                "Opt in to the animated leather armour colours");
+        ctx.permission(LeatherAnimationManager.OTHERS, PermissionDefault.OP,
+                "Change the leather armour animation of another player");
 
         new GameruleCommand(ctx).register();
         new CompassCommand(ctx, compass).register();
@@ -77,6 +93,7 @@ public final class WorldRulesModule implements AtriumModule {
         new PTimeCommand(ctx, times).register();
         new PWeatherCommand(ctx).register();
         new WeatherCommand(ctx).register();
+        new ArmorColorCommand(ctx, config, animation).register();
     }
 
     @Override
@@ -87,6 +104,9 @@ public final class WorldRulesModule implements AtriumModule {
         sleep.reload();
         resurrection.reload();
         playerRules.reload();
+        animation.reload();
+        flags.reload();
+        timeRate.recompile();
     }
 
     @Override
@@ -102,6 +122,15 @@ public final class WorldRulesModule implements AtriumModule {
         }
         if (resurrection != null) {
             resurrection.shutdown();
+        }
+        if (animation != null) {
+            animation.stopAll();
+        }
+        if (timeRate != null) {
+            timeRate.stop();
+        }
+        if (flags != null) {
+            flags.shutdown();
         }
     }
 }

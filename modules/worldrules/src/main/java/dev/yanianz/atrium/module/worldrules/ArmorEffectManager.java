@@ -81,6 +81,18 @@ final class ArmorEffectManager {
         }
     }
 
+    /** Schedules one evaluation on the player's own thread; safe from any thread. */
+    void refresh(Player player) {
+        if (!player.isOnline()) {
+            return;
+        }
+        if (Bukkit.isOwnedByCurrentRegion(player)) {
+            evaluate(player);
+        } else {
+            ctx.scheduler().entity(player, () -> evaluate(player), null);
+        }
+    }
+
     /** Must run on the player's own thread. */
     @SuppressWarnings("deprecation")
     void evaluate(Player player) {

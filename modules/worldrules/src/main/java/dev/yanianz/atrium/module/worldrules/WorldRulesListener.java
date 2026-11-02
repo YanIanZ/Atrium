@@ -1,11 +1,11 @@
 package dev.yanianz.atrium.module.worldrules;
 
 import com.destroystokyo.paper.event.entity.EntityTeleportEndGatewayEvent;
-import com.destroystokyo.paper.event.player.PlayerArmorChangeEvent;
 import com.destroystokyo.paper.event.player.PlayerTeleportEndGatewayEvent;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
+import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,6 +33,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.inventory.EquipmentSlot;
 
 /** All gameplay hooks. Everything reacts to an event; nothing runs per tick except an active compass tracker. */
 final class WorldRulesListener implements Listener {
@@ -42,17 +43,19 @@ final class WorldRulesListener implements Listener {
     private final ConfigHandle<WorldRulesConfig> config;
     private final ArmorEffectManager armor;
     private final CompassManager compass;
+    private final LeatherAnimationManager animation;
     private final Map<UUID, Double> hungerCarry = new ConcurrentHashMap<>();
     private final Map<UUID, Long> pearlReady = new ConcurrentHashMap<>();
     private final Map<UUID, Long> notices = new ConcurrentHashMap<>();
     private final Map<String, Boolean> warnedTargets = new ConcurrentHashMap<>();
 
     WorldRulesListener(ModuleContext ctx, ConfigHandle<WorldRulesConfig> config,
-            ArmorEffectManager armor, CompassManager compass) {
+            ArmorEffectManager armor, CompassManager compass, LeatherAnimationManager animation) {
         this.ctx = ctx;
         this.config = config;
         this.armor = armor;
         this.compass = compass;
+        this.animation = animation;
     }
 
     private WorldRule rule(Player player) {
@@ -239,8 +242,22 @@ final class WorldRulesListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
-    public void onArmorChange(PlayerArmorChangeEvent event) {
-        Player player = event.getPlayer();
+    public void onEquipmentChanged(EntityEquipmentChangedEvent event) {
+        if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+        boolean armorChanged = false;
+        for (EquipmentSlot slot : event.getEquipmentChanges().keySet()) {
+            if (slot == EquipmentSlot.HEAD || slot == EquipmentSlot.CHEST
+                    || slot == EquipmentSlot.LEGS || slot == EquipmentSlot.FEET) {
+                armorChanged = true;
+                break;
+            }
+        }
+        if (!armorChanged || animation.updating(player)) {
+            return;
+        }
+        // Deferred so every slot of a multi-piece swap is already applied (/hat, dispenser, inventory).
         ctx.scheduler().entity(player, () -> armor.evaluate(player), null);
     }
 

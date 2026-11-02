@@ -21,6 +21,45 @@ class FeatureDefaultsTest {
         assertFalse(config.compass.bossBar);
         assertFalse(config.compass.recoverOnDeath);
         assertTrue(config.compass.requireItem);
+        assertFalse(config.leatherAnimation.enabled);
+        assertFalse(config.timeRate.enabled);
+    }
+
+    @Test
+    void worldFlagsDefaultToVanilla() {
+        WorldRule rule = new WorldRule();
+        assertEquals(WorldRule.FlightMode.DEFAULT, rule.flightMode());
+        assertEquals(WorldRule.GodMode.DEFAULT, rule.godMode());
+        assertEquals(0, rule.flyAboveRoofHeight());
+        assertEquals(1.0, rule.dayTimeMultiplier());
+        assertEquals(1.0, rule.nightTimeMultiplier());
+        assertFalse(rule.disableEnderPearls);
+        assertFalse(rule.disableItemDrop);
+        assertFalse(rule.disableItemPickup);
+        assertFalse(rule.disableFireSpread);
+        assertFalse(rule.disableExplosionBlockDamage);
+        assertFalse(rule.disableLeafDecay);
+        assertFalse(rule.disableCropTrample);
+        assertFalse(rule.disablePortalCreation);
+        assertFalse(rule.blockSpawnerMobs);
+        assertTrue(rule.blockMobSpawns.isEmpty());
+    }
+
+    @Test
+    void worldFlagsParseAndClamp() {
+        WorldRule rule = new WorldRule();
+        rule.fly = "allow";
+        assertEquals(WorldRule.FlightMode.ALLOW, rule.flightMode());
+        rule.fly = "nonsense";
+        assertEquals(WorldRule.FlightMode.DEFAULT, rule.flightMode());
+        rule.godMode = "on";
+        assertEquals(WorldRule.GodMode.ON, rule.godMode());
+        rule.flyAboveRoofHeight = -5;
+        assertEquals(0, rule.flyAboveRoofHeight());
+        rule.dayTimeMultiplier = 500;
+        assertEquals(100.0, rule.dayTimeMultiplier());
+        rule.nightTimeMultiplier = Double.NaN;
+        assertEquals(1.0, rule.nightTimeMultiplier());
     }
 
     @Test

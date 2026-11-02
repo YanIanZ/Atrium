@@ -115,7 +115,9 @@ final class PlayerRulesListener implements Listener {
         }
 
         if (cfg.compass.recoverOnDeath && hasCompass(player)) {
+            // The recovered compass replaces the dropped one, so the death never duplicates it.
             compassLost.add(player.getUniqueId());
+            removeOneCompass(event.getDrops());
         } else {
             compassLost.remove(player.getUniqueId());
         }
@@ -157,6 +159,20 @@ final class PlayerRulesListener implements Listener {
             }
         }
         return false;
+    }
+
+    /** Removes a single compass from the death drops so the respawn recovery does not duplicate it. */
+    private static void removeOneCompass(java.util.List<ItemStack> drops) {
+        for (int index = 0; index < drops.size(); index++) {
+            ItemStack item = drops.get(index);
+            if (item != null && item.getType() == Material.COMPASS) {
+                item.setAmount(item.getAmount() - 1);
+                if (item.getAmount() <= 0) {
+                    drops.remove(index);
+                }
+                return;
+            }
+        }
     }
 
     // ---- anti-void rescue ----

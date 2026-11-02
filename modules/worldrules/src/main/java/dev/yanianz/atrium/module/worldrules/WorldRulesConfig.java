@@ -53,6 +53,12 @@ public class WorldRulesConfig {
     @Comment("Compass display and item handling for /compass.")
     public Compass compass = new Compass();
 
+    @Comment("Animated hue cycling for leather armour. Players still opt in with /armorcolor on.")
+    public LeatherAnimation leatherAnimation = new LeatherAnimation();
+
+    @Comment("Gradual world time speed from the day/night multipliers in the per-world rules.")
+    public TimeRate timeRate = new TimeRate();
+
     WorldRule rule(String worldName) {
         return WorldRules.resolve(worlds, worldName);
     }
@@ -99,6 +105,21 @@ public class WorldRulesConfig {
                         && !rule.endGateway.trim().equalsIgnoreCase("NORMAL")) {
                     warn.accept("worlds." + name + ": unknown end-gateway '" + rule.endGateway + "'");
                 }
+                if (rule.fly != null && !rule.fly.isBlank() && rule.flightMode() == WorldRule.FlightMode.DEFAULT
+                        && !rule.fly.trim().equalsIgnoreCase("DEFAULT")) {
+                    warn.accept("worlds." + name + ": unknown fly mode '" + rule.fly + "' (DEFAULT, ALLOW or DENY)");
+                }
+                if (rule.godMode != null && !rule.godMode.isBlank() && rule.godMode() == WorldRule.GodMode.DEFAULT
+                        && !rule.godMode.trim().equalsIgnoreCase("DEFAULT")) {
+                    warn.accept("worlds." + name + ": unknown god mode '" + rule.godMode + "' (DEFAULT, ON or OFF)");
+                }
+                if (rule.flyAboveRoofHeight < 0) {
+                    warn.accept("worlds." + name + ": negative fly-above-roof-height is ignored");
+                }
+                timeMultiplier(rule.dayTimeMultiplier, "day-time-multiplier", name, warn);
+                timeMultiplier(rule.nightTimeMultiplier, "night-time-multiplier", name, warn);
+                WorldFlags.spawnCategories(rule.blockMobSpawns,
+                        message -> warn.accept("worlds." + name + ": " + message));
             }
         }
         if (resurrection != null && resurrection.enabled && resurrection.itemType() == null) {
@@ -113,6 +134,9 @@ public class WorldRulesConfig {
         }
         if (voidRescue != null && voidRescue.triggerOffset < 0) {
             warn.accept("void-rescue.trigger-offset: negative value clamped to 0");
+        }
+        if (timeRate != null && (timeRate.intervalTicks < 20 || timeRate.intervalTicks > 1200)) {
+            warn.accept("time-rate.interval-ticks outside 20-1200 is clamped");
         }
     }
 
@@ -320,7 +344,61 @@ public class WorldRulesConfig {
         }
     }
 
+    @ConfigSerializable
+    public static class LeatherAnimation {
+        @Comment("Enable hue cycling for leather armour. Off by default; every player opts in with /armorcolor on.")
+        public boolean enabled = false;
+
+        @Comment("Ticks between colour updates per player (5-200). The task only touches the wearer's own armour.")
+        public int refreshTicks = 20;
+
+        @Comment("Hue change per update in degrees (1-120). Higher values cycle faster.")
+        public int hueStep = 12;
+
+        @Comment("Saturation of the animated colour (0-100).")
+        public int saturation = 85;
+
+        @Comment("Brightness of the animated colour (0-100).")
+        public int brightness = 100;
+
+        public int refreshTicks() {
+            return clamp(refreshTicks, 5, 200);
+        }
+
+        public int hueStep() {
+            return clamp(hueStep, 1, 120);
+        }
+
+        public int saturation() {
+            return clamp(saturation, 0, 100);
+        }
+
+        public int brightness() {
+            return clamp(brightness, 0, 100);
+        }
+    }
+
+    @ConfigSerializable
+    public static class TimeRate {
+        @Comment("Enable the day/night speed multipliers from the per-world rules. Off by default.")
+        public boolean enabled = false;
+
+        @Comment("Ticks between time adjustments (20-1200). 100 means the multipliers are applied every 5 seconds.")
+        public int intervalTicks = 100;
+
+        public int intervalTicks() {
+            return clamp(intervalTicks, 20, 1200);
+        }
+    }
+
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static void timeMultiplier(double value, String option, String world,
+            java.util.function.Consumer<String> warn) {
+        if (!Double.isFinite(value) || value < 0 || value > 100) {
+            warn.accept("worlds." + world + ": " + option + " outside 0-100 is clamped");
+        }
     }
 }
