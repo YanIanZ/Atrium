@@ -33,6 +33,13 @@ final class EssentialsItemParser {
     record Line(Kind kind, KitItemSpec item, String text) {}
 
     static Line parse(String raw, int slot) {
+        return parse(raw, slot, "$");
+    }
+
+    /**
+     * @param currencySymbol Essentials' {@code currency-symbol}; a line starting with it (or {@code $}) is money
+     */
+    static Line parse(String raw, int slot, String currencySymbol) {
         String line = raw == null ? "" : raw.strip();
         if (line.isEmpty()) {
             return new Line(Kind.ITEM, KitItemSpec.broken(slot, "empty item line"), line);
@@ -40,12 +47,28 @@ final class EssentialsItemParser {
         if (line.startsWith("/")) {
             return new Line(Kind.COMMAND, null, line);
         }
-        if (line.startsWith("$")) {
+        if (line.startsWith("$") || (currencySymbol != null && !currencySymbol.isEmpty() && line.startsWith(currencySymbol))) {
             return new Line(Kind.MONEY, null, line);
+        }
+        // "slot:<n> <item...>" puts the item into that inventory slot (EssentialsX 2.19+).
+        if (line.regionMatches(true, 0, "slot:", 0, 5)) {
+            int space = line.indexOf(' ');
+            if (space > 5) {
+                try {
+                    int wanted = Integer.parseInt(line.substring(5, space));
+                    if (wanted >= 0) {
+                        slot = wanted;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Essentials ignores a slot that is not a number as well.
+                }
+                line = line.substring(space + 1).strip();
+            }
         }
         if (line.startsWith("@")) {
             try {
-                byte[] bytes = Base64.getDecoder().decode(line.substring(1).strip());
+                // Essentials writes the serialized item with Base64Coder.encodeLines (line breaks every 76 chars).
+                byte[] bytes = Base64.getMimeDecoder().decode(line.substring(1).strip());
                 return new Line(Kind.ITEM, KitItemSpec.serialized(slot, bytes), line);
             } catch (IllegalArgumentException e) {
                 return new Line(Kind.ITEM, KitItemSpec.broken(slot, "malformed serialized item"), line);

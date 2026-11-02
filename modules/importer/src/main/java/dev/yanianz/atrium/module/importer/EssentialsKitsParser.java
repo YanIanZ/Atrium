@@ -39,22 +39,27 @@ final class EssentialsKitsParser {
     }
 
     static List<ParsedKit> parse(ConfigurationNode root) {
+        return parse(root, "$");
+    }
+
+    /** @param currencySymbol Essentials' {@code currency-symbol}: lines starting with it (or {@code $}) give money */
+    static List<ParsedKit> parse(ConfigurationNode root, String currencySymbol) {
         if (root == null || root.virtual()) {
             return List.of();
         }
         ConfigurationNode section = CmiNodeLocations.child(root, "kits", "Kits");
-        return section.virtual() || !section.isMap() ? List.of() : parseSection(section);
+        return section.virtual() || !section.isMap() ? List.of() : parseSection(section, currencySymbol);
     }
 
-    private static List<ParsedKit> parseSection(ConfigurationNode section) {
+    private static List<ParsedKit> parseSection(ConfigurationNode section, String currencySymbol) {
         List<ParsedKit> kits = new ArrayList<>();
         for (var entry : section.childrenMap().entrySet()) {
-            kits.add(parseOne(String.valueOf(entry.getKey()), entry.getValue()));
+            kits.add(parseOne(String.valueOf(entry.getKey()), entry.getValue(), currencySymbol));
         }
         return List.copyOf(kits);
     }
 
-    private static ParsedKit parseOne(String rawName, ConfigurationNode node) {
+    private static ParsedKit parseOne(String rawName, ConfigurationNode node, String currencySymbol) {
         String source = rawName == null ? null : rawName.trim();
         if (source == null || source.isBlank()) {
             return new ParsedKit(null, 0, 0, null, "kit without a name");
@@ -86,7 +91,7 @@ final class EssentialsKitsParser {
         List<KitItemSpec> specs = new ArrayList<>();
         List<String> commands = new ArrayList<>();
         for (String line : lines) {
-            EssentialsItemParser.Line parsed = EssentialsItemParser.parse(line, -1);
+            EssentialsItemParser.Line parsed = EssentialsItemParser.parse(line, -1, currencySymbol);
             if (parsed.kind() == EssentialsItemParser.Kind.ITEM) {
                 specs.add(parsed.item());
             } else {
@@ -100,12 +105,17 @@ final class EssentialsKitsParser {
                 List.copyOf(commands), source);
     }
 
-    private static long readLong(ConfigurationNode node) {
+    /** Essentials reads the delay as a decimal number of seconds ({@code 1.5}); a part second rounds up. */
+    static long readLong(ConfigurationNode node) {
         if (node == null || node.virtual()) {
             return 0L;
         }
         try {
-            return Long.parseLong(String.valueOf(node.raw()).trim());
+            double value = Double.parseDouble(String.valueOf(node.raw()).trim());
+            if (!Double.isFinite(value)) {
+                return 0L;
+            }
+            return value < 0 ? -1L : (long) Math.ceil(value);
         } catch (NumberFormatException e) {
             return 0L;
         }

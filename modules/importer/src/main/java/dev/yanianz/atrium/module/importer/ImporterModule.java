@@ -95,6 +95,9 @@ public final class ImporterModule implements AtriumModule {
                                         .suggests(suggestions(ImportCategory.economyOnly()))
                                         .executes(c -> economy(c, StringArgumentType.getString(c, "args"))))))
                 .then(Cmds.literal("sources").requires(Cmds.permission(PERM_IMPORT)).executes(this::sources))
+                .then(Cmds.literal("verify").requires(Cmds.permission(PERM_IMPORT))
+                        .then(Cmds.literal("essentials").executes(c -> verify(c, "essentials")))
+                        .then(Cmds.literal("cmi").executes(c -> verify(c, "cmi"))))
                 .then(Cmds.literal("status")
                         .requires(source -> source.getSender().hasPermission(PERM_STATUS)
                                 || source.getSender().hasPermission(PERM_IMPORT))
@@ -129,7 +132,7 @@ public final class ImporterModule implements AtriumModule {
     private int usage(CommandContext<CommandSourceStack> context) {
         CommandSender sender = context.getSource().getSender();
         ctx.messages().send(sender, "importer.usage",
-                Msg.unparsed("sources", "cmi|essentials|pvx|vanilla|economy <plugin>|sources|status|cancel"),
+                Msg.unparsed("sources", "cmi|essentials|pvx|vanilla|economy <plugin>|sources|verify <essentials|cmi>|status|cancel"),
                 Msg.component("reason", ctx.messages().render(sender, "importer.reason-missing-subcommand")));
         return Cmds.OK;
     }
@@ -310,6 +313,50 @@ public final class ImporterModule implements AtriumModule {
                 Msg.unparsed("options", options.describe()),
                 Msg.unparsed("path", folder.toString()));
         job.start();
+        return Cmds.OK;
+    }
+
+    /** Compares the source with what Atrium has now; read-only, may run next to an import. */
+    private int verify(CommandContext<CommandSourceStack> context, String source) {
+        CommandSender sender = context.getSource().getSender();
+        Path folder = source.equals("cmi") ? resolveCmiFolder() : resolveEssentialsFolder();
+        if (folder == null) {
+            ctx.messages().send(sender, "importer.no-" + source + "-folder",
+                    Msg.unparsed("path", source.equals("cmi") ? cmiFolderHint() : essentialsFolderHint()));
+            return Cmds.OK;
+        }
+        ctx.messages().send(sender, "importer.verify-started", Msg.unparsed("source", source),
+                Msg.unparsed("path", folder.toString()));
+        ImportVerifier verifier = new ImportVerifier(ctx);
+        java.util.concurrent.CompletableFuture<ImportVerifier.Result> run = source.equals("cmi")
+                ? verifier.cmi(folder) : verifier.essentials(folder, resolveSpawnFolder(folder));
+        run.whenComplete((result, error) -> {
+            if (error != null) {
+                ctx.logger().error("Verifying the {} import failed", source, error);
+                ctx.messages().send(sender, "importer.verify-failed", Msg.unparsed("source", source),
+                        Msg.unparsed("error", String.valueOf(error.getMessage())));
+                return;
+            }
+            int shown = 0;
+            for (ImportVerifier.Check check : result.checks) {
+                ctx.messages().send(sender, check.mismatched() == 0 ? "importer.verify-check-ok" : "importer.verify-check-bad",
+                        Msg.unparsed("category", check.category()), Msg.number("source", check.source()),
+                        Msg.number("matched", check.matched()), Msg.number("mismatched", check.mismatched()));
+            }
+            for (ImportVerifier.Mismatch mismatch : result.mismatches) {
+                ctx.logger().info("Verify {}: {} '{}': {}", source, mismatch.category(), mismatch.subject(), mismatch.detail());
+                if (shown++ < 15) {
+                    ctx.messages().send(sender, "importer.verify-mismatch", Msg.unparsed("category", mismatch.category()),
+                            Msg.unparsed("subject", mismatch.subject()), Msg.unparsed("detail", mismatch.detail()));
+                }
+            }
+            if (shown > 15) {
+                ctx.messages().send(sender, "importer.verify-more", Msg.number("count", shown - 15));
+            }
+            result.notes.forEach(note -> ctx.messages().send(sender, "importer.verify-note", Msg.unparsed("note", note)));
+            ctx.messages().send(sender, result.mismatches.isEmpty() ? "importer.verify-ok" : "importer.verify-bad",
+                    Msg.unparsed("source", source), Msg.number("count", result.mismatches.size()));
+        });
         return Cmds.OK;
     }
 

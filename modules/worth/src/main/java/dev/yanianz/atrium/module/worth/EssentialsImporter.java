@@ -40,6 +40,24 @@ final class EssentialsImporter implements PriceImporter {
             for (Map.Entry<Object, ? extends ConfigurationNode> entry : worth.childrenMap().entrySet()) {
                 String origin = name + " worth." + entry.getKey();
                 ConfigurationNode value = entry.getValue();
+                if (value.isMap()) {
+                    // Essentials on 1.13+: "<item>: {'0': price}" (exactly one key) or the "'*'" wildcard price.
+                    ConfigurationNode zero = null;
+                    ConfigurationNode any = null;
+                    for (Map.Entry<Object, ? extends ConfigurationNode> data : value.childrenMap().entrySet()) {
+                        String key = String.valueOf(data.getKey()).trim();
+                        if (key.equals("0")) {
+                            zero = data.getValue();
+                        } else if (key.equals("*")) {
+                            any = data.getValue();
+                        }
+                    }
+                    if (value.childrenMap().size() == 1 && zero != null) {
+                        value = zero;
+                    } else if (any != null) {
+                        value = any;
+                    }
+                }
                 if (value.isMap() || value.isList()) {
                     out.skip(origin, "legacy-data",
                             "data values cannot be matched to a modern item: " + entry.getKey());

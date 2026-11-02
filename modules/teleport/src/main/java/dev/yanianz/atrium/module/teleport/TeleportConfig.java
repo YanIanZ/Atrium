@@ -169,8 +169,10 @@ public class TeleportConfig {
 
     @ConfigSerializable
     public static class Spawn {
-        @Comment("Use a separate spawn per world (/setspawn in that world). Worlds without one use the default spawn.")
-        public boolean perWorld = true;
+        @Comment("Off (default): /spawn, the first join and the respawn use ONE global main spawn (/setspawn) in every\n"
+                + "world. On: a world with its own spawn (/setspawn world) uses that one instead. Per-world spawns stored\n"
+                + "while this is off are kept but ignored. (Replaces the old per-world option, which is no longer read.)")
+        public boolean perWorldSpawns = false;
 
         @Comment("Send new players to the first-join spawn (or the default spawn when no first-join spawn is set).")
         public boolean teleportOnFirstJoin = true;
@@ -186,6 +188,19 @@ public class TeleportConfig {
 
         @Comment("Also move the vanilla world spawn point when /setspawn sets a world spawn (compasses, new chunks).")
         public boolean syncWorldSpawn = true;
+
+        @Comment("Off (default): group spawns are stored but ignored. On: /spawn and the respawn use the group spawn\n"
+                + "(/setspawn group <name>, imported EssentialsSpawn/CMI groups) of players that have the permission\n"
+                + "atrium.spawn.group.<name> set, instead of the main spawn.")
+        public boolean groupSpawns = false;
+
+        @Comment("With group spawns on and a player in several groups: the groups listed here are checked first\n"
+                + "(in this order), the others alphabetically.")
+        public List<String> groupOrder = new ArrayList<>();
+
+        @Comment("Seconds a first join waits for the world of the first-join spawn to load on demand\n"
+                + "(SourbyCraft AWF, Multiverse or slime worlds). 0 = only use it when the world is already loaded.")
+        public int firstJoinWorldLoadSeconds = 10;
     }
 
     @ConfigSerializable

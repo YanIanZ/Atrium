@@ -928,7 +928,14 @@ abstract class ImportJob {
             if (ctx.plugin().getServer().getWorld(world) != null) {
                 return true;
             }
-            return Files.isDirectory(ctx.plugin().getServer().getWorldContainer().toPath().resolve(world));
+            if (Files.isDirectory(ctx.plugin().getServer().getWorldContainer().toPath().resolve(world))) {
+                return true;
+            }
+            // Worlds of a world manager (SourbyCraft AWF profile worlds, Multiverse, slime worlds) are often not
+            // loaded and do not live in the world container; they load on demand when someone teleports there.
+            return ctx.services().get(dev.yanianz.atrium.api.world.WorldProviderRegistry.class)
+                    .map(registry -> registry.find(world).isPresent())
+                    .orElse(false);
         } catch (RuntimeException e) {
             ctx.logger().warn("Cannot verify world '{}'; keeping the record", world, e);
             return true;

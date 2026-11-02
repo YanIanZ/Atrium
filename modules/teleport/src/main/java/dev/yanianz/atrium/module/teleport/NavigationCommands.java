@@ -226,7 +226,9 @@ final class NavigationCommands {
         Player self = cmds.player(c.getSource());
         World destination = c.getArgument("world", World.class);
         // Never leave the players in another world than the one that was asked for.
-        Location target = service.storedSpawn(destination).flatMap(StoredLocation::toLocation)
+        Location target = service.storedSpawn(null, destination)
+                .filter(spawn -> spawn.world().equals(destination.getName()))
+                .flatMap(StoredLocation::toLocation)
                 .orElseGet(destination::getSpawnLocation);
         World source = self.getWorld();
         List<Player> players = List.copyOf(source.getPlayers());

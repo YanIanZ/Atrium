@@ -1,0 +1,41 @@
+money: '109.75'
+nickname: Bobby
+lastlocation:
+  world: 89050808-64e9-4f0b-bfaf-883cebd1ad0c
+  world-name: world
+  x: 12.0
+  y: -60.0
+  z: 12.0
+  yaw: 45.0
+  pitch: 0.0
+logoutlocation:
+  world: 89050808-64e9-4f0b-bfaf-883cebd1ad0c
+  world-name: world
+  x: 12.0
+  y: -60.0
+  z: 12.0
+  yaw: 45.0
+  pitch: 0.0
+teleportenabled: true
+teleportauto: false
+godmode: false
+flymode: false
+muted: true
+mute-reason: spam
+jailed: false
+ip-address: 127.0.0.1
+afk: false
+socialspy: false
+npc: false
+last-account-name: Bob
+powertoolsenabled: true
+accepting-pay: true
+baltop-exempt: false
+timestamps:
+  lastteleport: 0
+  lastheal: 0
+  mute: 4102444800000
+  jail: 0
+  onlinejail: 0
+  logout: 1762000000000
+  login: 1761990000000

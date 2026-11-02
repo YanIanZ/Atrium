@@ -49,8 +49,12 @@ final class EssentialsMoney {
         }
         try {
             BigDecimal value = new BigDecimal(text);
-            if (value.signum() < 0 || value.compareTo(MAX) > 0 || value.scale() > MAX_SCALE) {
+            if (value.signum() < 0 || value.compareTo(MAX) > 0) {
                 return Optional.empty();
+            }
+            if (value.scale() > MAX_SCALE) {
+                // Old files stored the balance as a double (0.30000000000000004); keep the meaningful digits.
+                value = value.setScale(MAX_SCALE, java.math.RoundingMode.HALF_EVEN).stripTrailingZeros();
             }
             return Optional.of(value);
         } catch (NumberFormatException e) {

@@ -45,7 +45,8 @@ public final class TeleportModule implements AtriumModule {
         RequestCommands requests = new RequestCommands(ctx, service, config);
         requests.register();
         ctx.listen(requests);
-        SpawnCommands spawns = new SpawnCommands(ctx, service, config);
+        StoredTeleports storedTeleports = new StoredTeleports(ctx, service);
+        SpawnCommands spawns = new SpawnCommands(ctx, service, storedTeleports, config);
         spawns.register();
         ctx.listen(spawns);
         new NavigationCommands(ctx, service, config).register();
@@ -68,7 +69,7 @@ public final class TeleportModule implements AtriumModule {
         ctx.service(TeleportService.class, service);
         ctx.service(ExtendedTeleportService.class, service);
         // Stored destinations in worlds that are not loaded (AWF/profile worlds) go through WorldResolver.
-        ctx.service(dev.yanianz.atrium.api.teleport.StoredTeleportService.class, new StoredTeleports(ctx, service));
+        ctx.service(dev.yanianz.atrium.api.teleport.StoredTeleportService.class, storedTeleports);
         // Import tools: spawn points and /back entries (the importer module).
         TeleportAdmin admin = new TeleportAdmin(ctx, service, store, config);
         ctx.service(dev.yanianz.atrium.api.teleport.SpawnAdminService.class, admin);
@@ -106,7 +107,9 @@ public final class TeleportModule implements AtriumModule {
                 "Send /tpa requests without a distance limit");
         ctx.permission(SpawnCommands.PERM_SPAWN, PermissionDefault.TRUE, "Teleport to the spawn");
         ctx.permission(SpawnCommands.PERM_SPAWN_OTHERS, PermissionDefault.OP, "Send other players to the spawn");
-        ctx.permission(SpawnCommands.PERM_SETSPAWN, PermissionDefault.OP, "Set spawn points");
+        ctx.permission(SpawnCommands.PERM_SPAWN_INFO, PermissionDefault.OP,
+                "Show which spawn /spawn, the first join and the respawn use (/spawn info)");
+        ctx.permission(SpawnCommands.PERM_SETSPAWN, PermissionDefault.OP, "Set and remove spawn points");
         ctx.permission(TeleportServiceImpl.PERM_WARMUP_BYPASS, PermissionDefault.OP, "Skip the teleport warmup");
         ctx.permission(TeleportServiceImpl.PERM_COOLDOWN_BYPASS, PermissionDefault.OP, "Ignore teleport cooldowns");
         ctx.permission(TeleportServiceImpl.PERM_TPBYPASS, PermissionDefault.OP,

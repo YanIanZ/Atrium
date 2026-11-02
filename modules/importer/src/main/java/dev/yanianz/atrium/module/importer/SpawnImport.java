@@ -3,6 +3,7 @@ package dev.yanianz.atrium.module.importer;
 import dev.yanianz.atrium.api.teleport.SpawnAdminService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import org.jspecify.annotations.Nullable;
 
@@ -18,9 +19,20 @@ final class SpawnImport {
      * {@code unsupported} a point Atrium has no slot for (per-group spawns), reported with its location.
      */
     record Spawn(String label, SpawnAdminService.Kind kind, @Nullable String world, @Nullable StoredLocation location,
-            @Nullable String problem, @Nullable String unsupported) {
+            @Nullable String problem, @Nullable String unsupported, @Nullable String group) {
+        Spawn(String label, SpawnAdminService.Kind kind, @Nullable String world, @Nullable StoredLocation location,
+                @Nullable String problem, @Nullable String unsupported) {
+            this(label, kind, world, location, problem, unsupported, null);
+        }
+
         static Spawn ok(String label, SpawnAdminService.Kind kind, StoredLocation location) {
             return new Spawn(label, kind, null, location, null, null);
+        }
+
+        /** A group spawn ({@code /spawn} uses it for players with {@code atrium.spawn.group.<group>}). */
+        static Spawn group(String label, String group, StoredLocation location) {
+            return new Spawn(label, SpawnAdminService.Kind.DEFAULT, null, location, null, null,
+                    group.trim().toLowerCase(Locale.ROOT));
         }
 
         static Spawn invalid(String label, SpawnAdminService.Kind kind, String problem) {
@@ -74,6 +86,10 @@ final class SpawnImport {
             report.unsupported(ImportCategory.SPAWN, 1, "teleport module (SpawnAdminService) not available");
             return;
         }
+        if (spawn.group() != null) {
+            applyGroup(spawn, location, admin, report, dryRun, overwrite, env);
+            return;
+        }
         StoredLocation existing = admin.spawn(spawn.kind(), spawn.world()).orElse(null);
         // With per-world spawns on, /spawn in a world with its own spawn ignores the default spawn. The imported
         // default spawn must therefore also replace the per-world spawn of its own world, or /spawn would keep
@@ -116,6 +132,46 @@ final class SpawnImport {
         } catch (RuntimeException failure) {
             report.failed(ImportCategory.SPAWN, spawn.label(), failure.getMessage());
         }
+    }
+
+    private static void applyGroup(Spawn spawn, StoredLocation location, SpawnAdminService admin, ImportReport report,
+            boolean dryRun, boolean overwrite, Env env) {
+        String group = spawn.group();
+        StoredLocation existing = admin.groupSpawns().get(group);
+        if (location.equals(existing)) {
+            report.skipped(ImportCategory.SPAWN, 1, "already imported (same location)");
+            return;
+        }
+        if (existing != null && !overwrite) {
+            report.skipped(ImportCategory.SPAWN, 1, "Atrium already has this spawn set (use --overwrite)");
+            return;
+        }
+        if (dryRun) {
+            report.imported(ImportCategory.SPAWN, 1);
+            return;
+        }
+        try {
+            env.awaitWrite(admin.setGroupSpawn(group, location), "spawn " + spawn.label());
+            report.imported(ImportCategory.SPAWN, 1);
+            report.note("Group spawn '" + group + "' stored at " + describe(location) + " (used only with "
+                    + "spawn.group-spawns: true, for players with atrium.spawn.group." + group + ")");
+        } catch (RuntimeException failure) {
+            if (rootCause(failure) instanceof UnsupportedOperationException) {
+                report.unsupported(ImportCategory.SPAWN, 1, "group spawns need a newer teleport module");
+                report.issue(new ImportIssue(ImportCategory.SPAWN, spawn.label(), "not imported (group spawns are not "
+                        + "supported by the teleport module); it is at " + describe(location)));
+                return;
+            }
+            report.failed(ImportCategory.SPAWN, spawn.label(), failure.getMessage());
+        }
+    }
+
+    private static Throwable rootCause(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     static String describe(@Nullable StoredLocation location) {

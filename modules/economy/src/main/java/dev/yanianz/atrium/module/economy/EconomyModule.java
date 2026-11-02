@@ -106,6 +106,12 @@ public final class EconomyModule implements AtriumModule, Listener {
         refresh();
         Duration interval = Duration.ofMinutes(config.leaderboardRefreshMinutes);
         ctx.track(ctx.scheduler().asyncTimer(this::refresh, interval, interval));
+        Duration soon = Duration.ofSeconds(10);
+        ctx.track(ctx.scheduler().asyncTimer(() -> {
+            if (!refreshing.get() && store.takeRankingChanged()) {
+                refresh();
+            }
+        }, soon, soon));
         for (AtriumUser user : ctx.users().online()) {
             Player player = Bukkit.getPlayer(user.uuid());
             observe(store.online(user.uuid(), player == null ? null : player.getWorld().getName()));

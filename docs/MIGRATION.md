@@ -17,6 +17,9 @@ stored with Java object serialization are refused (see below).
 5. `/atrium-import <source> run`. Players who are online while their data is imported are skipped; run the
    import again after they log out.
 6. Run it again whenever you like: a repeated run only imports what is new.
+7. `/atrium-import verify <essentials|cmi>` compares the source with what Atrium has now (spawn, warps, homes,
+   balances, kits, jails) and lists every mismatch. `/spawn info` shows which spawn `/spawn`, the first join and
+   the respawn use, and whether its world is loaded.
 
 Run imports from the console. One import runs at a time; `/atrium-import status` shows progress and
 `/atrium-import cancel` stops it.
@@ -31,6 +34,7 @@ Run imports from the console. One import runs at a time; `/atrium-import status`
 | `/atrium-import pvx [dry-run\|run] [--only=vaults] [--overwrite]` | PlayerVaultsX vaults. |
 | `/atrium-import vanilla [dry-run\|run] [--overwrite]` | `banned-players.json` and `banned-ips.json`. |
 | `/atrium-import economy <plugin> [dry-run\|run] [--overwrite]` | Balances from another Vault economy provider. |
+| `/atrium-import verify <essentials\|cmi>` | Read-only: compares the source with Atrium and lists mismatches. |
 | `/atrium-import status` / `cancel` | Progress of the running import / stop it. |
 
 The default mode is `dry-run`. `--only=<a,b,...>` limits the run to some categories (tab completion lists the
@@ -50,7 +54,7 @@ source has no such data
 | `nicks` | ✔ database | ✔ `userdata/*.yml` | – | – | – |
 | `playtime` | ✔ database | – | – | – | – |
 | `holograms` | ✔ `Saves/Holograms.yml` | – | – | – | – |
-| `spawn` | ✔ `config.yml` (main and first-join spawn) | ◐ `Essentials/spawn.yml` | – | – | – |
+| `spawn` | ✔ `config.yml` (main and first-join spawn) | ✔ `Essentials/spawn.yml` (main, first-join, groups) | – | – | – |
 | `kits` | ◐ `Kits/*.yml` | ◐ `kits.yml` | – | – | – |
 | `jails` | ◐ `Saves/Jails.yml` | ◐ `jail.yml` / `jails.yml` | – | – | – |
 | `punishments` | ◐ mutes + vanilla ban lists | ✔ mutes, jail sentences, bans + vanilla ban lists | – | ✔ bans, temp bans, IP bans | – |
@@ -70,11 +74,22 @@ source has no such data
   map to Atrium's single switch `requirePerWarpPermission` in `modules/warps.yml` (the report says how many warps
   needed a permission); grant `atrium.warp.<name>` or `atrium.warps.all`. Invalid names are made valid and the
   rename is reported. CMI's `HideFromList`, page and slot layout are not carried over.
-- **Spawn.** CMI `Spawn.Main` becomes the default spawn and `Spawn.FirstSpawn` the first-join spawn.
-  EssentialsSpawn's `default` group becomes the default spawn and the group named in `newbies.spawnpoint` the
-  first-join spawn. Other EssentialsSpawn groups are reported with their location (Atrium has no per-group spawns;
-  use a per-world spawn or a warp). An existing Atrium spawn is kept unless `--overwrite`.
-- **Kits.** Items keep their slot, amount, display name, lore and enchantments; CMI's and EssentialsX's serialized
+- **Spawn.** Atrium has ONE global main spawn: `/spawn`, the first join and the respawn's `spawn` step use it in
+  every world (also unloaded SourbyCraft AWF, Multiverse or slime worlds, which are loaded on demand). CMI
+  `Spawn.Main` and EssentialsSpawn's `default` group (what `/setspawn` wrote) become that main spawn;
+  `Spawn.FirstSpawn` and the EssentialsSpawn group named in `newbies.spawnpoint` become the first-join spawn
+  (none set: new players get the main spawn). Other EssentialsSpawn/CMI groups are stored as group spawns but are
+  ignored unless `spawn.group-spawns: true` in `modules/teleport.yml`; then a player with
+  `atrium.spawn.group.<group>` gets that group's spawn. Per-world spawns are off too
+  (`spawn.per-world-spawns: false`); stored ones are kept but ignored. Bare `/setspawn` sets the main spawn, as in
+  EssentialsSpawn. An existing Atrium main spawn is kept unless `--overwrite`. EssentialsSpawn respawned players at
+  the spawn even with a bed; Atrium's default respawn order is `anchor, bed, spawn, home, worldspawn` (change
+  `spawn.respawn-order` to `[spawn, worldspawn]` to match). EssentialsX `spawn.yml` is read in both layouts: the
+  `spawns:` section (world UUID plus `world-name`) and the old one with the groups at the root (world name).
+- **Kits.** EssentialsX kits are read from `kits.yml`, every `kits/*.yml` and (old servers) `config.yml`. Item
+  names are EssentialsX aliases (`stonesword`, `dpickaxe`), resolved with the source's `items.json` and
+  `custom_items.yml`; `slot:<n>` prefixes, `@`-serialized items with line breaks, decimal delays (`1.5` s rounds up)
+  and the configured `currency-symbol` are understood. Items keep their slot, amount, display name, lore and enchantments; CMI's and EssentialsX's serialized
   items are imported whole. Item data that cannot be carried over (legacy data values, colours, potion and book
   data, custom model data from item maps, ...) is listed per item. Cooldown, cost (`MoneyCost`, `command-costs`),
   maximum uses and one-time kits (EssentialsX `delay: -1`) are kept; CMI's `Newbie.Kit` becomes a first-join kit.
@@ -89,13 +104,20 @@ source has no such data
   `essentials` or `vanilla`), so a punishment lifted in Atrium is not re-applied by a later run. A jail sentence
   whose jail exists neither in Atrium nor in the source is reported as invalid.
 - **Locations.** The last (CMI) or logout (EssentialsX) location becomes the newest `/back` entry of that player.
+- **Userdata (EssentialsX).** Both layouts are read: 2.19+ (`last-account-name`, `money` as a quoted decimal,
+  `homes.<name>`/`lastlocation`/`logoutlocation` with world UUID plus `world-name`, `mail` as a list of maps,
+  `ignore` as UUIDs, `muted`, `mute-reason`, `jail`, `timestamps.*`) and older files (`lastAccountName`, `money` as a
+  double, the world as a name, mail as plain `Sender: text` lines, ignore by name, `home.default` plus
+  `home.worlds`). A world UUID that is not loaded falls back to `world-name`. A world that is not loaded and not in
+  the world folder counts as existing when a world manager (AWF, Multiverse, slime) knows it.
 - **Mail.** Expired mail is skipped; identical mail (same sender, text and time) is never stored twice. Imported
   mail never expires and ignores the mailbox limit.
 - **Ignore lists.** Entries are added to the player's existing list, never removed, through the chat module's
   `IgnoreAdminService`; the import is therefore idempotent and safe to re-run. EssentialsX entries are UUIDs
   (older files: names) and CMI stores UUIDs separated by `;`; a name is resolved against accounts Atrium knows,
   and a name it does not know is reported as invalid. The player's own entry is dropped (`/ignore` refuses
-  self-ignores). The write is confirmed by a save before it is counted, so an ignore list is never reported as
+  self-ignores). A player who never joined the Atrium server has no account to hold the list yet: the list is
+  skipped (dry run and run alike) and imported by a later run after the first join. The write is confirmed by a save before it is counted, so an ignore list is never reported as
   imported when its save failed. Online players can be imported here: the write is one atomic component update,
   like `/ignore` itself, and cannot lose an entry the player adds at the same time.
 - **History** is counted in the report only: Atrium derives first-join and last-seen from its own sessions.

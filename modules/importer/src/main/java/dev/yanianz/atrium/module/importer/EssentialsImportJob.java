@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -352,37 +353,103 @@ final class EssentialsImportJob extends ExtendedImportJob {
         }
         String newbies = CmiNodeLocations.text(CmiNodeLocations.child(essentialsConfig(), "newbies"), "spawnpoint");
         importSpawns(EssentialsSpawnParser.plan(points, newbies, worldIndex()));
+        String priority = CmiNodeLocations.text(essentialsConfig(), "respawn-listener-priority");
+        if ((priority == null || !priority.trim().equalsIgnoreCase("none"))
+                && !CmiNodeLocations.truthy(essentialsConfig(), false, "respawn-at-home")) {
+            report.note("EssentialsSpawn respawned dead players at the spawn even when they had a bed. Atrium's default "
+                    + "respawn order is anchor, bed, spawn, home, worldspawn; to keep the old behaviour set "
+                    + "spawn.respawn-order to {\"*\": [spawn, worldspawn]} in modules/teleport.yml. /spawn info shows "
+                    + "the order in use.");
+        }
     }
 
     // ---- kits ----
 
     private void importKits() {
-        Path file = findFile(essentialsFolder, "kits.yml", "kits.yaml");
-        if (file == null) {
-            file = findFile(essentialsFolder, "config.yml", "config.yaml");
+        // EssentialsX reads kits.yml and every kits/*.yml file (each with a kits: section); very old versions kept
+        // the kits in config.yml, which EssentialsUpgrade moves to kits.yml.
+        List<Path> files = new ArrayList<>();
+        Path kitsFile = findFile(essentialsFolder, "kits.yml", "kits.yaml");
+        if (kitsFile != null) {
+            files.add(kitsFile);
         }
-        if (file == null) {
-            report.note("Essentials kits.yml/config.yml not found; no kits to import");
-            return;
+        Path folder = essentialsFolder.resolve("kits");
+        if (Files.isDirectory(folder)) {
+            try (var stream = Files.list(folder)) {
+                stream.filter(Files::isRegularFile)
+                        .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".yml"))
+                        .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                        .forEach(files::add);
+            } catch (IOException e) {
+                ctx.logger().error("Listing Essentials kits in {} failed", folder, e);
+                report.failed(ImportCategory.KITS, "kits", "cannot list folder: " + describe(e));
+            }
         }
-        List<EssentialsKitsParser.ParsedKit> kits;
-        try {
-            kits = EssentialsKitsParser.parse(loadYaml(file));
-        } catch (Exception e) {
-            ctx.logger().error("Reading Essentials kits {} failed", file, e);
-            report.failed(ImportCategory.KITS, file.getFileName().toString(), "cannot read file: " + describe(e));
+        String symbol = CmiNodeLocations.text(essentialsConfig(), "currency-symbol");
+        Map<String, EssentialsKitsParser.ParsedKit> kits = new LinkedHashMap<>();
+        for (Path file : files) {
+            try {
+                for (EssentialsKitsParser.ParsedKit kit : EssentialsKitsParser.parse(loadYaml(file), symbol)) {
+                    String key = kit.name() == null ? "?" + kits.size() : kit.name().toLowerCase(Locale.ROOT);
+                    kits.put(key, kit); // like Essentials: a later file replaces a kit of the same name
+                }
+            } catch (Exception e) {
+                ctx.logger().error("Reading Essentials kits {} failed", file, e);
+                report.failed(ImportCategory.KITS, file.getFileName().toString(), "cannot read file: " + describe(e));
+            }
+        }
+        if (kits.isEmpty()) {
+            for (EssentialsKitsParser.ParsedKit kit : EssentialsKitsParser.parse(essentialsConfig(), symbol)) {
+                kits.put(kit.name() == null ? "?" + kits.size() : kit.name().toLowerCase(Locale.ROOT), kit);
+            }
+        }
+        if (kits.isEmpty()) {
+            report.note("No Essentials kits found (kits.yml, kits/*.yml, config.yml)");
             return;
         }
         ConfigurationNode costs = CmiNodeLocations.child(essentialsConfig(), "command-costs");
+        EssentialsItemDb itemDb = itemDb();
         List<KitRecord> records = new ArrayList<>();
-        for (EssentialsKitsParser.ParsedKit kit : kits) {
-            records.add(kitRecord(kit, costs));
+        for (EssentialsKitsParser.ParsedKit kit : kits.values()) {
+            records.add(kitRecord(kit, costs, itemDb));
         }
         report.note("Essentials kit permissions essentials.kits.<name> become atrium.kit.<name>");
         importKits(records);
     }
 
+    /** Essentials' item aliases (items.json, custom_items.yml) of the source server; empty when missing. */
+    private EssentialsItemDb itemDb() {
+        Path items = findFile(essentialsFolder, "items.json");
+        Path custom = findFile(essentialsFolder, "custom_items.yml");
+        try {
+            EssentialsItemDb db = EssentialsItemDb.parse(items == null ? null : Files.readString(items),
+                    custom == null ? null : loadYaml(custom));
+            if (items == null) {
+                report.note("Essentials items.json not found: kit items must use Bukkit material names");
+            }
+            return db;
+        } catch (Exception e) {
+            ctx.logger().warn("Reading Essentials items.json failed; kit item aliases are not resolved", e);
+            report.note("Essentials items.json could not be read (" + describe(e) + "): kit item aliases such as "
+                    + "'dpickaxe' are not resolved");
+            return EssentialsItemDb.empty();
+        }
+    }
+
     static KitRecord kitRecord(EssentialsKitsParser.ParsedKit kit, ConfigurationNode costs) {
+        return kitRecord(kit, costs, EssentialsItemDb.empty());
+    }
+
+    static KitRecord kitRecord(EssentialsKitsParser.ParsedKit kit, ConfigurationNode costs, EssentialsItemDb itemDb) {
+        if (kit.ok()) {
+            List<KitItemSpec> specs = kit.specs().stream()
+                    .map(spec -> spec.material() == null ? spec : new KitItemSpec(spec.slot(),
+                            itemDb.material(spec.material()), spec.amount(), spec.name(), spec.lore(),
+                            spec.enchantments(), spec.serialized(), spec.unsupported(), spec.problem()))
+                    .toList();
+            kit = new EssentialsKitsParser.ParsedKit(kit.name(), kit.items(), kit.delaySeconds(), kit.money(),
+                    kit.problem(), kit.oneTime(), specs, kit.commands(), kit.sourceName());
+        }
         if (!kit.ok()) {
             return new KitRecord(kit.name() == null ? "?" : kit.name(), kit.name() == null ? "?" : kit.name(), List.of(), 0,
                     BigDecimal.ZERO, null, -1, false, false, null, List.of(), kit.problem());

@@ -33,8 +33,17 @@ final class TeleportStore {
     static final String DEFAULT_SPAWN = "default";
     static final String FIRST_JOIN_SPAWN = "first-join";
 
+    /** Prefix of per-world spawn ids. */
+    static final String WORLD_PREFIX = "world:";
+    /** Prefix of group spawn ids ({@code group:<lower-case name>}). */
+    static final String GROUP_PREFIX = "group:";
+
     static String worldSpawnId(String world) {
-        return "world:" + world;
+        return WORLD_PREFIX + world;
+    }
+
+    static String groupSpawnId(String group) {
+        return GROUP_PREFIX + group.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private final Database db;

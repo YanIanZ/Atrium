@@ -1,0 +1,6 @@
+kits:
+  vip:
+    delay: -1
+    items:
+    - diamond 3
+    - golden_apple 2

@@ -61,12 +61,61 @@ class SpawnImportTest {
             return perWorld;
         }
 
+        @Override
+        public Map<String, StoredLocation> groupSpawns() {
+            Map<String, StoredLocation> out = new LinkedHashMap<>();
+            stored.forEach((id, location) -> {
+                if (id.startsWith("group:")) {
+                    out.put(id.substring(6), location);
+                }
+            });
+            return out;
+        }
+
+        @Override
+        public CompletableFuture<Void> setGroupSpawn(String group, StoredLocation location) {
+            writes.add("group:" + group);
+            stored.put("group:" + group, location);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public Map<String, StoredLocation> worldSpawns() {
+            Map<String, StoredLocation> out = new LinkedHashMap<>();
+            stored.forEach((id, location) -> {
+                if (id.startsWith("world:")) {
+                    out.put(id.substring(6), location);
+                }
+            });
+            return out;
+        }
+
         /** Where /spawn sends a player standing in {@code world}. */
         StoredLocation effective(String world) {
             if (perWorld && stored.containsKey("world:" + world)) {
                 return stored.get("world:" + world);
             }
             return stored.get("DEFAULT");
+        }
+    }
+
+    /** A teleport module from before group spawns: the API's default methods. */
+    static final class OldSpawnAdmin implements SpawnAdminService {
+        final FakeSpawnAdmin delegate = new FakeSpawnAdmin();
+
+        @Override
+        public Optional<StoredLocation> spawn(Kind kind, String world) {
+            return delegate.spawn(kind, world);
+        }
+
+        @Override
+        public CompletableFuture<Void> setSpawn(Kind kind, String world, StoredLocation location) {
+            return delegate.setSpawn(kind, world, location);
+        }
+
+        @Override
+        public boolean perWorldSpawns() {
+            return true;
         }
     }
 
@@ -104,7 +153,7 @@ class SpawnImportTest {
         return YamlConfigurationLoader.builder().path(path).build().load();
     }
 
-    private static ImportReport run(SpawnImport.Plan plan, FakeSpawnAdmin admin, boolean dryRun, boolean overwrite) {
+    private static ImportReport run(SpawnImport.Plan plan, SpawnAdminService admin, boolean dryRun, boolean overwrite) {
         ImportReport report = new ImportReport();
         plan.notes().forEach(report::note);
         for (SpawnImport.Spawn spawn : plan.spawns()) {
@@ -149,18 +198,55 @@ class SpawnImportTest {
     }
 
     @Test
-    void essentialsImportsDefaultAndNewbieSpawnAndReportsGroups() throws Exception {
+    void essentialsImportsDefaultNewbieAndGroupSpawns() throws Exception {
         FakeSpawnAdmin admin = new FakeSpawnAdmin();
         ImportReport report = run(essentialsPlan("essentials-spawn.yml"), admin, false, false);
 
         assertLocation(new StoredLocation("world", 12.5, 72, -340.5, -90f, 12.5f), admin.stored.get("DEFAULT"));
         assertLocation(new StoredLocation("world", 200.5, 80, 200.5, 45f, -5f), admin.stored.get("FIRST_JOIN"));
+        assertLocation(new StoredLocation("world_nether", 10.5, 65, 10.5, 180f, 0f), admin.stored.get("group:vip"));
         var counters = report.counters(ImportCategory.SPAWN);
         assertEquals(3, counters.found, "default, newbies (as the first-join spawn), vip");
+        assertEquals(3, counters.imported);
+        assertTrue(report.notes().stream().anyMatch(n -> n.contains("atrium.spawn.group.<group>")),
+                "the report says how players get their group spawn: " + report.notes());
+    }
+
+    @Test
+    void groupSpawnsAreReportedWhenTheTeleportModuleIsOlder() throws Exception {
+        OldSpawnAdmin admin = new OldSpawnAdmin();
+        ImportReport report = run(essentialsPlan("essentials-spawn.yml"), admin, false, false);
+        var counters = report.counters(ImportCategory.SPAWN);
         assertEquals(2, counters.imported);
-        assertEquals(1, counters.unsupported, "the other group is reported with its location, never dropped silently");
+        assertEquals(1, counters.unsupported, "never dropped silently");
         assertTrue(report.issues(ImportCategory.SPAWN).stream()
                 .anyMatch(i -> i.subject().equals("group vip") && i.message().contains("world_nether 10 65 10")));
+    }
+
+    @Test
+    void essentialsSpawnFileWrittenByRealEssentialsX() throws Exception {
+        // spawn.yml in the layout EssentialsSpawn 2.22.0 writes (default, newbies and vip groups); the real
+        // EssentialsX 2.22.0 + EssentialsXSpawn loaded it without errors. Its world UUID is unknown here, so the
+        // world-name is used.
+        FakeSpawnAdmin admin = new FakeSpawnAdmin();
+        ImportReport report = run(EssentialsSpawnParser.plan(EssentialsSpawnParser.parse(yaml("essentials-2.22-spawn.yml")),
+                "newbies", WORLDS), admin, false, false);
+        assertLocation(new StoredLocation("world", 8.5, -60, 8.5, 135.5f, 10.25f), admin.stored.get("DEFAULT"));
+        assertLocation(new StoredLocation("world", -20.5, -60, 40.5, 0f, 0f), admin.stored.get("group:vip"));
+        assertLocation(new StoredLocation("world", 30.5, -60, 30.5, -45f, 0f), admin.stored.get("FIRST_JOIN"));
+        assertEquals(3, report.counters(ImportCategory.SPAWN).imported);
+        assertNull(admin.stored.get("group:newbies"), "the newbies group is the first-join spawn, not a group spawn");
+    }
+
+    @Test
+    void essentialsLegacyRootLevelGroups() throws Exception {
+        // EssentialsSpawn before the spawns: section kept every group at the root with the world name.
+        List<EssentialsSpawnParser.SpawnPoint> points = EssentialsSpawnParser.parse(yaml("essentials-spawn-legacy.yml"));
+        assertEquals(List.of("default", "admin"), points.stream().map(EssentialsSpawnParser.SpawnPoint::group).toList());
+        FakeSpawnAdmin admin = new FakeSpawnAdmin();
+        run(EssentialsSpawnParser.plan(points, "newbies", WORLDS), admin, false, false);
+        assertLocation(new StoredLocation("world", 100.5, 65, -20.5, 90f, 0f), admin.stored.get("DEFAULT"));
+        assertLocation(new StoredLocation("world_nether", 1.5, 70, 1.5, 0f, 0f), admin.stored.get("group:admin"));
     }
 
     @Test
@@ -196,7 +282,7 @@ class SpawnImportTest {
         admin.writes.clear();
         ImportReport again = run(essentialsPlan("essentials-spawn.yml"), admin, false, false);
         assertTrue(admin.writes.isEmpty(), "a re-run writes nothing");
-        assertEquals(2, again.counters(ImportCategory.SPAWN).skipped);
+        assertEquals(3, again.counters(ImportCategory.SPAWN).skipped);
         assertTrue(again.reasons(ImportCategory.SPAWN).keySet().stream().anyMatch(r -> r.contains("already imported")),
                 "an identical spawn is reported as already imported: " + again.reasons(ImportCategory.SPAWN));
     }
@@ -212,8 +298,8 @@ class SpawnImportTest {
         assertEquals(old, admin.effective("world"), "without --overwrite the existing spawn of 'world' is kept");
         assertTrue(plain.reasons(ImportCategory.SPAWN).keySet().stream().anyMatch(r -> r.contains("--overwrite")),
                 "and the report says why the imported spawn is not used: " + plain.reasons(ImportCategory.SPAWN));
-        assertEquals(1, plain.counters(ImportCategory.SPAWN).imported,
-                "only the first-join spawn is new; the default spawn is shadowed and therefore skipped");
+        assertEquals(2, plain.counters(ImportCategory.SPAWN).imported,
+                "first-join and group spawn are new; the default spawn is shadowed and therefore skipped");
 
         run(essentialsPlan("essentials-spawn.yml"), admin, false, true);
         assertLocation(new StoredLocation("world", 12.5, 72, -340.5, -90f, 12.5f), admin.effective("world"));
@@ -223,17 +309,16 @@ class SpawnImportTest {
     // ---- CMI ----
 
     @Test
-    void cmiImportsMainAndFirstSpawnAndReportsGroups() throws Exception {
+    void cmiImportsMainFirstAndGroupSpawns() throws Exception {
         FakeSpawnAdmin admin = new FakeSpawnAdmin();
         ImportReport report = run(CmiSpawnParser.plan(CmiSpawnParser.parse(yaml("cmi-config.yml"))), admin, false, false);
         assertLocation(new StoredLocation("world", -15.5, 71, 24.5, -89.4f, 12.9f), admin.stored.get("DEFAULT"));
         assertLocation(new StoredLocation("world", 100.5, 70, -50.5, 180f, -10f), admin.stored.get("FIRST_JOIN"));
+        assertEquals("world_nether", admin.stored.get("group:vip").world());
         var counters = report.counters(ImportCategory.SPAWN);
         assertEquals(3, counters.found, "main, first spawn and the vip group spawn");
-        assertEquals(2, counters.imported);
-        assertEquals(1, counters.unsupported);
-        assertTrue(report.issues(ImportCategory.SPAWN).stream()
-                .anyMatch(i -> i.subject().contains("vip") && i.message().contains("world_nether 10 65 10")));
+        assertEquals(3, counters.imported);
+        assertEquals(0, counters.unsupported);
     }
 
     @Test

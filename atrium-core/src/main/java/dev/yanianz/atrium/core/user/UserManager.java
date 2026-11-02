@@ -224,7 +224,15 @@ public final class UserManager implements UserService, Listener {
     }
 
     private CompletableFuture<Optional<CoreUser>> loadFromStorage(UUID uuid) {
-        return loading.computeIfAbsent(uuid, id -> database.query(c -> {
+        // Not computeIfAbsent: a query that completes on the calling thread would run the removal below inside
+        // the mapping function ("IllegalStateException: Recursive update", seen with imports on the I/O thread).
+        CompletableFuture<Optional<CoreUser>> created = new CompletableFuture<>();
+        CompletableFuture<Optional<CoreUser>> running = loading.putIfAbsent(uuid, created);
+        if (running != null) {
+            return running;
+        }
+        UUID id = uuid;
+        database.query(c -> {
                     try (PreparedStatement ps = c.prepareStatement("SELECT name, first_join, last_seen, locale, last_ip FROM "
                             + database.table("users") + " WHERE uuid = ?")) {
                         ps.setString(1, id.toString());
@@ -244,7 +252,15 @@ public final class UserManager implements UserService, Listener {
                 .thenCompose(found -> found.isEmpty()
                         ? CompletableFuture.completedFuture(found)
                         : loadComponents(found.get()).thenApply(v -> found))
-                .whenComplete((r, t) -> loading.remove(id)));
+                .whenComplete((result, error) -> {
+                    loading.remove(id, created);
+                    if (error != null) {
+                        created.completeExceptionally(error);
+                    } else {
+                        created.complete(result);
+                    }
+                });
+        return created;
     }
 
     private CompletableFuture<Void> loadComponents(CoreUser user) {

@@ -75,6 +75,16 @@ abstract class ExtendedImportJob extends ImportJob {
         }
     }
 
+    /** Whether Atrium has an account (a joined player) for this UUID; {@code true} when that cannot be checked. */
+    private boolean hasAccount(UUID uuid) {
+        try {
+            return await(ctx.users().load(uuid), ImportCategory.SOURCE).isPresent();
+        } catch (StepFailed failure) {
+            ctx.logger().warn("Checking the Atrium account of {} failed", uuid, failure);
+            return true;
+        }
+    }
+
     /** Adds a report note only the first time {@code key} is seen. */
     protected void noteOnce(String key, String note) {
         if (notedOnce.add(key)) {
@@ -707,6 +717,13 @@ abstract class ExtendedImportJob extends ImportJob {
             report.skipped(ImportCategory.IGNORE, already, "already ignored");
         }
         int planned = targets.size() - already;
+        if (planned > 0 && !hasAccount(owner)) {
+            // The chat module keeps ignore lists on the player's account, which exists after the first join only.
+            // Same answer in a dry run and a real run; the ledger is untouched, so a later run imports it.
+            report.skipped(ImportCategory.IGNORE, planned, "player has not joined this server yet (no Atrium account); "
+                    + "run the import again after their first join");
+            return;
+        }
         if (options.dryRun()) {
             report.imported(ImportCategory.IGNORE, planned);
             return;

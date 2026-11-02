@@ -82,7 +82,8 @@ final class EssentialsUserParser {
     static UserFile parse(String fileName, ConfigurationNode root) {
         String id = fileId(fileName);
         UUID uuid = uuidFromId(id);
-        String name = text(root, "lastAccountName", "lastKnownName", "name");
+        // EssentialsX 2.19+ writes last-account-name (Configurate, dashed keys); older files lastAccountName.
+        String name = text(root, "last-account-name", "lastAccountName", "lastKnownName", "name");
         String label = name == null || name.isBlank() ? id : name;
 
         String nickname = rawText(root, "nickname");
@@ -112,7 +113,7 @@ final class EssentialsUserParser {
     private static List<RawHome> homes(ConfigurationNode root) {
         ConfigurationNode homes = child(root, "homes");
         if (homes == null || homes.virtual()) {
-            return List.of();
+            return legacyHomes(root);
         }
         if (!homes.isMap()) {
             return List.of(new RawHome(null, null, "homes is not a map"));
@@ -127,6 +128,33 @@ final class EssentialsUserParser {
             Optional<EssentialsLocations.EssLocation> location = EssentialsLocations.parse(entry.getValue());
             out.add(location.map(value -> new RawHome(name, value, null))
                     .orElseGet(() -> new RawHome(name, null, "invalid location for home '" + name + "'")));
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Pre-EssentialsX files: {@code home.default: <world>} plus one home per world under {@code home.worlds}.
+     * EssentialsUpgrade turns the default world's home into {@code home} and the others into the world name.
+     */
+    private static List<RawHome> legacyHomes(ConfigurationNode root) {
+        ConfigurationNode home = child(root, "home");
+        ConfigurationNode worlds = home == null || home.virtual() ? null : child(home, "worlds");
+        if (worlds == null || worlds.virtual() || !worlds.isMap()) {
+            return List.of();
+        }
+        String defaultWorld = text(home, "default");
+        List<RawHome> out = new ArrayList<>();
+        for (var entry : worlds.childrenMap().entrySet()) {
+            String world = String.valueOf(entry.getKey()).trim();
+            String name = defaultWorld != null && defaultWorld.equalsIgnoreCase(world)
+                    ? "home" : world.toLowerCase(Locale.ENGLISH);
+            Optional<EssentialsLocations.EssLocation> location = EssentialsLocations.parse(entry.getValue());
+            if (!HOME_NAME.matcher(name).matches()) {
+                out.add(new RawHome(null, null, "invalid home name '" + name + "'"));
+            } else {
+                out.add(location.map(value -> new RawHome(name, value, null))
+                        .orElseGet(() -> new RawHome(name, null, "invalid location for home '" + name + "'")));
+            }
         }
         return List.copyOf(out);
     }
@@ -261,6 +289,12 @@ final class EssentialsUserParser {
             return null;
         }
         String sender = text(node, "sender-name", "senderName", "sender_name", "sender");
+        if (child(node, "legacy").getBoolean(false) && (sender == null || sender.isBlank())) {
+            // A mail line from before 2.19 that EssentialsUpgrade wrapped unchanged: "legacy: true, message: <line>".
+            ParsedMail legacy = mailFromText(message);
+            return legacy == null ? null : new ParsedMail(legacy.senderName(), legacy.sender(), legacy.message(), 0L, 0L,
+                    child(node, "read").getBoolean(false));
+        }
         UUID senderId = uuidFromId(text(node, "sender-uuid", "senderUUID", "senderUuid", "sender_uuid"));
         return new ParsedMail(sender == null || sender.isBlank() ? "Unknown" : sender, senderId, message,
                 orZero(readLong(child(node, "timestamp", "time-sent", "timeSent", "sent"))),
@@ -291,6 +325,15 @@ final class EssentialsUserParser {
                         json.has("read") && json.get("read").isJsonPrimitive() && json.get("read").getAsBoolean());
             } catch (RuntimeException e) {
                 return new ParsedMail("Unknown", null, text, 0L, 0L, false);
+            }
+        }
+        String plain = text.replaceAll("(?i)[\u00a7&][0-9a-fk-or]", "").strip();
+        if (plain.startsWith("[") && plain.indexOf("] ") > 1 && plain.indexOf("] ") <= 33) {
+            // Old mailFormat "[sender] message".
+            int close = plain.indexOf("] ");
+            String sender = plain.substring(1, close).strip();
+            if (sender.matches("[A-Za-z0-9_ ]+")) {
+                return new ParsedMail(sender, null, plain.substring(close + 2), 0L, 0L, false);
             }
         }
         int colon = text.indexOf(": ");

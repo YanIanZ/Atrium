@@ -1,0 +1,17 @@
+# plugins/Essentials/spawn.yml from EssentialsSpawn before the spawns: section (pre EssentialsX 2.x upgrade):
+# one section per group at the root, the world as its folder name. EssentialsUpgrade
+# (updateSpawnsToNewSpawnsConfig) moves these under spawns:.
+default:
+  world: world
+  x: 100.5
+  y: 65.0
+  z: -20.5
+  yaw: 90.0
+  pitch: 0.0
+Admin:
+  world: world_nether
+  x: 1.5
+  y: 70.0
+  z: 1.5
+  yaw: 0.0
+  pitch: 0.0

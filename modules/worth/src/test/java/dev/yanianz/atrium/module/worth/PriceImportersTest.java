@@ -131,10 +131,20 @@ class PriceImportersTest {
                   wool:
                     '0': 20
                     '*': 2.5
+                  sand:
+                    '0': 3
+                  leaves:
+                    '0': 1
+                    '1': 2
                   stonebutton: -1
                 """;
         ImportParse parsed = parse(PriceImportSource.ESSENTIALS, "Essentials/worth.yml", worth);
-        assertEquals(2, parsed.candidates().size());
+        // Like Essentials on 1.13+: the '*' price, or the '0' price of a section with exactly one key.
+        assertEquals(4, parsed.candidates().size());
+        assertTrue(parsed.candidates().stream().anyMatch(c -> c.material().equals("wool")
+                && c.unitPrice().compareTo(new BigDecimal("2.5")) == 0));
+        assertTrue(parsed.candidates().stream().anyMatch(c -> c.material().equals("sand")
+                && c.unitPrice().compareTo(new BigDecimal("3")) == 0));
         assertEquals("diamondpickaxe", parsed.candidates().get(0).material());
         assertEquals(0, new BigDecimal("650.0").compareTo(parsed.candidates().get(0).unitPrice()));
         assertEquals("diamond", parsed.candidates().get(1).material());

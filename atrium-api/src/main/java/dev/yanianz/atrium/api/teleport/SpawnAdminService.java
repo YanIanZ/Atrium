@@ -1,5 +1,6 @@
 package dev.yanianz.atrium.api.teleport;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.jspecify.annotations.Nullable;
@@ -23,4 +24,23 @@ public interface SpawnAdminService {
 
     /** {@code true} when {@code /spawn} uses per-world spawns ({@link Kind#WORLD}) before the default one. */
     boolean perWorldSpawns();
+
+    /**
+     * Group spawns (EssentialsSpawn style) by lower-case group name. {@code /spawn} uses the group spawn of a
+     * player who has {@code atrium.spawn.group.<group>} set, before the default spawn. Empty when the
+     * implementation has no group spawns.
+     */
+    default Map<String, StoredLocation> groupSpawns() {
+        return Map.of();
+    }
+
+    /** Stores the spawn of one group (the name is lower-cased), replacing the previous one. */
+    default CompletableFuture<Void> setGroupSpawn(String group, StoredLocation location) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("group spawns are not supported"));
+    }
+
+    /** Per-world spawns ({@link Kind#WORLD}) by world name. */
+    default Map<String, StoredLocation> worldSpawns() {
+        return Map.of();
+    }
 }

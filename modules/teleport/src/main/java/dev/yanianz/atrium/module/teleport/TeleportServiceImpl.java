@@ -263,42 +263,66 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
         return store.saveSpawn(id, location).thenRun(() -> spawns.put(id, location));
     }
 
-    @Override
-    public Optional<Location> spawnLocation(@Nullable World world) {
+    CompletableFuture<Boolean> deleteSpawn(String id) {
+        return store.deleteSpawn(id).thenApply(deleted -> {
+            spawns.remove(id);
+            return deleted;
+        });
+    }
+
+    /** A copy of every stored spawn point by id. */
+    Map<String, StoredLocation> spawnsSnapshot() {
+        return Map.copyOf(spawns);
+    }
+
+    /** The spawn {@code /spawn} gives this player in this world (see {@link SpawnResolver}). */
+    SpawnResolver.Choice spawnChoice(@Nullable Player player, @Nullable World world) {
         TeleportConfig cfg = config.get();
-        if (cfg.spawn.perWorld && world != null) {
-            Optional<Location> own = spawn(TeleportStore.worldSpawnId(world.getName())).flatMap(StoredLocation::toLocation);
-            if (own.isPresent()) {
-                return own;
-            }
-        }
-        Optional<Location> fallback = spawn(TeleportStore.DEFAULT_SPAWN).flatMap(StoredLocation::toLocation);
-        if (fallback.isPresent()) {
-            return fallback;
-        }
-        if (cfg.spawn.perWorld && world != null) {
+        return SpawnResolver.forPlayer(spawns, cfg.spawn.perWorldSpawns, cfg.spawn.groupSpawns,
+                world == null ? null : world.getName(),
+                group -> player != null && inGroup(player, group), cfg.spawn.groupOrder);
+    }
+
+    /**
+     * Group membership for group spawns: {@code atrium.spawn.group.<group>} must be set for the player (an
+     * operator's implicit "every permission" does not count, or every operator would match every group).
+     */
+    static boolean inGroup(Player player, String group) {
+        String node = SpawnResolver.groupPermission(group);
+        return player.isPermissionSet(node) && player.hasPermission(node);
+    }
+
+    /** The vanilla fallback of a {@link SpawnResolver.Source#VANILLA} choice. */
+    static Optional<Location> vanillaSpawn(@Nullable World world) {
+        if (world != null) {
             return Optional.of(world.getSpawnLocation());
         }
         List<World> worlds = Bukkit.getWorlds();
         return worlds.isEmpty() ? Optional.empty() : Optional.of(worlds.getFirst().getSpawnLocation());
     }
 
-    /** A spawn set with /setspawn (world or default) only; the vanilla fallback is left out (respawn order). */
-    Optional<StoredLocation> storedSpawn(@Nullable World world) {
+    @Override
+    public Optional<Location> spawnLocation(@Nullable World world) {
         TeleportConfig cfg = config.get();
-        if (cfg.spawn.perWorld && world != null) {
-            Optional<StoredLocation> own = spawn(TeleportStore.worldSpawnId(world.getName()));
-            if (own.isPresent()) {
-                return own;
+        SpawnResolver.Choice choice = spawnChoice(null, world);
+        if (choice.stored()) {
+            Optional<Location> loaded = choice.location().toLocation();
+            if (loaded.isPresent()) {
+                return loaded;
             }
         }
-        return spawn(TeleportStore.DEFAULT_SPAWN);
+        return vanillaSpawn(cfg.spawn.perWorldSpawns ? world : null);
     }
 
-    /** First-join spawn, falling back to the default spawn. */
-    Optional<Location> firstJoinSpawn() {
-        return spawn(TeleportStore.FIRST_JOIN_SPAWN).flatMap(StoredLocation::toLocation)
-                .or(() -> spawn(TeleportStore.DEFAULT_SPAWN).flatMap(StoredLocation::toLocation));
+    /** The stored spawn of the respawn's {@code spawn} token for this player; the vanilla fallback is left out. */
+    Optional<StoredLocation> storedSpawn(@Nullable Player player, @Nullable World world) {
+        SpawnResolver.Choice choice = spawnChoice(player, world);
+        return Optional.ofNullable(choice.location());
+    }
+
+    /** First-join spawn, falling back to the main spawn; empty when neither is set. */
+    Optional<StoredLocation> firstJoinStored() {
+        return Optional.ofNullable(SpawnResolver.forFirstJoin(spawns).location());
     }
 
     // ---- pipeline ----

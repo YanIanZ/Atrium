@@ -1,0 +1,25 @@
+spawns:
+  default:
+    world: 89050808-64e9-4f0b-bfaf-883cebd1ad0c
+    world-name: world
+    x: 8.5
+    y: -60.0
+    z: 8.5
+    yaw: 135.5
+    pitch: 10.25
+  newbies:
+    world: 89050808-64e9-4f0b-bfaf-883cebd1ad0c
+    world-name: world
+    x: 30.5
+    y: -60.0
+    z: 30.5
+    yaw: -45.0
+    pitch: 0.0
+  vip:
+    world: 89050808-64e9-4f0b-bfaf-883cebd1ad0c
+    world-name: world
+    x: -20.5
+    y: -60.0
+    z: 40.5
+    yaw: 0.0
+    pitch: 0.0

@@ -6,6 +6,7 @@ import dev.yanianz.atrium.api.teleport.StoredLocation;
 import dev.yanianz.atrium.api.user.AtriumUser;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.module.ModuleContext;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -59,7 +60,26 @@ final class TeleportAdmin implements SpawnAdminService, BackHistoryAdminService 
 
     @Override
     public boolean perWorldSpawns() {
-        return config.get().spawn.perWorld;
+        return config.get().spawn.perWorldSpawns;
+    }
+
+    @Override
+    public Map<String, StoredLocation> groupSpawns() {
+        return SpawnResolver.withPrefix(service.spawnsSnapshot(), TeleportStore.GROUP_PREFIX);
+    }
+
+    @Override
+    public CompletableFuture<Void> setGroupSpawn(String group, StoredLocation location) {
+        Objects.requireNonNull(location, "location");
+        if (group == null || group.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("a group spawn needs a group name"));
+        }
+        return service.setSpawn(TeleportStore.groupSpawnId(group), location);
+    }
+
+    @Override
+    public Map<String, StoredLocation> worldSpawns() {
+        return SpawnResolver.withPrefix(service.spawnsSnapshot(), TeleportStore.WORLD_PREFIX);
     }
 
     @Override

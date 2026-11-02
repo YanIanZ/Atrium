@@ -191,6 +191,7 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
     private final Map<Key, BigDecimal> recentReads = Collections.synchronizedMap(new ReadCache(RECENT_READ_LIMIT));
     private CompletableFuture<Void> tail = CompletableFuture.completedFuture(null);
     private volatile boolean closed;
+    private final java.util.concurrent.atomic.AtomicBoolean rankingChanged = new java.util.concurrent.atomic.AtomicBoolean();
     final UserComponentType<AccountState> component;
 
     EconomyStore(Database db, EconomyConfig config, Logger logger) {
@@ -407,7 +408,22 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
         return change(key, null, amount, BigDecimal.ZERO, reason, "take");
     }
     CompletableFuture<TransactionResult> set(Key key, BigDecimal amount, String reason) {
-        return change(key, null, amount, BigDecimal.ZERO, reason, "set");
+        // A set (/eco set, imports) can move an account anywhere in /baltop: refresh it soon, not in minutes.
+        return change(key, null, amount, BigDecimal.ZERO, reason, "set").whenComplete((result, error) -> rankingChanged.set(true));
+    }
+
+    private static String cachedName(UUID id) {
+        try {
+            String name = org.bukkit.Bukkit.getOfflinePlayer(id).getName();
+            return name == null || name.isBlank() ? id.toString() : name;
+        } catch (RuntimeException e) {
+            return id.toString();
+        }
+    }
+
+    /** True once after a balance was set since the last call (the leaderboard should be refreshed). */
+    boolean takeRankingChanged() {
+        return rankingChanged.getAndSet(false);
     }
     @Override public CompletableFuture<TransactionResult> deposit(UUID id, BigDecimal amount, String reason) {
         return deposit(context(id), amount, reason);
@@ -591,7 +607,9 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
                     UUID id = UUID.fromString(rs.getString(1));
                     String name = rs.getString(2);
                     if (name == null) {
-                        name = id.toString();
+                        // An imported account of a player who has not joined since Atrium was installed: the
+                        // server's user cache (usercache.json) usually still knows the name.
+                        name = cachedName(id);
                     }
                     if (excludedNames != null && excludedNames.contains(name.toLowerCase(Locale.ROOT))) {
                         continue;

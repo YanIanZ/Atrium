@@ -30,9 +30,9 @@ import org.spongepowered.configurate.ConfigurationNode;
 final class CmiSpawnParser {
     private CmiSpawnParser() {}
 
-    /** {@code unsupported} is set for spawns Atrium has no slot for (group spawns). */
+    /** {@code group} is set for group spawns ({@code /cmi setspawn -g:<group>}). */
     record ParsedSpawn(String label, SpawnAdminService.Kind kind, StoredLocation location, String problem,
-            String unsupported) {
+            String group) {
         ParsedSpawn(String label, SpawnAdminService.Kind kind, StoredLocation location, String problem) {
             this(label, kind, location, problem, null);
         }
@@ -73,8 +73,7 @@ final class CmiSpawnParser {
                     }
                     ParsedSpawn parsed = read("group spawn " + group, SpawnAdminService.Kind.DEFAULT, entry.getValue());
                     spawns.add(parsed.ok() ? new ParsedSpawn(parsed.label(), parsed.kind(), parsed.location(), null,
-                            "per-group spawn (cmi.spawngroup." + group + "); Atrium has no group spawns "
-                                    + "(use a per-world spawn or a warp)") : parsed);
+                            group) : parsed);
                 }
             }
             ConfigurationNode first = CmiNodeLocations.child(spawn, "FirstSpawn", "firstSpawn", "FirstJoin");
@@ -104,9 +103,19 @@ final class CmiSpawnParser {
     static SpawnImport.Plan plan(Result parsed) {
         List<SpawnImport.Spawn> out = new ArrayList<>();
         List<String> notes = new ArrayList<>(parsed.notes());
+        boolean groups = false;
         for (ParsedSpawn spawn : parsed.spawns()) {
-            out.add(new SpawnImport.Spawn(spawn.label(), spawn.kind(), null, spawn.location(), spawn.problem(),
-                    spawn.unsupported()));
+            if (spawn.ok() && spawn.group() != null) {
+                groups = true;
+                out.add(SpawnImport.Spawn.group(spawn.label(), spawn.group(), spawn.location()));
+            } else {
+                out.add(new SpawnImport.Spawn(spawn.label(), spawn.kind(), null, spawn.location(), spawn.problem(), null));
+            }
+        }
+        if (groups) {
+            notes.add("CMI group spawns were imported but are ignored while spawn.group-spawns is false (the default: "
+                    + "one global main spawn). To use them, enable it in modules/teleport.yml and grant "
+                    + "atrium.spawn.group.<group> instead of cmi.spawngroup.<group>.");
         }
         if (out.isEmpty()) {
             notes.add("CMI config.yml has no Spawn.Main or Spawn.FirstSpawn location");

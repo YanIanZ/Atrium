@@ -1,0 +1,7 @@
+# EssentialsX 2.19+ after the mail upgrade (convertMailList): an old line wrapped as a legacy message.
+last-account-name: Upgraded
+money: '5'
+mail:
+- legacy: true
+  read: true
+  message: 'Notch: welcome back'

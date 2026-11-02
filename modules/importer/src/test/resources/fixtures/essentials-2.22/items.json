@@ -1,0 +1,28 @@
+#version: 2.22.0
+# Excerpt of the items.json EssentialsX 2.22.0 writes.
+{
+  "bread": {
+    "material": "BREAD"
+  },
+  "diamond_pickaxe": {
+    "material": "DIAMOND_PICKAXE"
+  },
+  "leather_helmet": {
+    "material": "LEATHER_HELMET"
+  },
+  "player_head": {
+    "material": "PLAYER_HEAD"
+  },
+  "stone_shovel": {
+    "material": "STONE_SHOVEL"
+  },
+  "stone_sword": {
+    "material": "STONE_SWORD"
+  },
+  "dpick": "diamond_pickaxe",
+  "dpickaxe": "diamond_pickaxe",
+  "lhelm": "leather_helmet",
+  "playerhead": "player_head",
+  "stoneshovel": "stone_shovel",
+  "stonesword": "stone_sword"
+}

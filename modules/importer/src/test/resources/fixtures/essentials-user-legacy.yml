@@ -1,0 +1,40 @@
+# Old Essentials userdata (before Configurate, 2.18 and older): camelCase keys, money as a YAML double,
+# the world as a name, mail as plain lines, ignore by name, and the even older home.default/home.worlds layout.
+lastAccountName: OldTimer
+money: 0.30000000000000004
+nickname: '&6Old'
+home:
+  default: world
+  worlds:
+    world:
+      world: world
+      x: 1.5
+      y: 64.0
+      z: 2.5
+      yaw: 0.0
+      pitch: 0.0
+    world_nether:
+      world: world_nether
+      x: 10.0
+      y: 40.0
+      z: 10.0
+      yaw: 0.0
+      pitch: 0.0
+lastlocation:
+  world: world
+  x: 5.0
+  y: 64.0
+  z: 5.0
+  yaw: 0.0
+  pitch: 0.0
+mail:
+- 'Notch: see you at spawn'
+- '§6[§rjeb_§6] §rhi there'
+ignore:
+- Griefer
+muted: true
+muteReason: caps
+timestamps:
+  mute: 4102444800000
+  login: 1500000000000
+  logout: 1500000100000

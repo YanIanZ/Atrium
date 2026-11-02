@@ -37,7 +37,54 @@ final class KitItemFactory {
             Map.entry("depthstrider", "depth_strider"), Map.entry("frostwalker", "frost_walker"),
             Map.entry("sweeping", "sweeping_edge"), Map.entry("sweeping_edge", "sweeping_edge"));
 
+    /** EssentialsX's enchantment names in kit lines (alias, vanilla key pairs), as its kits accept them. */
+    private static final String[] ESSENTIALS_ENCHANTMENTS = {
+            "alldamage", "sharpness", "alldmg", "sharpness", "sharp", "sharpness", "dal", "sharpness",
+            "ardmg", "bane_of_arthropods", "baneofarthropods", "bane_of_arthropods", "baneofarthropod", "bane_of_arthropods", "arthropod", "bane_of_arthropods",
+            "dar", "bane_of_arthropods", "undeaddamage", "smite", "du", "smite", "digspeed", "efficiency",
+            "minespeed", "efficiency", "cutspeed", "efficiency", "ds", "efficiency", "eff", "efficiency",
+            "durability", "unbreaking", "dura", "unbreaking", "d", "unbreaking", "highcrit", "thorns",
+            "thorn", "thorns", "highercrit", "thorns", "t", "thorns", "fireaspect", "fire_aspect",
+            "fire", "fire_aspect", "meleefire", "fire_aspect", "meleeflame", "fire_aspect", "fa", "fire_aspect",
+            "kback", "knockback", "kb", "knockback", "k", "knockback", "blockslootbonus", "fortune",
+            "fort", "fortune", "lbb", "fortune", "mobslootbonus", "looting", "mobloot", "looting",
+            "lbm", "looting", "oxygen", "respiration", "breathing", "respiration", "breath", "respiration",
+            "o", "respiration", "prot", "protection", "protect", "protection", "p", "protection",
+            "explosionsprotection", "blast_protection", "explosionprotection", "blast_protection", "expprot", "blast_protection", "blastprotection", "blast_protection",
+            "bprotection", "blast_protection", "bprotect", "blast_protection", "blastprotect", "blast_protection", "pe", "blast_protection",
+            "fallprotection", "feather_falling", "fallprot", "feather_falling", "featherfall", "feather_falling", "featherfalling", "feather_falling",
+            "pfa", "feather_falling", "fireprotection", "fire_protection", "flameprotection", "fire_protection", "fireprotect", "fire_protection",
+            "flameprotect", "fire_protection", "fireprot", "fire_protection", "flameprot", "fire_protection", "pf", "fire_protection",
+            "projectileprotection", "projectile_protection", "projprot", "projectile_protection", "pp", "projectile_protection", "silktouch", "silk_touch",
+            "softtouch", "silk_touch", "st", "silk_touch", "waterworker", "aqua_affinity", "aquaaffinity", "aqua_affinity",
+            "watermine", "aqua_affinity", "ww", "aqua_affinity", "firearrow", "flame", "flamearrow", "flame",
+            "af", "flame", "arrowdamage", "power", "arrowpower", "power", "ad", "power",
+            "arrowknockback", "punch", "arrowkb", "punch", "arrowpunch", "punch", "ak", "punch",
+            "infinitearrows", "infinity", "infarrows", "infinity", "infinite", "infinity", "unlimited", "infinity",
+            "unlimitedarrows", "infinity", "ai", "infinity", "luck", "luck_of_the_sea", "luckofsea", "luck_of_the_sea",
+            "luckofseas", "luck_of_the_sea", "rodluck", "luck_of_the_sea", "rodlure", "lure", "depthstrider", "depth_strider",
+            "depth", "depth_strider", "strider", "depth_strider", "frostwalker", "frost_walker", "frost", "frost_walker",
+            "walker", "frost_walker", "bindingcurse", "binding_curse", "bindcurse", "binding_curse", "binding", "binding_curse",
+            "bind", "binding_curse", "vanishingcurse", "vanishing_curse", "vanishcurse", "vanishing_curse", "vanishing", "vanishing_curse",
+            "vanish", "vanishing_curse", "sweepingedge", "sweeping_edge", "sweepedge", "sweeping_edge", "sweeping", "sweeping_edge",
+            "loyal", "loyalty", "return", "loyalty", "impale", "impaling", "oceandamage", "impaling",
+            "oceandmg", "impaling", "rip", "riptide", "tide", "riptide", "launch", "riptide",
+            "channelling", "channeling", "chanelling", "channeling", "chaneling", "channeling", "channel", "channeling",
+            "tripleshot", "multishot", "quickcharge", "quick_charge", "quickdraw", "quick_charge", "fastcharge", "quick_charge",
+            "fastdraw", "quick_charge", "soulspeed", "soul_speed", "soilspeed", "soul_speed", "sandspeed", "soul_speed",
+            "swiftsneak", "swift_sneak", "windburst", "wind_burst", "wind", "wind_burst", "burst", "wind_burst"
+    };
+    private static final Map<String, String> ESSENTIALS = pairs(ESSENTIALS_ENCHANTMENTS);
+
     private KitItemFactory() {}
+
+    private static Map<String, String> pairs(String[] flat) {
+        Map<String, String> out = new java.util.HashMap<>();
+        for (int i = 0; i + 1 < flat.length; i += 2) {
+            out.put(flat[i], flat[i + 1]);
+        }
+        return Map.copyOf(out);
+    }
 
     /** The vanilla key for an enchantment written in any of the supported spellings. */
     static String enchantmentKey(String raw) {
@@ -45,7 +92,32 @@ final class KitItemFactory {
         if (key.startsWith("minecraft:")) {
             key = key.substring("minecraft:".length());
         }
-        return ALIASES.getOrDefault(key, key);
+        String alias = ALIASES.get(key);
+        if (alias != null) {
+            return alias;
+        }
+        return ESSENTIALS.getOrDefault(key, key);
+    }
+
+    /**
+     * A material by Bukkit name, or by the name without underscores ({@code stonesword}) as old EssentialsX kits
+     * write it when no items.json alias resolved it.
+     */
+    static Material material(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        Material direct = Material.matchMaterial(name);
+        if (direct != null) {
+            return direct;
+        }
+        String compact = name.trim().toUpperCase(Locale.ROOT).replace("MINECRAFT:", "").replace("_", "").replace(" ", "");
+        for (Material material : Material.values()) {
+            if (!material.isLegacy() && material.name().replace("_", "").equals(compact)) {
+                return material;
+            }
+        }
+        return null;
     }
 
     /** Outcome of building one item: the stack, or the reason it could not be built, plus dropped data. */
@@ -64,7 +136,7 @@ final class KitItemFactory {
                 return new Built(null, "serialized item cannot be read: " + e.getMessage(), List.of());
             }
         }
-        Material material = spec.material() == null ? null : Material.matchMaterial(spec.material());
+        Material material = material(spec.material());
         if (material == null || !material.isItem() || material.isAir()) {
             return new Built(null, "unknown item '" + spec.material() + "'", List.of());
         }
