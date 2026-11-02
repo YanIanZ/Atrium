@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import net.kyori.adventure.audience.Audience;
@@ -39,6 +40,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
@@ -60,16 +62,23 @@ final class PunishmentManager implements PunishmentService, MuteService {
     private final ConfigHandle<ModerationConfig> config;
     private final PunishmentStore store;
     private final JailStore jails;
+    private final NoteStore notes;
     private final Messages messages;
     private final Logger logger;
     private final ActiveCache cache = new ActiveCache();
+    /** Jail cell each online prisoner was placed in; used for the least-occupied rule. */
+    private final Map<UUID, CellAssignment> cellAssignments = new ConcurrentHashMap<>();
+    private volatile MuteChatState muteChat = MuteChatState.NONE;
     private @Nullable ModerationSync sync;
+
+    private record CellAssignment(String jail, int cell) {}
 
     PunishmentManager(ModuleContext ctx, ConfigHandle<ModerationConfig> config, PunishmentStore store, JailStore jails) {
         this.ctx = ctx;
         this.config = config;
         this.store = store;
         this.jails = jails;
+        this.notes = new NoteStore(ctx.database());
         this.messages = ctx.messages();
         this.logger = ctx.logger();
     }
@@ -80,6 +89,10 @@ final class PunishmentManager implements PunishmentService, MuteService {
 
     JailStore jails() {
         return jails;
+    }
+
+    NoteStore notes() {
+        return notes;
     }
 
     ActiveCache cache() {
@@ -260,6 +273,9 @@ final class PunishmentManager implements PunishmentService, MuteService {
             case JAIL -> {
                 if (player != null) {
                     sendToJail(player, p);
+                    // Hooks run once, on the placement that started the sentence; an escape back into the
+                    // jail must not fire them again.
+                    runJailCommands(config.get().jail.commandsOnJail, player, p.context());
                     messages.send(player, "moderation.target.jailed", details(p, player));
                 } else if (target != null) {
                     // The player was jailed offline: remember that a release is still due, so the join
@@ -658,7 +674,65 @@ final class PunishmentManager implements PunishmentService, MuteService {
                         return null;
                     });
         }
-        teleport(player, location.get());
+        teleport(player, chooseCell(area.get(), player).orElse(location.get()));
+    }
+
+    /**
+     * Picks the cell a prisoner is placed in: the existing assignment while it still exists, else the result
+     * of the configured spread rule (shuffle + least occupied by default). Empty when the jail has no cells.
+     */
+    private Optional<Location> chooseCell(Jail jail, Player player) {
+        List<JailCells.Cell> cells = jails.cells(jail.name());
+        if (cells.isEmpty()) {
+            cellAssignments.remove(player.getUniqueId());
+            return Optional.empty();
+        }
+        World world = Bukkit.getWorld(jail.world());
+        int[] occupancy = new int[cells.size()];
+        cellAssignments.forEach((uuid, assignment) -> {
+            if (assignment.jail().equals(jail.name()) && !uuid.equals(player.getUniqueId())
+                    && assignment.cell() < occupancy.length) {
+                occupancy[assignment.cell()]++;
+            }
+        });
+        int index = JailCells.pick(cells, occupancy,
+                JailCells.Strategy.parse(config.get().jail.cellSelection),
+                java.util.concurrent.ThreadLocalRandom.current());
+        if (index < 0 || index >= cells.size()) {
+            return Optional.empty();
+        }
+        cellAssignments.put(player.getUniqueId(), new CellAssignment(jail.name(), index));
+        JailCells.Cell cell = cells.get(index);
+        World target = world == null ? player.getWorld() : world;
+        return Optional.of(new Location(target, cell.x(), cell.y(), cell.z(), cell.yaw(), cell.pitch()));
+    }
+
+    /** Forgets the cell assignment of a released player. */
+    void clearCellAssignment(UUID player) {
+        cellAssignments.remove(player);
+    }
+
+    /** Runs the configured console hooks of a jail event (empty by default). */
+    private void runJailCommands(List<String> commands, Player player, @Nullable String jailName) {
+        if (commands.isEmpty()) {
+            return;
+        }
+        String name = player.getName();
+        String uuid = player.getUniqueId().toString();
+        String jail = jailName == null ? "" : jailName;
+        for (String raw : commands) {
+            String line = raw.replace("{player}", name).replace("{uuid}", uuid).replace("{jail}", jail);
+            if (line.isBlank()) {
+                continue;
+            }
+            ctx.scheduler().global(() -> {
+                try {
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), line);
+                } catch (RuntimeException e) {
+                    logger.warn("Jail hook '{}' for {} failed", line, name, e);
+                }
+            });
+        }
     }
 
     /** Ensures a release is due even when the player is already inside the jail area. */
@@ -667,6 +741,78 @@ final class PunishmentManager implements PunishmentService, MuteService {
             logger.warn("Could not store the release marker of {}", player.getName(), t);
             return null;
         });
+    }
+
+    /**
+     * Adds back the time a jailed account spent offline when the sentence must not run while it is away.
+     * Call it at login, before expiry is evaluated, so a paused sentence is not released early.
+     */
+    CompletableFuture<Void> resumeAfterOffline(UUID target) {
+        return store.takeJailPause(target).thenCompose(found -> {
+            if (found.isEmpty()) {
+                return CompletableFuture.completedFuture(null);
+            }
+            Instant now = Instant.now();
+            Duration extension = JailClock.offlineExtension(found.get(), now);
+            if (extension.isZero()) {
+                return CompletableFuture.completedFuture(null);
+            }
+            return store.extendJail(target, extension.toMillis(), now).thenAccept(rows -> {
+                if (rows > 0) {
+                    cache.extendJail(target, extension);
+                }
+            });
+        }).exceptionally(t -> {
+            logger.warn("Could not resume the jail sentence of {} after an offline pause", target, t);
+            return null;
+        });
+    }
+
+    /**
+     * Adds {@code elapsed} to every AFK prisoner's sentence. Only registered when the sentence must not run
+     * while the player is AFK; the in-memory copy is extended first so the player is never released early.
+     */
+    void pauseAfkSentences(Duration elapsed) {
+        if (elapsed.isZero() || elapsed.isNegative()) {
+            return;
+        }
+        Optional<dev.yanianz.atrium.api.afk.AfkService> afk = ctx.services().get(dev.yanianz.atrium.api.afk.AfkService.class);
+        if (afk.isEmpty()) {
+            return;
+        }
+        Instant now = Instant.now();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            UUID id = player.getUniqueId();
+            Optional<Punishment> jail = cache.active(id, JAIL, now);
+            if (jail.isEmpty() || jail.get().expires() == null || !afk.get().isAfk(id)) {
+                continue;
+            }
+            cache.extendJail(id, elapsed);
+            store.extendJail(id, elapsed.toMillis(), now).exceptionally(t -> {
+                logger.warn("Could not pause the jail sentence of {}", player.getName(), t);
+                return null;
+            });
+        }
+    }
+
+    // ---- server-wide chat mute ----
+
+    MuteChatState muteChat() {
+        return muteChat;
+    }
+
+    /** Stores the chat mute deadline; the in-memory copy changes only after the write succeeded. */
+    CompletableFuture<Void> setMuteChat(MuteChatState state) {
+        return store.saveState(MuteChatState.stateKey(), state).thenRun(() -> muteChat = state);
+    }
+
+    /** Reads the stored chat mute at startup. */
+    CompletableFuture<Void> loadMuteChat() {
+        return store.loadState(MuteChatState.stateKey()).thenAccept(found -> muteChat = found.orElse(MuteChatState.NONE))
+                .exceptionally(t -> {
+                    logger.warn("Could not read the chat mute state; chat stays unmuted", t);
+                    return null;
+                });
     }
 
     /**
@@ -682,6 +828,7 @@ final class PunishmentManager implements PunishmentService, MuteService {
      * release location, then to the world spawn when configured. The stored row is always consumed.
      */
     void release(Player player, @Nullable String jailName) {
+        clearCellAssignment(player.getUniqueId());
         boolean storedAllowed = config.get().jail.releaseToStoredLocation;
         boolean spawnAllowed = config.get().jail.releaseToSpawn;
         if (!storedAllowed && !spawnAllowed) {
@@ -711,6 +858,9 @@ final class PunishmentManager implements PunishmentService, MuteService {
             }
             if (target != null) {
                 teleport(player, target);
+            }
+            if (jailName != null) {
+                runJailCommands(config.get().jail.commandsOnRelease, player, jailName);
             }
         }, null));
     }
@@ -788,8 +938,16 @@ final class PunishmentManager implements PunishmentService, MuteService {
     }
 
     TagResolver details(Punishment p, Audience audience) {
-        return details(p, messages.localeOf(audience), false);
+        return details(p, messages.localeOf(audience), seesAddresses(audience));
     }
+
+    /** Holders of {@code atrium.moderation.ip} always see the exact address. */
+    static boolean seesAddresses(@Nullable Audience audience) {
+        return audience instanceof org.bukkit.permissions.Permissible permissible
+                && permissible.hasPermission(PERM_IP);
+    }
+
+    static final String PERM_IP = "atrium.moderation.ip";
 
     TagResolver details(Punishment p, Audience audience, boolean staff) {
         return details(p, messages.localeOf(audience), staff);
@@ -798,10 +956,11 @@ final class PunishmentManager implements PunishmentService, MuteService {
     /** Placeholders describing a punishment. Addresses are masked unless {@code staff}. */
     TagResolver details(Punishment p, String locale, boolean staff) {
         Instant now = Instant.now();
+        boolean masking = config.get().feedback.maskPublicAddresses;
         Component permanent = messages.render(locale, "moderation.permanent");
         String target = p.targetName() != null ? p.targetName()
-                : p.ip() != null ? (staff ? p.ip() : IpAddresses.mask(p.ip())) : "?";
-        String ip = p.ip() == null ? "" : staff ? p.ip() : IpAddresses.mask(p.ip());
+                : p.ip() != null ? IpPrivacy.display(p.ip(), staff, masking) : "?";
+        String ip = p.ip() == null ? "" : IpPrivacy.display(p.ip(), staff, masking);
         Component duration = p.expires() == null ? permanent
                 : Component.text(Durations.format(Duration.between(p.created(), p.expires()), 3));
         Component remaining = p.expires() == null ? permanent

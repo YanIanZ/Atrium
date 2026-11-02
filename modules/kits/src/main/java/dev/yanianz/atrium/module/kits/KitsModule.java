@@ -127,6 +127,34 @@ public final class KitsModule implements AtriumModule, Listener {
         return sender.hasPermission(kit.permission()) || sender.hasPermission("atrium.kit.admin");
     }
 
+    /** Every kit the sender may use, before group filtering. */
+    private List<Kit> accessibleKits(CommandSender sender) {
+        return kits.kits().stream().filter(kit -> mayUse(sender, kit)).toList();
+    }
+
+    /** Kits shown in lists and browsers: one per group unless the higher tiers are inaccessible. */
+    private List<Kit> visibleKits(CommandSender sender) {
+        List<Kit> accessible = accessibleKits(sender);
+        return config.get().groupWeights ? KitGroups.visible(accessible) : accessible;
+    }
+
+    /**
+     * The kit a player must actually claim. In a group only the highest accessible weight is allowed; asking for
+     * a lower tier is refused with the name of the higher one instead of silently giving the wrong items.
+     */
+    private Kit resolveGroupKit(CommandContext<CommandSourceStack> c, Kit requested, CommandSender holder)
+            throws CommandSyntaxException {
+        if (!config.get().groupWeights || requested.group().isEmpty()) {
+            return requested;
+        }
+        Kit best = KitGroups.resolve(requested, accessibleKits(holder)).orElse(requested);
+        if (!best.name().equals(requested.name())) {
+            throw fail(c, "kits.group-replaced", Msg.unparsed("kit", requested.name()),
+                    Msg.unparsed("use", best.name()));
+        }
+        return best;
+    }
+
     private SuggestionProvider<CommandSourceStack> usableKits() {
         return (c, builder) -> {
             String remaining = builder.getRemainingLowerCase();
@@ -230,6 +258,28 @@ public final class KitsModule implements AtriumModule, Listener {
                     boolean value = BoolArgumentType.getBool(c, "value");
                     return edit(c, k -> k.withFirstJoin(value, System.currentTimeMillis()));
                 })));
+        edit.then(Cmds.literal("group").executes(c -> usage(c, "kits.usage-editkit"))
+                .then(Commands.argument("value", StringArgumentType.word())
+                        .suggests(Cmds.suggest(() -> {
+                            List<String> options = new java.util.ArrayList<>(KitGroups.groups(kits.kits()));
+                            options.add("none");
+                            return options;
+                        })).executes(c -> {
+                    String raw = StringArgumentType.getString(c, "value");
+                    if (!Kit.validGroup(raw)) throw fail(c, "kits.invalid-group");
+                    String group = raw.equalsIgnoreCase("none") ? "" : raw.toLowerCase(Locale.ROOT);
+                    return edit(c, k -> k.withGroup(group, System.currentTimeMillis()));
+                })));
+        edit.then(Cmds.literal("weight").executes(c -> usage(c, "kits.usage-editkit"))
+                .then(Commands.argument("value", IntegerArgumentType.integer(Kit.MIN_WEIGHT, Kit.MAX_WEIGHT))
+                        .suggests(Cmds.suggest(() -> List.of("0", "1", "2", "3", "5", "10")))
+                        .executes(c -> edit(c, k -> k.withWeight(IntegerArgumentType.getInteger(c, "value"),
+                                System.currentTimeMillis())))));
+        edit.then(Cmds.literal("showdespiteweight").executes(c -> usage(c, "kits.usage-editkit"))
+                .then(Commands.argument("value", BoolArgumentType.bool()).suggests(boolSuggestions()).executes(c -> {
+                    boolean value = BoolArgumentType.getBool(c, "value");
+                    return edit(c, k -> k.withShowDespiteWeight(value, System.currentTimeMillis()));
+                })));
         edit.then(Cmds.literal("icon").executes(this::setIcon));
         edit.then(Cmds.literal("clearicon").executes(this::clearIcon));
         edit.executes(this::info);
@@ -284,6 +334,7 @@ public final class KitsModule implements AtriumModule, Listener {
         if (!mayUse(player, kit)) {
             throw fail(c, "kits.no-permission", Msg.unparsed("kit", kit.name()));
         }
+        kit = resolveGroupKit(c, kit, player);
         UUIDPayer payer = payer(player, kit);
         kits.claim(player, kit, player, player, payer.uuid(), false);
         return Cmds.OK;
@@ -296,6 +347,8 @@ public final class KitsModule implements AtriumModule, Listener {
         if (!mayUse(sender, kit)) {
             throw fail(c, "kits.no-permission", Msg.unparsed("kit", kit.name()));
         }
+        // The group rule follows the receiver's permissions, not the sender's.
+        kit = resolveGroupKit(c, kit, target);
         UUIDPayer payer = sender instanceof Player p ? payer(p, kit) : new UUIDPayer(null);
         kits.claim(target, kit, sender, sender, payer.uuid(), false);
         return Cmds.OK;
@@ -316,8 +369,7 @@ public final class KitsModule implements AtriumModule, Listener {
         CommandSender sender = c.getSource().getSender();
         Map<String, KitUsage.Availability> statuses = new java.util.HashMap<>();
         List<Kit> visible = new java.util.ArrayList<>();
-        for (Kit kit : kits.kits()) {
-            if (!mayUse(sender, kit)) continue;
+        for (Kit kit : visibleKits(sender)) {
             if (sender instanceof Player player) {
                 KitUsage.Availability availability = kits.availability(player, kit, null);
                 statuses.put(kit.name(), availability);
@@ -507,7 +559,10 @@ public final class KitsModule implements AtriumModule, Listener {
                 Msg.unparsed("firstjoin", Boolean.toString(kit.firstJoin())),
                 Msg.unparsed("cost", kit.cost().toPlainString()),
                 Msg.unparsed("permission", kit.permission()),
-                Msg.unparsed("maxuses", kit.maxUses() < 0 ? "-1" : Integer.toString(kit.maxUses())));
+                Msg.unparsed("maxuses", kit.maxUses() < 0 ? "-1" : Integer.toString(kit.maxUses())),
+                Msg.unparsed("group", kit.group().isEmpty() ? "none" : kit.group()),
+                Msg.number("weight", kit.weight()),
+                Msg.unparsed("showdespiteweight", Boolean.toString(kit.showDespiteWeight())));
         return Cmds.OK;
     }
 

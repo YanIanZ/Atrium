@@ -164,7 +164,19 @@ final class ModerationCommands {
         ctx.command(spec(Cmds.literal("checkban", PERM + "checkban")
                 .executes(usage("moderation.usage.checkban"))
                 .then(Commands.argument("input", StringArgumentType.word()).suggests(this::suggestBanInputs)
-                        .executes(this::checkban)), "Show the details of a ban"));
+                        .executes(this::checkban)
+                        .then(Commands.literal("edit")
+                                .requires(Cmds.permission(PERM + "checkban.modify"))
+                                .then(id("id")
+                                        .then(Commands.literal("reason")
+                                                .then(Commands.argument("text", StringArgumentType.greedyString())
+                                                        .executes(this::checkbanReason)))
+                                        .then(Commands.literal("duration")
+                                                .then(Commands.argument("value", StringArgumentType.word())
+                                                        .suggests(Cmds.suggest(() -> List.of("1h", "1d", "7d", "30d",
+                                                                "permanent")))
+                                                        .executes(this::checkbanDuration)))))),
+                "Show the details of a ban (and edit its reason or duration)"));
         ctx.command(spec(Cmds.literal("seereason", PERM + "checkban")
                 .executes(usage("moderation.usage.seereason"))
                 .then(Commands.argument("input", StringArgumentType.word()).suggests(this::suggestBanInputs)
@@ -181,6 +193,38 @@ final class ModerationCommands {
                         .then(Commands.literal("list").executes(this::lockList))
                         .then(Commands.literal("clear").executes(this::lockClear))),
                 "Restrict the addresses an account may log in from"));
+
+        // Server-wide chat mute.
+        ctx.command(spec(Cmds.literal("mutechat", PERM + "mutechat")
+                .executes(this::muteChat)
+                .then(Commands.argument("args", StringArgumentType.greedyString())
+                        .suggests(Cmds.suggest(() -> List.of("30m", "1h", "6h", "1d", "-s")))
+                        .executes(this::muteChat)), "Mute chat for everyone (bypass with " + ModerationListener.MUTECHAT_BYPASS + ")"));
+        ctx.command(spec(Cmds.literal("unmutechat", PERM + "unmutechat")
+                .executes(this::unmuteChat)
+                .then(Commands.argument("args", StringArgumentType.greedyString())
+                        .suggests(Cmds.suggest(() -> List.of("-s")))
+                        .executes(this::unmuteChat)), "Lift the server-wide chat mute"));
+
+        // Staff notes.
+        ctx.command(spec(Cmds.literal("note", PERM + "note")
+                .executes(usage("moderation.usage.note"))
+                .then(player("player").executes(this::noteList)
+                        .then(Commands.literal("add")
+                                .requires(Cmds.permission(PERM + "note.add"))
+                                .then(Commands.argument("text", StringArgumentType.greedyString())
+                                        .executes(this::noteAdd)))
+                        .then(Commands.literal("list").executes(this::noteList)
+                                .then(Commands.argument("page", IntegerArgumentType.integer(1))
+                                        .executes(this::noteList)))
+                        .then(Commands.literal("remove")
+                                .requires(Cmds.permission(PERM + "note.remove"))
+                                .then(id("id").executes(this::noteRemove)))
+                        .then(Commands.literal("clear")
+                                .requires(Cmds.permission(PERM + "note.remove"))
+                                .executes(c -> noteClear(c, false))
+                                .then(Commands.literal("confirm").executes(c -> noteClear(c, true))))),
+                "Keep internal staff notes about a player"));
 
         // Jails.
         ctx.command(spec(Cmds.literal("setjail", PERM + "setjail")
@@ -223,6 +267,16 @@ final class ModerationCommands {
                                 .then(Commands.argument("duration", StringArgumentType.word())
                                         .suggests(Cmds.suggest(() -> List.of("none", "1h", "1d", "7d", "30d")))
                                         .executes(this::jailMaxSentence)))
+                        .then(Commands.literal("cell")
+                                .executes(this::jailCellList)
+                                .then(Commands.literal("list").executes(this::jailCellList))
+                                .then(Commands.literal("add").executes(this::jailCellAdd))
+                                .then(Commands.literal("remove")
+                                        .then(Commands.argument("index", IntegerArgumentType.integer(0))
+                                                .executes(this::jailCellRemove)))
+                                .then(Commands.literal("clear")
+                                        .executes(c -> jailCellClear(c, false))
+                                        .then(Commands.literal("confirm").executes(c -> jailCellClear(c, true)))))
                         .then(Commands.literal("chat")
                                 .then(Commands.argument("value", StringArgumentType.word())
                                         .suggests(Cmds.suggest(() -> List.of("true", "false")))
@@ -1221,10 +1275,122 @@ final class ModerationCommands {
     }
 
     private void sendBanDetails(CommandSender sender, Punishment p) {
-        messages.send(sender, "moderation.checkban.entry", manager.details(p, sender, true));
-        messages.send(sender, "moderation.checkban.reason", manager.details(p, sender, true));
+        messages.send(sender, "moderation.checkban.entry", manager.details(p, sender));
+        messages.send(sender, "moderation.checkban.reason", manager.details(p, sender));
         messages.send(sender, p.expires() == null ? "moderation.checkban.permanent" : "moderation.checkban.expiry",
-                manager.details(p, sender, true));
+                manager.details(p, sender));
+        if (sender.hasPermission(PERM + "checkban.modify")) {
+            messages.send(sender, "moderation.checkban.actions", Msg.component("actions", banActions(sender, p)));
+        }
+    }
+
+    /** Clickable edit buttons shown to holders of {@code atrium.moderation.checkban.modify}. */
+    private Component banActions(CommandSender sender, Punishment p) {
+        String subject = p.targetName() != null ? p.targetName() : p.ip() != null ? p.ip() : "?";
+        Component reason = suggestButton(sender, "moderation.checkban.action-reason",
+                "moderation.checkban.action-reason-hover", "/checkban " + subject + " edit " + p.id() + " reason ",
+                Msg.number("id", p.id()));
+        Component duration = suggestButton(sender, "moderation.checkban.action-duration",
+                "moderation.checkban.action-duration-hover", "/checkban " + subject + " edit " + p.id() + " duration ",
+                Msg.number("id", p.id()));
+        return Component.text().append(reason).append(Component.text(" ")).append(duration).build();
+    }
+
+    // ---- /checkban edit ----
+
+    private int checkbanReason(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String input = StringArgumentType.getString(c, "input");
+        long id = LongArgumentType.getLong(c, "id");
+        Optional<String> reason = EditorInput.reason(StringArgumentType.getString(c, "text"),
+                config.get().maxReasonLength);
+        if (reason.isEmpty()) {
+            messages.send(sender, "moderation.editwarnings.invalid-reason");
+            return Cmds.OK;
+        }
+        Instant now = Instant.now();
+        banRecord(input, id, now).thenCompose(found -> {
+            if (found.isEmpty()) {
+                messages.send(sender, "moderation.checkban.not-active", Msg.number("id", id));
+                return CompletableFuture.completedFuture(null);
+            }
+            Punishment ban = found.get();
+            return manager.store().updateActiveReason(id, reason.get(), now).thenAccept(updated -> {
+                if (!updated) {
+                    messages.send(sender, "moderation.checkban.not-active", Msg.number("id", id));
+                    return;
+                }
+                refreshBan(ban);
+                messages.send(sender, "moderation.checkban.reason-changed", Msg.number("id", id),
+                        Msg.unparsed("reason", reason.get()));
+            });
+        }).exceptionally(t -> failed(sender, "/checkban edit reason", t));
+        return Cmds.OK;
+    }
+
+    private int checkbanDuration(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String input = StringArgumentType.getString(c, "input");
+        long id = LongArgumentType.getLong(c, "id");
+        String raw = StringArgumentType.getString(c, "value");
+        Instant now = Instant.now();
+        Optional<EditorInput.Expiry> parsed = EditorInput.expiry(raw, now);
+        if (parsed.isEmpty()) {
+            messages.send(sender, "moderation.checkban.invalid-duration", Msg.unparsed("input", raw));
+            return Cmds.OK;
+        }
+        EditorInput.Expiry expiry = parsed.get();
+        Component expires = expiry.permanent()
+                ? messages.render(sender, "moderation.permanent")
+                : Component.text(manager.formatDate(expiry.expires()));
+        banRecord(input, id, now).thenCompose(found -> {
+            if (found.isEmpty()) {
+                messages.send(sender, "moderation.checkban.not-active", Msg.number("id", id));
+                return CompletableFuture.completedFuture(null);
+            }
+            Punishment ban = found.get();
+            return manager.store().updateActiveExpiry(id, expiry.expires(), now).thenAccept(updated -> {
+                if (!updated) {
+                    messages.send(sender, "moderation.checkban.not-active", Msg.number("id", id));
+                    return;
+                }
+                refreshBan(ban);
+                messages.send(sender, "moderation.checkban.duration-changed", Msg.number("id", id),
+                        Msg.component("expires", expires));
+            });
+        }).exceptionally(t -> failed(sender, "/checkban edit duration", t));
+        return Cmds.OK;
+    }
+
+    /** Re-reads the punished account so an edited ban takes effect without a relog. */
+    private void refreshBan(Punishment ban) {
+        if (ban.target() != null) {
+            manager.reloadRemote(ban.target());
+        }
+    }
+
+    /**
+     * The active ban record {@code id} that belongs to {@code input} (an account name or an address/range).
+     * Empty when the record does not exist, was lifted or belongs to someone else.
+     */
+    private CompletableFuture<Optional<Punishment>> banRecord(String input, long id, Instant now) {
+        Optional<String> range = IpAddresses.normalizeRange(input);
+        if (range.isPresent()) {
+            return manager.store().byId(id).thenApply(found -> found
+                    .filter(p -> p.type() == PunishmentType.IPBAN)
+                    .filter(p -> p.isActive(now))
+                    .filter(p -> matchesIpInput(p.ip(), range.get())));
+        }
+        return resolve(input).thenCompose(target -> {
+            if (target.isEmpty()) {
+                return CompletableFuture.completedFuture(Optional.<Punishment>empty());
+            }
+            UUID uuid = target.get().uuid();
+            return manager.store().byId(id).thenApply(found -> found
+                    .filter(p -> uuid.equals(p.target()))
+                    .filter(p -> p.isActive(now))
+                    .filter(p -> PunishmentType.BANS.contains(p.type()) || p.type() == PunishmentType.IPBAN));
+        });
     }
 
     // ---- /lockip ----
@@ -1344,6 +1510,175 @@ final class ModerationCommands {
         return Cmds.OK;
     }
 
+    // ---- /mutechat ----
+
+    private int muteChat(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ArgParser.Parsed parsed = ArgParser.parse(optional(c, "args"));
+        ModerationConfig.ChatMute cfg = config.get().chatMute;
+        Instant now = Instant.now();
+        MuteChatState current = manager.muteChat();
+        if (current.muted(now)) {
+            messages.send(sender, "moderation.mutechat.already",
+                    Msg.duration("remaining", current.remaining(now).orElse(Duration.ZERO)),
+                    Msg.unparsed("actor", current.actorName()));
+            return Cmds.OK;
+        }
+        List<String> words = new ArrayList<>(parsed.words());
+        long maximum = Math.max(1, cfg.maxMinutes) * 60L;
+        long seconds = Math.max(1, cfg.defaultMinutes) * 60L;
+        if (!words.isEmpty()) {
+            Optional<Duration> parsedDuration = Durations.parse(words.getFirst());
+            if (parsedDuration.isPresent() && !parsedDuration.get().isNegative()) {
+                seconds = Math.min(maximum, Math.max(1, parsedDuration.get().toSeconds()));
+                words.removeFirst();
+            }
+        }
+        String reason = MuteChatState.normaliseReason(String.join(" ", words), cfg.reason);
+        Instant until = now.plusSeconds(seconds);
+        Duration length = Duration.ofSeconds(seconds);
+        MuteChatState next = current.until(until, reason, PunishmentManager.actorName(sender));
+        manager.setMuteChat(next).thenRun(() -> {
+            TagResolver tags = TagResolver.resolver(
+                    Msg.unparsed("reason", reason),
+                    Msg.unparsed("actor", next.actorName()),
+                    Msg.duration("duration", length),
+                    Msg.duration("remaining", length));
+            manager.announce("moderation.broadcast.mutechat", parsed.silent(), sender, viewer -> tags, viewer -> tags);
+        }).exceptionally(t -> failed(sender, "/mutechat", t));
+        return Cmds.OK;
+    }
+
+    private int unmuteChat(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ArgParser.Parsed parsed = ArgParser.parse(optional(c, "args"));
+        Instant now = Instant.now();
+        MuteChatState current = manager.muteChat();
+        if (!current.muted(now)) {
+            messages.send(sender, "moderation.mutechat.not-muted");
+            return Cmds.OK;
+        }
+        Duration remaining = current.remaining(now).orElse(Duration.ZERO);
+        TagResolver tags = TagResolver.resolver(
+                Msg.unparsed("actor", PunishmentManager.actorName(sender)),
+                Msg.unparsed("previous", current.actorName()),
+                Msg.duration("remaining", remaining),
+                Msg.unparsed("reason", current.reasonOr(config.get().chatMute.reason)));
+        manager.setMuteChat(MuteChatState.NONE).thenRun(() ->
+                manager.announce("moderation.broadcast.unmutechat", parsed.silent(), sender, viewer -> tags, viewer -> tags)
+        ).exceptionally(t -> failed(sender, "/unmutechat", t));
+        return Cmds.OK;
+    }
+
+    // ---- /note ----
+
+    private int noteAdd(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "player");
+        String raw = StringArgumentType.getString(c, "text");
+        Optional<String> body = EditorInput.reason(raw, config.get().notes.maxLength);
+        if (body.isEmpty()) {
+            messages.send(sender, "moderation.note.blank");
+            return Cmds.OK;
+        }
+        resolve(name).thenCompose(target -> {
+            if (target.isEmpty()) {
+                messages.send(sender, "core.user-not-found", Msg.unparsed("name", name));
+                return CompletableFuture.completedFuture(null);
+            }
+            Target t = target.get();
+            return manager.notes().add(t.uuid(), t.name(), PunishmentManager.actorId(sender),
+                    PunishmentManager.actorName(sender), body.get(), Instant.now())
+                    .thenAccept(id -> messages.send(sender, "moderation.note.added",
+                            Msg.number("id", id), Msg.unparsed("player", t.name())));
+        }).exceptionally(t -> failed(sender, "/note add", t));
+        return Cmds.OK;
+    }
+
+    private int noteList(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "player");
+        int requested = Cmds.hasArgument(c, "page") ? IntegerArgumentType.getInteger(c, "page") : 1;
+        int size = Math.max(1, config.get().notes.pageSize);
+        resolve(name).thenCompose(target -> {
+            if (target.isEmpty()) {
+                messages.send(sender, "core.user-not-found", Msg.unparsed("name", name));
+                return CompletableFuture.completedFuture(null);
+            }
+            Target t = target.get();
+            return manager.notes().count(t.uuid()).thenCompose(total -> {
+                Pagination page = Pagination.of(total, requested, size);
+                if (page.empty()) {
+                    messages.send(sender, "moderation.note.empty", Msg.unparsed("player", t.name()));
+                    return CompletableFuture.completedFuture(null);
+                }
+                return manager.notes().page(t.uuid(), page.offset(), size).thenAccept(notes -> {
+                    messages.send(sender, "moderation.note.header", Msg.unparsed("player", t.name()),
+                            Msg.number("page", page.current()), Msg.number("pages", page.pages()),
+                            Msg.number("total", total));
+                    for (NoteStore.Note note : notes) {
+                        Component remove = runButton(sender, "moderation.note.remove-button",
+                                "moderation.note.remove-hover", "/note " + t.name() + " remove " + note.id(),
+                                Msg.number("id", note.id()));
+                        messages.send(sender, "moderation.note.entry", Msg.number("id", note.id()),
+                                Msg.unparsed("date", manager.formatDate(note.created())),
+                                Msg.unparsed("actor", note.actorName()),
+                                Msg.unparsed("body", note.body()),
+                                Msg.component("remove", remove));
+                    }
+                });
+            });
+        }).exceptionally(t -> failed(sender, "/note list", t));
+        return Cmds.OK;
+    }
+
+    private int noteRemove(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "player");
+        long id = LongArgumentType.getLong(c, "id");
+        resolve(name).thenCompose(target -> {
+            if (target.isEmpty()) {
+                messages.send(sender, "core.user-not-found", Msg.unparsed("name", name));
+                return CompletableFuture.completedFuture(null);
+            }
+            Target t = target.get();
+            return manager.notes().remove(t.uuid(), id).thenAccept(removed ->
+                    messages.send(sender, removed ? "moderation.note.removed" : "moderation.note.not-found",
+                            Msg.number("id", id), Msg.unparsed("player", t.name())));
+        }).exceptionally(t -> failed(sender, "/note remove", t));
+        return Cmds.OK;
+    }
+
+    private int noteClear(CommandContext<CommandSourceStack> c, boolean confirm) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "player");
+        resolve(name).thenCompose(target -> {
+            if (target.isEmpty()) {
+                messages.send(sender, "core.user-not-found", Msg.unparsed("name", name));
+                return CompletableFuture.completedFuture(null);
+            }
+            Target t = target.get();
+            return manager.notes().count(t.uuid()).thenCompose(total -> {
+                if (total == 0) {
+                    messages.send(sender, "moderation.note.empty", Msg.unparsed("player", t.name()));
+                    return CompletableFuture.completedFuture(null);
+                }
+                if (!confirm) {
+                    Component button = runButton(sender, "moderation.note.confirm-button",
+                            "moderation.note.clear-hover", "/note " + t.name() + " clear confirm",
+                            Msg.number("count", total));
+                    messages.send(sender, "moderation.note.clear-confirm", Msg.number("count", total),
+                            Msg.unparsed("player", t.name()), Msg.component("confirm", button));
+                    return CompletableFuture.completedFuture(null);
+                }
+                return manager.notes().clear(t.uuid()).thenAccept(removed ->
+                        messages.send(sender, "moderation.note.cleared", Msg.number("count", removed),
+                                Msg.unparsed("player", t.name())));
+            });
+        }).exceptionally(t -> failed(sender, "/note clear", t));
+        return Cmds.OK;
+    }
+
     // ---- jails ----
 
     private int setjail(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
@@ -1432,6 +1767,8 @@ final class ModerationCommands {
             messages.send(sender, "moderation.jailedit.chat", Msg.component("state",
                     messages.render(sender, jail.chatAllowed() ? "moderation.jailedit.on" : "moderation.jailedit.off")));
             messages.send(sender, "moderation.jailedit.prisoners", Msg.number("count", prisoners));
+            messages.send(sender, "moderation.jailedit.cells",
+                    Msg.number("count", manager.jails().cellCount(jail.name())));
             messages.send(sender, "moderation.jailedit.buttons",
                     Msg.component("buttons", jailButtons(sender, jail)));
         }).exceptionally(t -> failed(sender, "/jailedit info", t));
@@ -1480,6 +1817,8 @@ final class ModerationCommands {
                         "moderation.jailedit.button.chat-hover", base + " chat false")
                 : runButton(sender, "moderation.jailedit.button.chat-on",
                         "moderation.jailedit.button.chat-hover", base + " chat true");
+        Component cells = runButton(sender, "moderation.jailedit.button.cells",
+                "moderation.jailedit.button.cells-hover", base + " cell list");
         return Component.text()
                 .append(move).append(Component.text(" "))
                 .append(radius).append(Component.text(" "))
@@ -1487,6 +1826,7 @@ final class ModerationCommands {
                 .append(releaseClear).append(Component.text(" "))
                 .append(allowed).append(Component.text(" "))
                 .append(max).append(Component.text(" "))
+                .append(cells).append(Component.text(" "))
                 .append(chat)
                 .build();
     }
@@ -1645,6 +1985,107 @@ final class ModerationCommands {
                 messages.send(sender, "moderation.jailedit.chat-set", Msg.unparsed("name", updated.name()),
                         Msg.component("state", messages.render(sender, value.get()
                                 ? "moderation.jailedit.on" : "moderation.jailedit.off"))));
+        return Cmds.OK;
+    }
+
+    // ---- /jailedit <jail> cell ----
+
+    private int jailCellList(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "jail");
+        Optional<Jail> found = jailOrMessage(sender, name);
+        if (found.isEmpty()) {
+            return Cmds.OK;
+        }
+        Jail jail = found.get();
+        List<JailCells.Cell> cells = manager.jails().cells(jail.name());
+        if (cells.isEmpty()) {
+            messages.send(sender, "moderation.jailedit.cells-empty", Msg.unparsed("name", jail.name()));
+            return Cmds.OK;
+        }
+        messages.send(sender, "moderation.jailedit.cells-header", Msg.unparsed("name", jail.name()),
+                Msg.number("count", cells.size()));
+        for (int i = 0; i < cells.size(); i++) {
+            JailCells.Cell cell = cells.get(i);
+            Component remove = runButton(sender, "moderation.jailedit.cell-remove",
+                    "moderation.jailedit.cell-remove-hover",
+                    "/jailedit " + jail.name() + " cell remove " + i, Msg.number("index", i));
+            messages.send(sender, "moderation.jailedit.cell-entry", Msg.number("index", i),
+                    Msg.unparsed("world", cell.world()),
+                    Msg.number("x", Math.round(cell.x())),
+                    Msg.number("y", Math.round(cell.y())),
+                    Msg.number("z", Math.round(cell.z())),
+                    Msg.component("remove", remove));
+        }
+        return Cmds.OK;
+    }
+
+    private int jailCellAdd(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "jail");
+        Optional<Jail> found = jailOrMessage(player, name);
+        if (found.isEmpty()) {
+            return Cmds.OK;
+        }
+        Jail jail = found.get();
+        // Commands run on the sender's own thread, so reading the position here is safe.
+        Location location = player.getLocation();
+        if (location.getWorld() == null) {
+            messages.send(player, "core.error");
+            return Cmds.OK;
+        }
+        JailCells.Cell cell = new JailCells.Cell(location.getWorld().getName(), location.getX(), location.getY(),
+                location.getZ(), location.getYaw(), location.getPitch());
+        manager.jails().addCell(jail.name(), cell).thenAccept(index ->
+                messages.send(player, "moderation.jailedit.cell-added", Msg.unparsed("name", jail.name()),
+                        Msg.number("index", index), Msg.unparsed("world", cell.world()),
+                        Msg.number("x", Math.round(cell.x())),
+                        Msg.number("y", Math.round(cell.y())),
+                        Msg.number("z", Math.round(cell.z()))))
+                .exceptionally(t -> failed(player, "/jailedit cell add", t));
+        return Cmds.OK;
+    }
+
+    private int jailCellRemove(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "jail");
+        int index = IntegerArgumentType.getInteger(c, "index");
+        Optional<Jail> found = jailOrMessage(sender, name);
+        if (found.isEmpty()) {
+            return Cmds.OK;
+        }
+        Jail jail = found.get();
+        manager.jails().removeCell(jail.name(), index).thenAccept(removed ->
+                messages.send(sender, removed ? "moderation.jailedit.cell-removed" : "moderation.jailedit.cell-absent",
+                        Msg.unparsed("name", jail.name()), Msg.number("index", index)))
+                .exceptionally(t -> failed(sender, "/jailedit cell remove", t));
+        return Cmds.OK;
+    }
+
+    private int jailCellClear(CommandContext<CommandSourceStack> c, boolean confirm) {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "jail");
+        Optional<Jail> found = jailOrMessage(sender, name);
+        if (found.isEmpty()) {
+            return Cmds.OK;
+        }
+        Jail jail = found.get();
+        int count = manager.jails().cellCount(jail.name());
+        if (count == 0) {
+            messages.send(sender, "moderation.jailedit.cells-empty", Msg.unparsed("name", jail.name()));
+            return Cmds.OK;
+        }
+        if (!confirm) {
+            Component button = runButton(sender, "moderation.note.confirm-button",
+                    "moderation.jailedit.cell-clear-hover",
+                    "/jailedit " + jail.name() + " cell clear confirm", Msg.number("count", count));
+            messages.send(sender, "moderation.jailedit.cell-clear-confirm", Msg.number("count", count),
+                    Msg.unparsed("name", jail.name()), Msg.component("confirm", button));
+            return Cmds.OK;
+        }
+        manager.jails().clearCells(jail.name()).thenRun(() ->
+                messages.send(sender, "moderation.jailedit.cell-cleared", Msg.unparsed("name", jail.name())))
+                .exceptionally(t -> failed(sender, "/jailedit cell clear", t));
         return Cmds.OK;
     }
 

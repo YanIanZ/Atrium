@@ -1,6 +1,7 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
 usage-send: "<prefix><muted>Penggunaan: <highlight>/mail send (pemain) (pesan)</highlight>."
 usage-sendall: "<prefix><muted>Penggunaan: <highlight>/mail sendall (pesan)</highlight>."
+usage-mailall: "<prefix><muted>Penggunaan: <highlight>/mailall (pesan)</highlight>, lalu <highlight>/mailall confirm</highlight>."
 usage-sendtemp: "<prefix><muted>Penggunaan: <highlight>/mail sendtemp (pemain) (durasi) (pesan)</highlight>."
 help:
   - "<prefix><primary>Perintah surat:"
@@ -8,6 +9,7 @@ help:
   - " <highlight>/mail read [halaman]</highlight> <dark_gray>- <muted>baca kotak suratmu"
   - " <highlight>/mail clear [all|nomor]</highlight> <dark_gray>- <muted>hapus surat"
   - " <highlight>/mail sendall (pesan)</highlight> <dark_gray>- <muted>kirim ke semua pemain yang dikenal"
+  - " <highlight>/mailall (pesan)</highlight> <dark_gray>- <muted>kirim ke pemain yang baru aktif (minta konfirmasi)"
   - " <highlight>/mail sendtemp (pemain) (durasi) (pesan)</highlight> <dark_gray>- <muted>surat yang kedaluwarsa"
 sent: "<prefix><success>Surat terkirim ke <highlight><target></highlight>."
 accepted: "<prefix><success>Surat diterima."
@@ -30,3 +32,12 @@ notify-join: "<prefix><warning>Kamu punya <highlight><count></highlight> surat b
 notify-online: "<prefix><warning>Surat baru dari <highlight><sender></highlight>. Pakai <highlight>/mail read</highlight>."
 sendall-sent: "<prefix><success>Surat terkirim ke <highlight><count></highlight> dari <highlight><total></highlight> pemain."
 sendall-none: "<prefix><muted>Tidak ada pemain dikenal untuk dikirimi surat."
+mailall-confirm: "<prefix><warning>Pesan ini akan dikirim ke <highlight><count></highlight> pemain yang terlihat dalam <highlight><days></highlight> hari terakhir: <newline><muted><body><newline><prefix><muted>Klik <confirm> <muted>untuk mengirim, <cancel> <muted>untuk batal, atau konfirmasi dalam <highlight><seconds></highlight> detik. <truncated>"
+mailall-confirm-button: "<success><bold>[Kirim surat]</bold></success>"
+mailall-cancel-button: "<error><bold>[Batal]</bold></error>"
+mailall-truncated: "<dark_gray>(masih ada pemain aktif lain di luar batas yang dikonfigurasi)"
+mailall-sent: "<prefix><success>Surat terkirim ke <highlight><count></highlight> dari <highlight><total></highlight> pemain yang baru aktif."
+mailall-none: "<prefix><muted>Tidak ada pemain yang login dalam <highlight><days></highlight> hari terakhir."
+mailall-expired: "<prefix><error>Tidak ada /mailall yang menunggu konfirmasi. Jalankan <highlight>/mailall (pesan)</highlight> lagi."
+mailall-cancelled: "<prefix><muted>/mailall yang menunggu konfirmasi dibatalkan."
+mailall-rate-limited: "<prefix><error>Tunggu <highlight><seconds></highlight>s sebelum mengirim /mailall lagi."

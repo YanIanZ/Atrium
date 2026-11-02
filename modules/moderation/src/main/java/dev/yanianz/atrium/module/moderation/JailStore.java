@@ -36,6 +36,8 @@ final class JailStore {
 
     private final Database db;
     private final Map<String, Jail> jails = new ConcurrentHashMap<>();
+    /** Cells per jail name, dense (index 0..n-1). Empty for a jail that uses its own spawn point. */
+    private final Map<String, List<JailCells.Cell>> jailCells = new ConcurrentHashMap<>();
     /** One monitor per jail name: serialises read-modify-write cycles so concurrent edits add up. */
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
 
@@ -52,12 +54,13 @@ final class JailStore {
      * yields SQL and cannot inspect the table, so the step is applied here instead: existing columns are
      * skipped, the missing ones are added, then v4 is recorded. On MySQL all additions happen in ONE
      * {@code ALTER TABLE} (atomic DDL); SQLite keeps one statement per column as it requires.
+     *
+     * <p>The column check runs on every start (not only below version 4): later migrations set the version
+     * past 4 while the editor columns still come from here, so a database that skipped this step for any
+     * reason is repaired instead of failing every jail query.
      */
     static CompletableFuture<Void> ensureEditorColumns(Database db) {
         return db.transaction(connection -> {
-            if (schemaVersion(connection, db) >= EDITOR_COLUMNS_VERSION) {
-                return null;
-            }
             String table = db.table("moderation_jails");
             Set<String> existing = columns(connection, table);
             List<String> missing = editorColumns(db.dialect()).keySet().stream()
@@ -68,7 +71,10 @@ final class JailStore {
                     s.executeUpdate(statement);
                 }
             }
-            recordVersion(connection, db);
+            // Never lower a version written by a later migration: an upsert to 4 would make v5 run again.
+            if (schemaVersion(connection, db) < EDITOR_COLUMNS_VERSION) {
+                recordVersion(connection, db);
+            }
             return null;
         });
     }
@@ -144,12 +150,25 @@ final class JailStore {
                     loaded.add(read(rs));
                 }
             }
-            return loaded;
-        }).thenAccept(loaded -> {
+            Map<String, List<JailCells.Cell>> cells = new java.util.HashMap<>();
+            try (PreparedStatement ps = c.prepareStatement("SELECT jail, world, x, y, z, yaw, pitch FROM "
+                    + db.table("moderation_jail_cells") + " ORDER BY jail, cell"); ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    cells.computeIfAbsent(key(rs.getString(1)), k -> new ArrayList<>())
+                            .add(new JailCells.Cell(rs.getString(2), rs.getDouble(3), rs.getDouble(4),
+                                    rs.getDouble(5), (float) rs.getDouble(6), (float) rs.getDouble(7)));
+                }
+            }
+            return new LoadedJails(loaded, cells);
+        }).thenAccept(result -> {
             jails.clear();
-            loaded.forEach(j -> jails.put(key(j.name()), j));
+            result.jails().forEach(j -> jails.put(key(j.name()), j));
+            jailCells.clear();
+            result.cells().forEach((name, list) -> jailCells.put(name, List.copyOf(list)));
         });
     }
+
+    private record LoadedJails(List<Jail> jails, Map<String, List<JailCells.Cell>> cells) {}
 
     private static Jail read(ResultSet rs) throws java.sql.SQLException {
         String releaseWorld = rs.getString(9);
@@ -228,11 +247,17 @@ final class JailStore {
                 // Remove the cached entry first: whatever was waiting on this lock must not see (and
                 // write back) a jail that no longer exists.
                 Jail removed = jails.remove(key);
+                jailCells.remove(key);
                 int rows;
                 try (PreparedStatement ps = c.prepareStatement("DELETE FROM " + db.table("moderation_jails")
                         + " WHERE name = ?")) {
                     ps.setString(1, key);
                     rows = ps.executeUpdate();
+                }
+                try (PreparedStatement ps = c.prepareStatement("DELETE FROM " + db.table("moderation_jail_cells")
+                        + " WHERE jail = ?")) {
+                    ps.setString(1, key);
+                    ps.executeUpdate();
                 }
                 return rows > 0 || removed != null;
             }
@@ -263,6 +288,70 @@ final class JailStore {
 
     Collection<String> names() {
         return jails.values().stream().map(Jail::name).sorted().toList();
+    }
+
+    // ---- cells ----
+
+    /** Cells of a jail, in stored order; empty when the jail uses its own spawn point. */
+    List<JailCells.Cell> cells(String name) {
+        List<JailCells.Cell> list = jailCells.get(key(name));
+        return list == null ? List.of() : list;
+    }
+
+    int cellCount(String name) {
+        return cells(name).size();
+    }
+
+    /**
+     * Replaces every cell of a jail in one transaction, so the stored cell numbers stay dense and a
+     * half-written list can never exist. The cache is updated after the write.
+     */
+    CompletableFuture<Void> saveCells(String name, List<JailCells.Cell> cells) {
+        String key = key(name);
+        List<JailCells.Cell> stored = List.copyOf(cells);
+        return db.transaction(c -> {
+            synchronized (lock(key)) {
+                try (PreparedStatement ps = c.prepareStatement("DELETE FROM " + db.table("moderation_jail_cells")
+                        + " WHERE jail = ?")) {
+                    ps.setString(1, key);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + db.table("moderation_jail_cells")
+                        + " (jail, cell, world, x, y, z, yaw, pitch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    for (int i = 0; i < stored.size(); i++) {
+                        JailCells.Cell cell = stored.get(i);
+                        Database.bind(ps, key, i, cell.world(), cell.x(), cell.y(), cell.z(), (double) cell.yaw(),
+                                (double) cell.pitch());
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+                }
+                jailCells.put(key, stored);
+                return null;
+            }
+        });
+    }
+
+    /** Adds a cell at the end of the list; completes with the new index. */
+    CompletableFuture<Integer> addCell(String name, JailCells.Cell cell) {
+        List<JailCells.Cell> next = new ArrayList<>(cells(name));
+        next.add(cell);
+        return saveCells(name, next).thenApply(ignored -> next.size() - 1);
+    }
+
+    /** Removes one cell; empty when the index does not exist. */
+    CompletableFuture<Boolean> removeCell(String name, int index) {
+        List<JailCells.Cell> current = cells(name);
+        if (index < 0 || index >= current.size()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        List<JailCells.Cell> next = new ArrayList<>(current);
+        next.remove(index);
+        return saveCells(name, next).thenApply(ignored -> true);
+    }
+
+    CompletableFuture<Void> clearCells(String name) {
+        return saveCells(name, List.of());
     }
 
     static String key(String name) {

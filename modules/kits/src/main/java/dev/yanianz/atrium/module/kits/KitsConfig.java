@@ -20,4 +20,10 @@ public class KitsConfig {
 
     @Comment("Seconds a player has to repeat /kitcdreset or /kitusagereset with 'all' to confirm the bulk reset.")
     public int resetConfirmationSeconds = 30;
+
+    @Comment("Kit group weights. When several kits share a group (for example tier 1 and tier 2 of a rank kit),\n"
+            + "only the highest weight the player may use is listed and claimable; claiming a lower one is refused\n"
+            + "with the name of the higher kit. Kits flagged ShowDespiteWeight stay listed. Groups are empty by\n"
+            + "default, so this changes nothing until a group is set.")
+    public boolean groupWeights = true;
 }

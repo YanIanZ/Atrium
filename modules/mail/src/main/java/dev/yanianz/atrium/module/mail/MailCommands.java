@@ -54,5 +54,12 @@ final class MailCommands {
                                         .then(Commands.argument("message", greedyString())
                                                 .executes(module::sendTemp)))))
                 .build(), "Send and read offline mail"));
+        ctx.command(CommandSpec.of(Cmds.literal("mailall", "atrium.mail.mailall")
+                .executes(context -> module.usage(context, "mail.usage-mailall"))
+                .then(Cmds.literal("confirm").executes(module::confirmMailAll))
+                .then(Cmds.literal("cancel").executes(module::cancelMailAll))
+                .then(Commands.argument("message", greedyString())
+                        .executes(module::mailAll))
+                .build(), "Mail every player seen recently (asks for confirmation)"));
     }
 }

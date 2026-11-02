@@ -124,4 +124,28 @@ class MailStoreTest {
             assertEquals(0, store.readPage(recipient, 1, 5).join().total());
         }
     }
+
+    @Test void recentRecipientsOnlyIncludesAccountsSeenSinceTheCutoff() throws Exception {
+        try (Database db = open()) {
+            db.migrate("mail", MailStore.MIGRATIONS);
+            db.update("CREATE TABLE {prefix}users (uuid CHAR(36) NOT NULL PRIMARY KEY, name VARCHAR(16) NOT NULL,"
+                    + " name_lower VARCHAR(16) NOT NULL, first_join BIGINT NOT NULL, last_seen BIGINT NOT NULL,"
+                    + " locale VARCHAR(16))").join();
+            long now = System.currentTimeMillis();
+            UUID recent = UUID.randomUUID();
+            UUID old = UUID.randomUUID();
+            db.update("INSERT INTO {prefix}users (uuid, name, name_lower, first_join, last_seen) VALUES (?, ?, ?, ?, ?)",
+                    recent.toString(), "Recent", "recent", now, now).join();
+            db.update("INSERT INTO {prefix}users (uuid, name, name_lower, first_join, last_seen) VALUES (?, ?, ?, ?, ?)",
+                    old.toString(), "Old", "old", now, now - 30L * 24 * 3600 * 1000).join();
+
+            MailStore store = new MailStore(db);
+            List<dev.yanianz.atrium.api.user.PlayerRef> found =
+                    store.recentRecipients(now - 7L * 24 * 3600 * 1000, 10).join();
+            assertEquals(1, found.size());
+            assertEquals(recent, found.getFirst().uuid());
+            assertEquals("Recent", found.getFirst().name());
+            assertEquals(1, store.recentRecipients(now, 10).join().size(), "only accounts seen since the cutoff match");
+        }
+    }
 }

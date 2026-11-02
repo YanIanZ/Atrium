@@ -1,6 +1,7 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
 usage-send: "<prefix><muted>Usage: <highlight>/mail send (player) (message)</highlight>."
 usage-sendall: "<prefix><muted>Usage: <highlight>/mail sendall (message)</highlight>."
+usage-mailall: "<prefix><muted>Usage: <highlight>/mailall (message)</highlight>, then <highlight>/mailall confirm</highlight>."
 usage-sendtemp: "<prefix><muted>Usage: <highlight>/mail sendtemp (player) (duration) (message)</highlight>."
 help:
   - "<prefix><primary>Mail commands:"
@@ -8,6 +9,7 @@ help:
   - " <highlight>/mail read [page]</highlight> <dark_gray>- <muted>read your mailbox"
   - " <highlight>/mail clear [all|number]</highlight> <dark_gray>- <muted>delete mail"
   - " <highlight>/mail sendall (message)</highlight> <dark_gray>- <muted>mail every known player"
+  - " <highlight>/mailall (message)</highlight> <dark_gray>- <muted>mail every recently active player (asks to confirm)"
   - " <highlight>/mail sendtemp (player) (duration) (message)</highlight> <dark_gray>- <muted>expiring mail"
 sent: "<prefix><success>Mail sent to <highlight><target></highlight>."
 accepted: "<prefix><success>Mail accepted."
@@ -30,3 +32,12 @@ notify-join: "<prefix><warning>You have <highlight><count></highlight> unread ma
 notify-online: "<prefix><warning>New mail from <highlight><sender></highlight>. Use <highlight>/mail read</highlight>."
 sendall-sent: "<prefix><success>Mail sent to <highlight><count></highlight> of <highlight><total></highlight> players."
 sendall-none: "<prefix><muted>There are no known players to mail."
+mailall-confirm: "<prefix><warning>Sending this message to <highlight><count></highlight> player(s) seen in the last <highlight><days></highlight> day(s): <newline><muted><body><newline><prefix><muted>Click <confirm> <muted>to send it, <cancel> <muted>to abort, or confirm within <highlight><seconds></highlight>s. <truncated>"
+mailall-confirm-button: "<success><bold>[Send mail]</bold></success>"
+mailall-cancel-button: "<error><bold>[Cancel]</bold></error>"
+mailall-truncated: "<dark_gray>(more recent players exist than the configured limit)"
+mailall-sent: "<prefix><success>Mail sent to <highlight><count></highlight> of <highlight><total></highlight> recent players."
+mailall-none: "<prefix><muted>No player has logged in within the last <highlight><days></highlight> day(s)."
+mailall-expired: "<prefix><error>There is no pending /mailall to confirm. Run <highlight>/mailall (message)</highlight> again."
+mailall-cancelled: "<prefix><muted>The pending /mailall was cancelled."
+mailall-rate-limited: "<prefix><error>Wait <highlight><seconds></highlight>s before sending another /mailall."

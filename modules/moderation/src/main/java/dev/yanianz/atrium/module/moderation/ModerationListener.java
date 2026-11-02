@@ -4,14 +4,17 @@ import dev.yanianz.atrium.api.moderation.Punishment;
 import dev.yanianz.atrium.api.moderation.PunishmentType;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.message.Messages;
+import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
@@ -39,6 +42,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.vehicle.VehicleEnterEvent;
+import org.bukkit.inventory.meta.BookMeta;
 import org.jspecify.annotations.Nullable;
 
 /** Enforcement: login bans, mutes, jail confinement, freeze. */
@@ -47,6 +51,9 @@ final class ModerationListener implements Listener {
     private static final Set<PlayerTeleportEvent.TeleportCause> STAFF_TELEPORTS =
             EnumSet.of(PlayerTeleportEvent.TeleportCause.PLUGIN, PlayerTeleportEvent.TeleportCause.COMMAND);
     private static final long NOTICE_INTERVAL_MS = 1500;
+    static final String MUTECHAT_BYPASS = "atrium.moderation.mutechat.bypass";
+    /** Commands whose whole purpose is a public message; blocked while chat is muted. */
+    private static final java.util.List<String> MUTECHAT_BLOCKED_COMMANDS = java.util.List.of("me", "say", "broadcast", "bc");
 
     private final ModuleContext ctx;
     private final ConfigHandle<ModerationConfig> config;
@@ -54,6 +61,7 @@ final class ModerationListener implements Listener {
     private final ActiveCache cache;
     private final Messages messages;
     private final Map<UUID, Long> lastNotice = new ConcurrentHashMap<>();
+    private @Nullable JailBossbar bossbar;
 
     ModerationListener(ModuleContext ctx, ConfigHandle<ModerationConfig> config, PunishmentManager manager) {
         this.ctx = ctx;
@@ -61,6 +69,10 @@ final class ModerationListener implements Listener {
         this.manager = manager;
         this.cache = manager.cache();
         this.messages = ctx.messages();
+    }
+
+    void bossbar(JailBossbar bar) {
+        this.bossbar = bar;
     }
 
     // ---- login ----
@@ -101,13 +113,17 @@ final class ModerationListener implements Listener {
                     return null;
                 });
         // The marker survives a logout while jailed; without one there is no sentence to release.
-        manager.store().hasReleaseLocation(player.getUniqueId()).handle((marker, error) -> {
+        // When the sentence must not run offline, the pause is added back BEFORE expiry is evaluated.
+        CompletableFuture<Void> resumed = config.get().jail.countWhileOffline
+                ? CompletableFuture.completedFuture(null)
+                : manager.resumeAfterOffline(player.getUniqueId());
+        resumed.thenCompose(ignored -> manager.store().hasReleaseLocation(player.getUniqueId()).handle((marker, error) -> {
             if (error != null) {
                 ctx.logger().warn("Could not read the jail marker of {}", player.getName(), error);
                 return false;
             }
             return marker;
-        }).thenAccept(marker -> ctx.scheduler().entity(player, () -> joined(player, marker), null));
+        })).thenAccept(marker -> ctx.scheduler().entity(player, () -> joined(player, marker), null));
     }
 
     /** Runs on the player's thread once the jail marker is known. */
@@ -135,8 +151,22 @@ final class ModerationListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
-        cache.evict(event.getPlayer().getUniqueId());
-        lastNotice.remove(event.getPlayer().getUniqueId());
+        Player player = event.getPlayer();
+        // Pause the countdown when it must not run offline; the row is read and deleted at the next login.
+        if (!config.get().jail.countWhileOffline
+                && cache.active(player.getUniqueId(), PunishmentManager.JAIL, Instant.now()).isPresent()) {
+            manager.store().pauseJail(player.getUniqueId(), Instant.now()).exceptionally(t -> {
+                ctx.logger().warn("Could not pause the jail sentence of {}", player.getName(), t);
+                return null;
+            });
+        }
+        manager.clearCellAssignment(player.getUniqueId());
+        @Nullable JailBossbar bar = bossbar;
+        if (bar != null) {
+            bar.hide(player);
+        }
+        cache.evict(player.getUniqueId());
+        lastNotice.remove(player.getUniqueId());
     }
 
     // ---- mute ----
@@ -145,13 +175,23 @@ final class ModerationListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onChat(AsyncChatEvent event) {
         Player player = event.getPlayer();
-        Optional<Punishment> mute = cache.active(player.getUniqueId(), HARD_MUTES, Instant.now());
+        Instant now = Instant.now();
+        Optional<Punishment> mute = cache.active(player.getUniqueId(), HARD_MUTES, now);
         if (mute.isPresent()) {
             event.setCancelled(true);
             messages.send(player, "moderation.muted", manager.details(mute.get(), player));
             return;
         }
-        Optional<Punishment> jail = cache.active(player.getUniqueId(), PunishmentManager.JAIL, Instant.now());
+        MuteChatState muted = manager.muteChat();
+        if (muted.muted(now) && !player.hasPermission(MUTECHAT_BYPASS)) {
+            event.setCancelled(true);
+            messages.send(player, "moderation.mutechat.blocked",
+                    Msg.unparsed("reason", muted.reasonOr(config.get().chatMute.reason)),
+                    Msg.duration("remaining", muted.remaining(now).orElse(java.time.Duration.ZERO)),
+                    Msg.unparsed("actor", muted.actorName()));
+            return;
+        }
+        Optional<Punishment> jail = cache.active(player.getUniqueId(), PunishmentManager.JAIL, now);
         if (jail.isPresent() && !manager.jailAllowsChat(jail.get())) {
             event.setCancelled(true);
             messages.send(player, "moderation.jail.chat-blocked", manager.details(jail.get(), player));
@@ -190,6 +230,16 @@ final class ModerationListener implements Listener {
             return;
         }
         releaseIfExpired(player, now);
+        MuteChatState muted = manager.muteChat();
+        if (config.get().chatMute.blockCommands && muted.muted(now) && !player.hasPermission(MUTECHAT_BYPASS)
+                && CommandMatcher.matches(line, MUTECHAT_BLOCKED_COMMANDS)) {
+            event.setCancelled(true);
+            messages.send(player, "moderation.mutechat.blocked",
+                    Msg.unparsed("reason", muted.reasonOr(config.get().chatMute.reason)),
+                    Msg.duration("remaining", muted.remaining(now).orElse(java.time.Duration.ZERO)),
+                    Msg.unparsed("actor", muted.actorName()));
+            return;
+        }
         Optional<Punishment> jail = cache.active(player.getUniqueId(), PunishmentManager.JAIL, now);
         if (jail.isPresent() && CommandMatcher.blocked(line, cfg.jail.blockedCommands,
                 manager.jailAllowedCommands(jail.get()))) {
@@ -220,6 +270,32 @@ final class ModerationListener implements Listener {
         if (config.get().mute.blockBooks) {
             blockMuted(event.getPlayer(), () -> event.setCancelled(true));
         }
+        if (!event.isCancelled() && config.get().books.limitPages) {
+            trimBook(event);
+        }
+    }
+
+    /**
+     * Cuts the pages beyond {@code atrium.moderation.book.pages.N}. The extra pages are removed from the
+     * copy that is about to be signed, so the book cannot grow past the limit; the original item on disk is
+     * untouched until the player signs.
+     */
+    private void trimBook(PlayerEditBookEvent event) {
+        Player player = event.getPlayer();
+        int limit = BookLimits.resolve(
+                dev.yanianz.atrium.core.permission.Permissions.highestNumeric(player, BookLimits.PREFIX),
+                player.hasPermission(BookLimits.PREFIX + ".unlimited"),
+                config.get().books.defaultPages);
+        BookMeta meta = event.getNewBookMeta();
+        int pages = meta.getPageCount();
+        if (!BookLimits.exceeded(pages, limit)) {
+            return;
+        }
+        int keep = BookLimits.keep(pages, limit);
+        BookMeta trimmed = meta.clone();
+        trimmed.pages(List.copyOf(meta.pages().subList(0, keep)));
+        event.setNewBookMeta(trimmed);
+        messages.send(player, "moderation.books.trimmed", Msg.number("kept", keep), Msg.number("limit", limit));
     }
 
     private void blockMuted(Player player, Runnable cancel) {

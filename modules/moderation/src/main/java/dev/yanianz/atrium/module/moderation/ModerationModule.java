@@ -42,6 +42,9 @@ public final class ModerationModule implements AtriumModule {
             {"ipbanlist", "List active IP bans"},
             {"checkban", "Show the details of a ban"},
             {"lockip", "Restrict the addresses an account may log in from"},
+            {"note", "Read the staff notes of a player"},
+            {"mutechat", "Mute chat for everyone"},
+            {"unmutechat", "Lift the server-wide chat mute"},
     };
 
     private ModerationConfig cfg() {
@@ -50,6 +53,7 @@ public final class ModerationModule implements AtriumModule {
 
     private ConfigHandle<ModerationConfig> config;
     private ModerationSync sync;
+    private @org.jspecify.annotations.Nullable JailBossbar bossbar;
 
     @Override
     public String id() {
@@ -88,6 +92,16 @@ public final class ModerationModule implements AtriumModule {
                 "Clear every warning of a player with /editwarnings clear (separate from editing single warnings)");
         ctx.permission(ModerationCommands.PERM + "silent", PermissionDefault.OP, "Use -s to announce to staff only");
         ctx.permission(ModerationCommands.PERM + "shadowmute", PermissionDefault.OP, "Use -shadow with /mute and /tempmute");
+        ctx.permission(ModerationCommands.PERM + "note.add", PermissionDefault.OP, "Write staff notes with /note <player> add");
+        ctx.permission(ModerationCommands.PERM + "note.remove", PermissionDefault.OP,
+                "Remove staff notes with /note <player> remove|clear");
+        ctx.permission(ModerationCommands.PERM + "checkban.modify", PermissionDefault.OP,
+                "Edit the reason or duration of an active ban with /checkban <player> edit");
+        ctx.permission(PunishmentManager.PERM_IP, PermissionDefault.OP,
+                "See exact IP addresses in moderation messages instead of the masked form");
+        ctx.permission(ModerationListener.MUTECHAT_BYPASS, PermissionDefault.OP, "Talk while chat is muted");
+        ctx.permission(BookLimits.PREFIX + ".unlimited", PermissionDefault.OP,
+                "Never be limited by the book page limit (numeric nodes: " + BookLimits.PREFIX + ".N)");
         ctx.permission(ModerationCommands.PERM + "lockip.bypass", PermissionDefault.FALSE,
                 "Online accounts with this node cannot be locked with /lockip");
         ctx.permission(PunishmentManager.NOTIFY, PermissionDefault.OP, "Receive staff-only (silent) moderation announcements");
@@ -112,16 +126,40 @@ public final class ModerationModule implements AtriumModule {
         ctx.service(PunishmentService.class, manager);
         ctx.service(MuteService.class, manager);
         ctx.service(dev.yanianz.atrium.api.moderation.ModerationImportService.class, new ModerationImporter(manager, config));
-        ctx.listen(new ModerationListener(ctx, config, manager));
+        manager.loadMuteChat();
+        bossbar = new JailBossbar(ctx, config, manager);
+        bossbar.enable();
+        ModerationListener listener = new ModerationListener(ctx, config, manager);
+        listener.bossbar(bossbar);
+        ctx.listen(listener);
         new ModerationCommands(ctx, config, manager).register();
+        scheduleAfkPauses(ctx, manager);
         ctx.logger().info("Moderation ready: {} jails, {} escalation rules", jails.all().size(),
                 cfg().warnings.escalation.size());
+    }
+
+    /** Pauses jail sentences of AFK prisoners; only registered when the sentence must not run while AFK. */
+    private void scheduleAfkPauses(ModuleContext ctx, PunishmentManager manager) {
+        if (config.get().jail.countWhileAfk) {
+            return;
+        }
+        long seconds = Math.clamp(config.get().jail.afkCheckSeconds, 5, 3600);
+        java.util.concurrent.atomic.AtomicLong last = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
+        ctx.track(ctx.scheduler().globalTimer(() -> {
+            long now = System.nanoTime();
+            long elapsed = now - last.getAndSet(now);
+            manager.pauseAfkSentences(JailClock.afkExtension(elapsed));
+        }, seconds * 20L, seconds * 20L));
     }
 
     @Override
     public void disable() {
         if (sync != null) {
             sync.disable();
+        }
+        if (bossbar != null) {
+            bossbar.disable();
+            bossbar = null;
         }
     }
 }

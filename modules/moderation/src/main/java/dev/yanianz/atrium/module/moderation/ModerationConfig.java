@@ -55,6 +55,16 @@ public class ModerationConfig {
     @Comment("Cross-server moderation settings (requires the proxy module).")
     public Sync sync = new Sync();
 
+    @Comment("Staff notes (/note) settings.")
+    public Notes notes = new Notes();
+
+    @Comment("Server-wide chat mute (/mutechat) settings. The mute is stored in this server's database, so a\n"
+            + "network of several servers mutes them one by one.")
+    public ChatMute chatMute = new ChatMute();
+
+    @Comment("Book page limit settings.")
+    public Books books = new Books();
+
     @ConfigSerializable
     public static class Feedback {
         @Comment("Send the issuer a one-line summary (id, type, target, reason, duration) after every punishment\n"
@@ -68,6 +78,10 @@ public class ModerationConfig {
         @Comment("Send the broadcast line to staff (atrium.moderation.notify) in addition to the public line.\n"
                 + "Silent punishments (-s) always go to staff only.")
         public boolean broadcastStaff = true;
+
+        @Comment("Mask addresses in public announcements and in views of players without\n"
+                + "atrium.moderation.ip: 1.2.3.4 becomes 1.2.*.*, IPv6 keeps its first two groups.")
+        public boolean maskPublicAddresses = true;
     }
 
     @ConfigSerializable
@@ -127,6 +141,77 @@ public class ModerationConfig {
 
         @Comment("Fallback when no release location is available: teleport the player to the world spawn.")
         public boolean releaseToSpawn = true;
+
+        @Comment("Count the sentence down while the prisoner is offline. When false, the time spent offline is\n"
+                + "added back to the sentence at the next login (the sentence pauses).")
+        public boolean countWhileOffline = true;
+
+        @Comment("Count the sentence down while the prisoner is AFK (requires the afk module). When false, the\n"
+                + "time spent AFK is added back to the sentence.")
+        public boolean countWhileAfk = true;
+
+        @Comment("Seconds between AFK checks of jailed players (5-3600). Only used when countWhileAfk is false.")
+        public int afkCheckSeconds = 30;
+
+        @Comment("How new prisoners are spread over a jail's cells: LEAST_OCCUPIED (shuffle, then an empty cell,\n"
+                + "otherwise the cell with the fewest prisoners) or SHUFFLE (a random cell).")
+        public String cellSelection = "LEAST_OCCUPIED";
+
+        @Comment("Commands run as the console when a player is jailed. Placeholders: {player}, {uuid}, {jail}.")
+        public List<String> commandsOnJail = new ArrayList<>();
+
+        @Comment("Commands run as the console when a prisoner is released (sentence over or /unjail).\n"
+                + "Placeholders: {player}, {uuid}, {jail}.")
+        public List<String> commandsOnRelease = new ArrayList<>();
+
+        @Comment("Sentence boss bar shown to prisoners.")
+        public Bossbar bossbar = new Bossbar();
+
+        @ConfigSerializable
+        public static class Bossbar {
+            @Comment("Show a boss bar with the time left to every online prisoner.")
+            public boolean enabled = true;
+
+            @Comment("Seconds between refreshes (1-60).")
+            public int updateSeconds = 1;
+
+            @Comment("Bar colour: PINK, BLUE, RED, GREEN, YELLOW, PURPLE or WHITE.")
+            public String color = "RED";
+        }
+    }
+
+    @ConfigSerializable
+    public static class Notes {
+        @Comment("Maximum characters of one staff note (1-512). Longer notes are cut.")
+        public int maxLength = 256;
+
+        @Comment("Notes shown per page by /note <player> list (1-20).")
+        public int pageSize = 8;
+    }
+
+    @ConfigSerializable
+    public static class ChatMute {
+        @Comment("Default duration of /mutechat when no duration is given (1-10080 minutes).")
+        public int defaultMinutes = 60;
+
+        @Comment("Longest duration /mutechat accepts (1-525600 minutes).")
+        public int maxMinutes = 10080;
+
+        @Comment("Message shown to players whose chat is muted when they try to talk.")
+        public String reason = "Chat is muted by staff";
+
+        @Comment("Also block /me, /say and /broadcast while chat is muted (their bypass permission still applies).")
+        public boolean blockCommands = true;
+    }
+
+    @ConfigSerializable
+    public static class Books {
+        @Comment("Cut books to atrium.moderation.book.pages.N pages when a player edits them. Off by default:\n"
+                + "existing long books would lose pages. Players with .unlimited are never limited.")
+        public boolean limitPages = false;
+
+        @Comment("Pages a player may keep without a numeric node (1-100).")
+        public int defaultPages = 20;
     }
 
     @ConfigSerializable

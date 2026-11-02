@@ -37,6 +37,19 @@ public class MailConfig {
     @Comment("Maximum recipients resolved by one /mail sendall (1-10000).")
     public int sendAllMaxRecipients = 500;
 
+    @Comment("Days back /mailall looks for recipients (by last login). Older accounts are skipped (1-3650).")
+    public int mailAllRecentDays = 7;
+
+    @Comment("Maximum recipients of one /mailall blast (1-10000).")
+    public int mailAllMaxRecipients = 500;
+
+    @Comment("Seconds an operator must wait between two /mailall blasts. 0 disables the limit.\n"
+            + "Players with atrium.mail.bypass.cooldown are exempt.")
+    public int mailAllCooldownSeconds = 300;
+
+    @Comment("Seconds the /mailall confirmation stays valid before it has to be typed again (10-600).")
+    public int mailAllConfirmationSeconds = 60;
+
     @Comment("Absolute date format (java.time DateTimeFormatter pattern, e.g. yyyy-MM-dd HH:mm).")
     public String dateFormat = "yyyy-MM-dd HH:mm";
 

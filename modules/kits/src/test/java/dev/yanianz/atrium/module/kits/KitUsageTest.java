@@ -281,4 +281,32 @@ class KitUsageTest {
             }
         }
     }
+
+    @Test
+    void storePersistsGroupWeightAndShowDespiteWeight(@TempDir Path folder) throws Exception {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Database db = new Database(new CoreConfig.Database(), folder, executor, LoggerFactory.getLogger("kits-test"));
+            try {
+                db.migrate("kits", KitStore.MIGRATIONS);
+                KitStore store = new KitStore(db);
+                Kit kit = new Kit("vip2", 0, false, false, BigDecimal.ZERO, new byte[] {1}, null, "",
+                        -1, "vip", 2, true, 10, 0);
+                assertTrue(store.createKit(kit).join());
+                Kit loaded = store.loadKit("vip2").join().orElseThrow();
+                assertEquals("vip", loaded.group());
+                assertEquals(2, loaded.weight());
+                assertTrue(loaded.showDespiteWeight());
+
+                Kit changed = store.updateKit(loaded.withGroup("mvp", 11).withWeight(7, 11)
+                        .withShowDespiteWeight(false, 11)).join().orElseThrow();
+                Kit reread = store.loadKit("vip2").join().orElseThrow();
+                assertEquals("mvp", reread.group());
+                assertEquals(7, reread.weight());
+                assertFalse(reread.showDespiteWeight());
+                assertEquals(changed.version(), reread.version());
+            } finally {
+                db.close();
+            }
+        }
+    }
 }

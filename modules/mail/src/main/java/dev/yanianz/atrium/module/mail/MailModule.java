@@ -53,6 +53,8 @@ public final class MailModule implements AtriumModule, Listener {
     private ConfigHandle<MailConfig> configHandle;
     private MailStore store;
     private MailRateLimiter limiter;
+    private MailRateLimiter blastLimiter;
+    private final MailAllConfirmation confirmations = new MailAllConfirmation();
     private volatile DateTimeFormatter formatter;
 
     @Override
@@ -73,6 +75,7 @@ public final class MailModule implements AtriumModule, Listener {
         ctx.migrate(MailStore.MIGRATIONS);
         this.store = new MailStore(ctx.database());
         this.limiter = new MailRateLimiter();
+        this.blastLimiter = new MailRateLimiter();
         rebuildFormatter();
         ctx.listen(this);
         new MailCommands(this, ctx).register();
@@ -84,6 +87,8 @@ public final class MailModule implements AtriumModule, Listener {
         ctx.permission("atrium.mail.read", PermissionDefault.TRUE, "Read your mailbox");
         ctx.permission("atrium.mail.clear", PermissionDefault.TRUE, "Delete your mail");
         ctx.permission("atrium.mail.sendall", PermissionDefault.OP, "Send mail to every known player");
+        ctx.permission("atrium.mail.mailall", PermissionDefault.OP,
+                "Send a confirmed /mailall blast to every player seen recently");
         ctx.permission("atrium.mail.sendtemp", PermissionDefault.OP, "Send expiring mail");
         ctx.permission("atrium.mail.bypass.cooldown", PermissionDefault.OP, "Bypass the mail send cooldown");
 
@@ -96,11 +101,14 @@ public final class MailModule implements AtriumModule, Listener {
     public void reload() {
         rebuildFormatter();
         limiter.clear();
+        blastLimiter.clear();
     }
 
     @Override
     public void disable() {
         limiter.clear();
+        blastLimiter.clear();
+        confirmations.clear();
     }
 
     private void rebuildFormatter() {
@@ -217,6 +225,114 @@ public final class MailModule implements AtriumModule, Listener {
             return null;
         });
         return Cmds.OK;
+    }
+
+    /**
+     * First step of {@code /mailall}: resolves every account seen within the configured window, fixes the exact
+     * recipient list and asks for confirmation. Nothing is stored or delivered until {@code /mailall confirm}.
+     */
+    int mailAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSender actor = context.getSource().getSender();
+        String body = body(context.getSource(), StringArgumentType.getString(context, "message"));
+        if (denyMuted(context.getSource(), actor) || !allowSend(actor) || !allowBlast(actor)) {
+            return Cmds.OK;
+        }
+        int days = MailFormat.clamp(config().mailAllRecentDays, 1, 3650);
+        int maximum = MailFormat.clamp(config().mailAllMaxRecipients, 1, 10_000);
+        long now = System.currentTimeMillis();
+        long since = now - Duration.ofDays(days).toMillis();
+        store.recentRecipients(since, maximum).thenAccept(recipients -> {
+            if (recipients.isEmpty()) {
+                reply(actor, "mail.mailall-none", Msg.number("days", days));
+                return;
+            }
+            int window = MailFormat.clamp(config().mailAllConfirmationSeconds, 10, 600);
+            confirmations.arm(key(actor), body, recipients, now, window * 1000L);
+            int capped = MailFormat.clamp(config().mailAllMaxRecipients, 1, 10_000);
+            Component confirm = ctx.messages().render(actor, "mail.mailall-confirm-button")
+                    .clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/mailall confirm"));
+            Component cancel = ctx.messages().render(actor, "mail.mailall-cancel-button")
+                    .clickEvent(net.kyori.adventure.text.event.ClickEvent.runCommand("/mailall cancel"));
+            boolean truncated = recipients.size() >= capped;
+            reply(actor, "mail.mailall-confirm",
+                    Msg.number("count", recipients.size()),
+                    Msg.number("days", days),
+                    Msg.number("seconds", window),
+                    Msg.unparsed("body", body),
+                    Msg.component("confirm", confirm),
+                    Msg.component("cancel", cancel),
+                    Msg.component("truncated", truncated
+                            ? ctx.messages().render(actor, "mail.mailall-truncated")
+                            : Component.empty()));
+        }).exceptionally(error -> {
+            failed(actor, "resolve /mailall recipients", error);
+            return null;
+        });
+        return Cmds.OK;
+    }
+
+    /** Second step: sends the blast that was fixed by the previous {@code /mailall <message>}. */
+    int confirmMailAll(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        CommandSender actor = context.getSource().getSender();
+        long now = System.currentTimeMillis();
+        Optional<MailAllConfirmation.Pending> found = confirmations.take(key(actor), now);
+        if (found.isEmpty()) {
+            reply(actor, "mail.mailall-expired");
+            return Cmds.OK;
+        }
+        if (denyMuted(context.getSource(), actor) || !allowSend(actor)) {
+            return Cmds.OK;
+        }
+        MailAllConfirmation.Pending blast = found.get();
+        String senderName = senderName(actor);
+        UUID senderId = senderId(actor);
+        long expires = MailFormat.expiresAt(now, defaultExpiry());
+        List<MailStore.Draft> drafts = new ArrayList<>(blast.recipients().size());
+        for (PlayerRef recipient : blast.recipients()) {
+            boolean hidden = ignores(recipient.uuid(), senderId);
+            drafts.add(new MailStore.Draft(recipient.uuid(), senderId, senderName, blast.message(), now, expires,
+                    hidden));
+        }
+        store.insertAll(drafts, mailboxLimit()).thenAccept(delivered -> {
+            reply(actor, "mail.mailall-sent", Msg.number("count", delivered.size()),
+                    Msg.number("total", blast.recipients().size()));
+            for (PlayerRef recipient : blast.recipients()) {
+                if (delivered.contains(recipient.uuid())) {
+                    notifyOnline(recipient, senderName);
+                }
+            }
+        }).exceptionally(error -> {
+            failed(actor, "send confirmed /mailall", error);
+            return null;
+        });
+        return Cmds.OK;
+    }
+
+    int cancelMailAll(CommandContext<CommandSourceStack> context) {
+        CommandSender actor = context.getSource().getSender();
+        confirmations.cancel(key(actor));
+        reply(actor, "mail.mailall-cancelled");
+        return Cmds.OK;
+    }
+
+    /** Separate, longer cooldown for blasts so a confirmed mail cannot be repeated in a loop. */
+    private boolean allowBlast(CommandSender actor) {
+        if (!(actor instanceof Player player) || player.hasPermission("atrium.mail.bypass.cooldown")) {
+            return true;
+        }
+        long cooldown = Math.max(0, config().mailAllCooldownSeconds) * 1000L;
+        MailRateLimiter.Decision decision = blastLimiter.check(player.getUniqueId(), System.currentTimeMillis(),
+                cooldown);
+        if (decision.allowed()) {
+            return true;
+        }
+        long seconds = Math.max(1, (decision.remainingMillis() + 999) / 1000);
+        ctx.messages().send(player, "mail.mailall-rate-limited", Msg.number("seconds", seconds));
+        return false;
+    }
+
+    private static String key(CommandSender sender) {
+        return sender instanceof Player player ? "p:" + player.getUniqueId() : "console";
     }
 
     int read(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -477,5 +593,7 @@ public final class MailModule implements AtriumModule, Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         limiter.forget(event.getPlayer().getUniqueId());
+        blastLimiter.forget(event.getPlayer().getUniqueId());
+        confirmations.forget(key(event.getPlayer()));
     }
 }

@@ -51,7 +51,22 @@ final class PunishmentStore {
             Migration.of(3, "per-account login address locks",
                     "CREATE TABLE {prefix}moderation_lockip (uuid CHAR(36) NOT NULL, address VARCHAR(64) NOT NULL, "
                             + "actor_name VARCHAR(64) NOT NULL, created BIGINT NOT NULL, "
-                            + "PRIMARY KEY (uuid, address))"));
+                            + "PRIMARY KEY (uuid, address))"),
+            new Migration(5, "jail cells, sentence pauses, chat mute state and staff notes", dialect -> List.of(
+                    "CREATE TABLE {prefix}moderation_jail_cells (jail VARCHAR(32) NOT NULL, cell INT NOT NULL, "
+                            + "world VARCHAR(64) NOT NULL, x DOUBLE NOT NULL, y DOUBLE NOT NULL, z DOUBLE NOT NULL, "
+                            + "yaw DOUBLE NOT NULL, pitch DOUBLE NOT NULL, PRIMARY KEY (jail, cell))",
+                    "CREATE TABLE {prefix}moderation_jail_pauses (uuid CHAR(36) NOT NULL PRIMARY KEY, "
+                            + "paused_at BIGINT NOT NULL)",
+                    "CREATE TABLE {prefix}moderation_state (state_key VARCHAR(32) NOT NULL PRIMARY KEY, "
+                            + "expires_at BIGINT, reason VARCHAR(512), actor_name VARCHAR(64) NOT NULL)",
+                    "CREATE TABLE {prefix}moderation_notes ("
+                            + (dialect == Dialect.SQLITE
+                                    ? "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                                    : "id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, ")
+                            + "target CHAR(36) NOT NULL, target_name VARCHAR(16) NOT NULL, actor CHAR(36), "
+                            + "actor_name VARCHAR(64) NOT NULL, body VARCHAR(512) NOT NULL, created BIGINT NOT NULL)",
+                    "CREATE INDEX {prefix}moderation_notes_target ON {prefix}moderation_notes (target, created)")));
 
     private static final String COLUMNS = "id, type, target, target_name, ip, actor, actor_name, reason, created, expires, "
             + "revoked_by, revoked_by_name, revoked_at, context";
@@ -219,6 +234,94 @@ final class PunishmentStore {
         });
     }
 
+    /**
+     * Adds time to the active, timed jail sentence of an account. Completes with the number of rows changed:
+     * a permanent or lifted sentence is left alone, and so is a jail that ran out meanwhile.
+     */
+    CompletableFuture<Integer> extendJail(UUID target, long millis, Instant now) {
+        if (millis <= 0) {
+            return CompletableFuture.completedFuture(0);
+        }
+        return db.update("UPDATE " + table + " SET expires = expires + ? WHERE target = ? AND type = ? "
+                + "AND revoked_at IS NULL AND expires IS NOT NULL AND expires > ?",
+                millis, target.toString(), PunishmentType.JAIL.name(), now.toEpochMilli());
+    }
+
+    /** Remembers when a jailed account logged off, so the countdown can pause while it is away. */
+    CompletableFuture<Void> pauseJail(UUID target, Instant at) {
+        String sql = db.dialect().upsert(db.table("moderation_jail_pauses"), "uuid, paused_at", "?, ?", "uuid",
+                "paused_at");
+        return db.query(c -> {
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                Database.bind(ps, target.toString(), at.toEpochMilli());
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    /** Reads and deletes the logout marker of an account in one transaction. */
+    CompletableFuture<Optional<Instant>> takeJailPause(UUID target) {
+        String table = db.table("moderation_jail_pauses");
+        return db.transaction(c -> {
+            Instant found = null;
+            try (PreparedStatement ps = c.prepareStatement("SELECT paused_at FROM " + table + " WHERE uuid = ?")) {
+                ps.setString(1, target.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        found = Instant.ofEpochMilli(rs.getLong(1));
+                    }
+                }
+            }
+            if (found != null) {
+                try (PreparedStatement ps = c.prepareStatement("DELETE FROM " + table + " WHERE uuid = ?")) {
+                    ps.setString(1, target.toString());
+                    ps.executeUpdate();
+                }
+            }
+            return Optional.ofNullable(found);
+        });
+    }
+
+    // ---- server-wide state (chat mute) ----
+
+    CompletableFuture<Optional<MuteChatState>> loadState(String key) {
+        return db.query(c -> {
+            try (PreparedStatement ps = c.prepareStatement("SELECT expires_at, reason, actor_name FROM "
+                    + db.table("moderation_state") + " WHERE state_key = ?")) {
+                ps.setString(1, key);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return Optional.<MuteChatState>empty();
+                    }
+                    long until = rs.getLong(1);
+                    boolean hadUntil = !rs.wasNull();
+                    return Optional.of(MuteChatState.decode(hadUntil ? Long.toString(until) : null,
+                            rs.getString(2), rs.getString(3)));
+                }
+            }
+        });
+    }
+
+    CompletableFuture<Void> saveState(String key, MuteChatState state) {
+        String sql = db.dialect().upsert(db.table("moderation_state"), "state_key, expires_at, reason, actor_name",
+                "?, ?, ?, ?", "state_key", "expires_at, reason, actor_name");
+        return db.query(c -> {
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                if (state.until() == null) {
+                    ps.setString(1, key);
+                    ps.setNull(2, Types.BIGINT);
+                    ps.setString(3, state.reason());
+                    ps.setString(4, state.actorName());
+                } else {
+                    Database.bind(ps, key, state.until().toEpochMilli(), state.reason(), state.actorName());
+                }
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
     // ---- login address locks ----
 
     /** Adds one allowed address (normalised by the caller); repeating it updates who added it. */
@@ -371,6 +474,31 @@ final class PunishmentStore {
     }
 
     // ---- editor writes (only active warnings) ----
+
+    /** Changes the reason of any active record ({@code /checkban ... reason}). */
+    CompletableFuture<Boolean> updateActiveReason(long id, String reason, Instant now) {
+        return db.update("UPDATE " + table + " SET reason = ? WHERE id = ? AND revoked_at IS NULL "
+                        + "AND (expires IS NULL OR expires > ?)",
+                reason, id, now.toEpochMilli()).thenApply(rows -> rows > 0);
+    }
+
+    /** Changes the expiry of any active record ({@code null} makes it permanent). */
+    CompletableFuture<Boolean> updateActiveExpiry(long id, @Nullable Instant expires, Instant now) {
+        String sql = "UPDATE " + table + " SET expires = ? WHERE id = ? AND revoked_at IS NULL "
+                + "AND (expires IS NULL OR expires > ?)";
+        return db.query(c -> {
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                if (expires == null) {
+                    ps.setNull(1, Types.BIGINT);
+                } else {
+                    ps.setLong(1, expires.toEpochMilli());
+                }
+                ps.setLong(2, id);
+                ps.setLong(3, now.toEpochMilli());
+                return ps.executeUpdate() > 0;
+            }
+        });
+    }
 
     /** Changes the reason of an active warning. {@code false} when the record is gone, revoked or expired. */
     CompletableFuture<Boolean> updateWarningReason(long id, String reason, Instant now) {

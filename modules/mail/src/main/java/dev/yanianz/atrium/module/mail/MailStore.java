@@ -237,6 +237,30 @@ final class MailStore {
         return db.update("DELETE FROM " + table + " WHERE expires > 0 AND expires <= ?", now);
     }
 
+    /**
+     * Known accounts whose last login is not older than {@code sinceMillis}, newest first, at most
+     * {@code limit}. Read-only view of the core {@code users} table (uuid, name, last_seen), so a blast never
+     * has to load every account into memory.
+     */
+    CompletableFuture<List<dev.yanianz.atrium.api.user.PlayerRef>> recentRecipients(long sinceMillis, int limit) {
+        String users = db.table("users");
+        return db.query(connection -> {
+            List<dev.yanianz.atrium.api.user.PlayerRef> refs = new ArrayList<>();
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT uuid, name FROM " + users + " WHERE last_seen >= ? ORDER BY last_seen DESC LIMIT ?")) {
+                ps.setLong(1, sinceMillis);
+                ps.setInt(2, Math.max(1, limit));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        refs.add(new dev.yanianz.atrium.api.user.PlayerRef(UUID.fromString(rs.getString(1)),
+                                rs.getString(2)));
+                    }
+                }
+            }
+            return List.copyOf(refs);
+        });
+    }
+
     private static UUID uuid(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;

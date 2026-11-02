@@ -35,10 +35,15 @@ final class KitStore {
                             : "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT")
                             + ", uuid CHAR(36) NOT NULL, items " + (dialect == Dialect.MYSQL ? "MEDIUMBLOB" : "BLOB")
                             + " NOT NULL, created BIGINT NOT NULL)",
-                    "CREATE INDEX {prefix}kits_returns_uuid ON {prefix}kits_returns (uuid)")));
+                    "CREATE INDEX {prefix}kits_returns_uuid ON {prefix}kits_returns (uuid)")),
+            new Migration(4, "kit group weights", dialect -> List.of(
+                    "ALTER TABLE {prefix}kits_kits ADD COLUMN kit_group VARCHAR(32) NOT NULL DEFAULT ''",
+                    "ALTER TABLE {prefix}kits_kits ADD COLUMN weight INT NOT NULL DEFAULT 0",
+                    "ALTER TABLE {prefix}kits_kits ADD COLUMN show_despite_weight BOOLEAN NOT NULL DEFAULT "
+                            + (dialect == Dialect.SQLITE ? "0" : "FALSE"))));
 
-    private static final String COLUMNS =
-            "name, cooldown, one_time, first_join, cost, items, icon, permission, max_uses, updated, version";
+    private static final String COLUMNS = "name, cooldown, one_time, first_join, cost, items, icon, permission, "
+            + "max_uses, kit_group, weight, show_despite_weight, updated, version";
 
     private final Database db;
     final UserComponentType<KitUsage> usage;
@@ -54,9 +59,7 @@ final class KitStore {
             List<Kit> kits = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    kits.add(new Kit(rs.getString(1), rs.getLong(2), rs.getBoolean(3), rs.getBoolean(4),
-                            new BigDecimal(rs.getString(5)), rs.getBytes(6), rs.getBytes(7), rs.getString(8),
-                            rs.getInt(9), rs.getLong(10), rs.getLong(11)));
+                    kits.add(readKit(rs));
                 }
             }
             return kits;
@@ -71,12 +74,16 @@ final class KitStore {
                 ps.setString(1, name);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) return Optional.empty();
-                    return Optional.of(new Kit(rs.getString(1), rs.getLong(2), rs.getBoolean(3), rs.getBoolean(4),
-                            new BigDecimal(rs.getString(5)), rs.getBytes(6), rs.getBytes(7), rs.getString(8),
-                            rs.getInt(9), rs.getLong(10), rs.getLong(11)));
+                    return Optional.of(readKit(rs));
                 }
             }
         });
+    }
+
+    private static Kit readKit(ResultSet rs) throws java.sql.SQLException {
+        return new Kit(rs.getString(1), rs.getLong(2), rs.getBoolean(3), rs.getBoolean(4),
+                new BigDecimal(rs.getString(5)), rs.getBytes(6), rs.getBytes(7), rs.getString(8), rs.getInt(9),
+                rs.getString(10), rs.getInt(11), rs.getBoolean(12), rs.getLong(13), rs.getLong(14));
     }
 
     /**
@@ -86,8 +93,8 @@ final class KitStore {
      */
     CompletableFuture<Optional<Kit>> updateKit(Kit kit) {
         String sql = "UPDATE " + db.table("kits_kits") + " SET cooldown = ?, one_time = ?, first_join = ?, cost = ?,"
-                + " items = ?, icon = ?, permission = ?, max_uses = ?, updated = ?, version = ?"
-                + " WHERE name = ? AND version = ?";
+                + " items = ?, icon = ?, permission = ?, max_uses = ?, kit_group = ?, weight = ?,"
+                + " show_despite_weight = ?, updated = ?, version = ? WHERE name = ? AND version = ?";
         long next = KitVersions.next(kit.version());
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement(sql)) {
@@ -99,10 +106,13 @@ final class KitStore {
                 ps.setBytes(6, kit.icon());
                 ps.setString(7, kit.permission());
                 ps.setInt(8, kit.maxUses());
-                ps.setLong(9, kit.updated());
-                ps.setLong(10, next);
-                ps.setString(11, kit.name());
-                ps.setLong(12, kit.version());
+                ps.setString(9, kit.group());
+                ps.setInt(10, kit.weight());
+                ps.setBoolean(11, kit.showDespiteWeight());
+                ps.setLong(12, kit.updated());
+                ps.setLong(13, next);
+                ps.setString(14, kit.name());
+                ps.setLong(15, kit.version());
                 return KitVersions.applied(ps.executeUpdate()) ? Optional.of(kit.withVersion(next)) : Optional.empty();
             }
         });
@@ -110,7 +120,8 @@ final class KitStore {
 
     /** Inserts only when the name is free. Completes with false when it already exists. */
     CompletableFuture<Boolean> createKit(Kit kit) {
-        String sql = "INSERT INTO " + db.table("kits_kits") + " (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO " + db.table("kits_kits") + " (" + COLUMNS
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         String check = "SELECT 1 FROM " + db.table("kits_kits") + " WHERE name = ?";
         return db.transaction(c -> {
             try (PreparedStatement ps = c.prepareStatement(check)) {
@@ -137,8 +148,11 @@ final class KitStore {
         ps.setBytes(7, kit.icon());
         ps.setString(8, kit.permission());
         ps.setInt(9, kit.maxUses());
-        ps.setLong(10, kit.updated());
-        ps.setLong(11, kit.version());
+        ps.setString(10, kit.group());
+        ps.setInt(11, kit.weight());
+        ps.setBoolean(12, kit.showDespiteWeight());
+        ps.setLong(13, kit.updated());
+        ps.setLong(14, kit.version());
     }
 
     /**

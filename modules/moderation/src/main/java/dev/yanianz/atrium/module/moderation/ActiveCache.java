@@ -64,6 +64,24 @@ final class ActiveCache {
         byPlayer.remove(player);
     }
 
+    /**
+     * Pushes the expiry of every timed jail record of a player forward. Used when a sentence must not run
+     * while the prisoner is offline or AFK: the in-memory copy moves with the stored row, so the next
+     * movement check cannot release the player before the new deadline.
+     */
+    void extendJail(UUID player, java.time.Duration extra) {
+        if (extra == null || extra.isZero() || extra.isNegative()) {
+            return;
+        }
+        byPlayer.computeIfPresent(player, (k, old) -> old.stream()
+                .map(p -> p.type() == PunishmentType.JAIL && p.expires() != null
+                        ? new Punishment(p.id(), p.type(), p.target(), p.targetName(), p.ip(), p.actor(),
+                                p.actorName(), p.reason(), p.created(), p.expires().plus(extra), p.revokedBy(),
+                                p.revokedByName(), p.revokedAt(), p.context())
+                        : p)
+                .toList());
+    }
+
     /** Snapshot of every record kept for a player (used for one-time expiry decisions). */
     List<Punishment> records(UUID player) {
         List<Punishment> list = byPlayer.get(player);

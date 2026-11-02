@@ -58,9 +58,10 @@ final class KitPreview {
     }
 
     private List<Button> browserButtons(Player viewer) {
+        List<Kit> accessible = kits.kits().stream().filter(kit -> mayUse(viewer, kit)).toList();
+        List<Kit> visible = config.get().groupWeights ? KitGroups.visible(accessible) : accessible;
         List<Button> buttons = new ArrayList<>();
-        for (Kit kit : kits.kits()) {
-            if (!mayUse(viewer, kit)) continue;
+        for (Kit kit : visible) {
             String name = kit.name();
             buttons.add(Button.of(browserItem(viewer, kit), click -> select(click, name)));
         }
