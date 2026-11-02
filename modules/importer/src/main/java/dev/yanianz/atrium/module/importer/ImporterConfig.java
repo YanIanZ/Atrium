@@ -18,6 +18,11 @@ public class ImporterConfig {
             + "plugins/EssentialsSpawn next to Essentials.")
     public String essentialsSpawnFolder = "";
 
+    @Comment("PlayerVaultsX vault folder (it contains <uuid>.yml files). Leave empty to use\n"
+            + "plugins/PlayerVaults/newvaults. Only gzip item NBT vaults are read; vaults stored with Java\n"
+            + "object serialization are refused as unsafe.")
+    public String pvxFolder = "";
+
     @Comment("Users read per source batch (clamped to 1-1000).")
     public int batchSize = 50;
 
@@ -78,5 +83,9 @@ public class ImporterConfig {
 
     public String essentialsSpawnFolder() {
         return essentialsSpawnFolder == null ? "" : essentialsSpawnFolder.trim();
+    }
+
+    public String pvxFolder() {
+        return pvxFolder == null ? "" : pvxFolder.trim();
     }
 }

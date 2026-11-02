@@ -26,8 +26,8 @@ import org.spongepowered.configurate.ConfigurationNode;
 
 /**
  * Imports EssentialsX data through Atrium's public services: money, homes, nicknames, warps, spawn
- * (EssentialsSpawn), kits, jails, mute/jail/ban states, mail and the last location (as a {@code /back}
- * entry). Login timestamps and ignore lists are reported only. The server's ban lists are imported too,
+ * (EssentialsSpawn), kits, jails, mute/jail/ban states, mail, ignore lists and the last location (as a
+ * {@code /back} entry). Login timestamps are reported only. The server's ban lists are imported too,
  * under the ledger source {@code vanilla}.
  *
  * <p>Reads run in batches of {@link ImporterConfig#batchSize()} files, never all at once, and a broken
@@ -195,6 +195,7 @@ final class EssentialsImportJob extends ExtendedImportJob {
             }
         }
         importMail(uuid, data.label(), data.mails(), firstNonNull(data.logout(), data.lastLogin(), data.login()));
+        importIgnores(uuid, data.label(), data.ignores());
         if (options.includes(ImportCategory.PUNISHMENTS)) {
             for (PunishmentRecord record : punishmentsOf(uuid, data)) {
                 importPunishment(record);
@@ -262,7 +263,7 @@ final class EssentialsImportJob extends ExtendedImportJob {
         return List.copyOf(homes);
     }
 
-    /** Login timestamps and ignore lists have no Atrium write API: counted and explained, not written. */
+    /** Login timestamps have no Atrium write API: counted and explained, not written. */
     private void reportExtras(EssentialsUserParser.UserFile data) {
         if (options.includes(ImportCategory.HISTORY)) {
             int found = 0;
@@ -276,11 +277,6 @@ final class EssentialsImportJob extends ExtendedImportJob {
                 report.unsupported(ImportCategory.HISTORY, found,
                         "Atrium derives first-join and last-seen from its own sessions");
             }
-        }
-        if (options.includes(ImportCategory.IGNORE) && data.ignored() > 0) {
-            report.found(ImportCategory.IGNORE, data.ignored());
-            report.unsupported(ImportCategory.IGNORE, data.ignored(),
-                    "the chat module has no ignore-list write API; players re-add them with /ignore");
         }
     }
 

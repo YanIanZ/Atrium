@@ -49,7 +49,7 @@ public final class ImporterModule implements AtriumModule {
     @Override
     public Set<String> softDependencies() {
         return Set.of("economy", "homes", "warps", "nick", "playtime", "holograms", "teleport", "moderation", "kits",
-                "mail");
+                "mail", "chat", "inventories");
     }
 
     @Override
@@ -81,6 +81,11 @@ public final class ImporterModule implements AtriumModule {
                         .then(Commands.argument("args", StringArgumentType.greedyString())
                                 .suggests(suggestions(ImportCategory.vanilla()))
                                 .executes(c -> vanilla(c, StringArgumentType.getString(c, "args")))))
+                .then(Cmds.literal("pvx").requires(Cmds.permission(PERM_IMPORT))
+                        .executes(c -> pvx(c, ""))
+                        .then(Commands.argument("args", StringArgumentType.greedyString())
+                                .suggests(suggestions(ImportCategory.pvx()))
+                                .executes(c -> pvx(c, StringArgumentType.getString(c, "args")))))
                 .then(Cmds.literal("economy").requires(Cmds.permission(PERM_IMPORT))
                         .executes(this::economyUsage)
                         .then(Commands.argument("plugin", StringArgumentType.word())
@@ -96,8 +101,8 @@ public final class ImporterModule implements AtriumModule {
                         .executes(this::status))
                 .then(Cmds.literal("cancel").requires(Cmds.permission(PERM_IMPORT)).executes(this::cancel));
         context.command(CommandSpec.of(root.build(),
-                "Import CMI, EssentialsX, vanilla ban lists or any Vault economy: balances, homes, warps, spawn, kits, "
-                        + "jails, punishments, mail and more"));
+                "Import CMI, EssentialsX, PlayerVaultsX, vanilla ban lists or any Vault economy: balances, homes, "
+                        + "warps, spawn, kits, jails, punishments, mail, ignore lists and vaults"));
 
         context.command(CommandSpec.of(Cmds.literal("atrium-backup", PERM_BACKUP)
                 .executes(this::backup)
@@ -124,7 +129,7 @@ public final class ImporterModule implements AtriumModule {
     private int usage(CommandContext<CommandSourceStack> context) {
         CommandSender sender = context.getSource().getSender();
         ctx.messages().send(sender, "importer.usage",
-                Msg.unparsed("sources", "cmi|essentials|vanilla|economy <plugin>|sources|status|cancel"),
+                Msg.unparsed("sources", "cmi|essentials|pvx|vanilla|economy <plugin>|sources|status|cancel"),
                 Msg.component("reason", ctx.messages().render(sender, "importer.reason-missing-subcommand")));
         return Cmds.OK;
     }
@@ -144,6 +149,21 @@ public final class ImporterModule implements AtriumModule {
             return Cmds.OK;
         }
         launch(sender, options, new VanillaImportJob(ctx, config.get(), options, sender), "server folder");
+        return Cmds.OK;
+    }
+
+    private int pvx(CommandContext<CommandSourceStack> context, String rawArgs) {
+        CommandSender sender = context.getSource().getSender();
+        ImportOptions options = parseOptions(sender, rawArgs, "pvx", ImportCategory.pvx());
+        if (options == null) {
+            return Cmds.OK;
+        }
+        Path folder = resolvePvxFolder();
+        if (folder == null) {
+            ctx.messages().send(sender, "importer.no-pvx-folder", Msg.unparsed("path", pvxFolderHint()));
+            return Cmds.OK;
+        }
+        launch(sender, options, new PvxImportJob(ctx, config.get(), options, sender, folder), folder.toString());
         return Cmds.OK;
     }
 
@@ -199,6 +219,7 @@ public final class ImporterModule implements AtriumModule {
         java.util.List<ImportSources.Source> found = ImportSources.scan(
                 cmi, cmiFolderHint(), essentials, essentialsFolderHint(),
                 essentials == null ? null : resolveSpawnFolder(essentials),
+                resolvePvxFolder(), pvxFolderHint(),
                 Path.of("").toAbsolutePath());
         ctx.messages().send(sender, "importer.sources-header");
         for (ImportSources.Source source : found) {
@@ -359,6 +380,17 @@ public final class ImporterModule implements AtriumModule {
         return resolveFolder(config.get().essentialsFolder(), "Essentials");
     }
 
+    private Path resolvePvxFolder() {
+        String configured = config.get().pvxFolder();
+        Path folder;
+        if (!configured.isBlank()) {
+            folder = absolute(configured);
+        } else {
+            folder = pluginsDirectory().resolve("PlayerVaults").resolve("newvaults");
+        }
+        return Files.isDirectory(folder) ? folder.toAbsolutePath() : null;
+    }
+
     private Path resolveSpawnFolder(Path essentialsFolder) {
         String configured = config.get().essentialsSpawnFolder();
         Path folder;
@@ -382,6 +414,14 @@ public final class ImporterModule implements AtriumModule {
 
     private String essentialsFolderHint() {
         return folderHint(config.get().essentialsFolder(), "Essentials");
+    }
+
+    private String pvxFolderHint() {
+        String configured = config.get().pvxFolder();
+        Path folder = configured.isBlank()
+                ? pluginsDirectory().resolve("PlayerVaults").resolve("newvaults")
+                : absolute(configured);
+        return folder.toAbsolutePath().toString();
     }
 
     private String folderHint(String configured, String defaultName) {

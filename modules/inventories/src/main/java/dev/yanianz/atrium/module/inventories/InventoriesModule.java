@@ -65,6 +65,8 @@ public final class InventoriesModule implements AtriumModule {
         ctx.permission("atrium.inventories.notify", PermissionDefault.OP,
                 "Receive a message when a pending offline inventory edit is discarded");
         ctx.service(InventorySnapshotService.class, new SnapshotService(ctx, store, pendingStore, applier));
+        ctx.service(dev.yanianz.atrium.api.inventories.VaultImportService.class,
+                new VaultImportWriter(ctx, vaultStore));
         // Reloads edits that survived a restart before anyone can join.
         applier.preload();
         new InventoryCommands(ctx, config, store, preview).register();

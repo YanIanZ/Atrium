@@ -38,6 +38,7 @@ class EssentialsUserParserTest {
         assertNotNull(user.lastLocation());
         assertNotNull(user.logoutLocation());
         assertEquals(1, user.ignored());
+        assertEquals(List.of("11111111-1111-1111-1111-111111111111"), user.ignores());
         assertEquals(1, user.mail());
         assertTrue(user.banned());
         assertTrue(user.muted());

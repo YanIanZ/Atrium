@@ -1,9 +1,10 @@
 # Migrating to Atrium
 
-Atrium's `importer` module copies data from CMI, EssentialsX, the server's vanilla ban lists and any other
-Vault economy plugin into Atrium. It reads the old plugin's files (or CMI's database) directly, so the old plugin
-does not have to be running, with one exception: the Vault economy import reads balances through the old
-economy plugin, so that plugin and Vault must be installed and enabled.
+Atrium's `importer` module copies data from CMI, EssentialsX, PlayerVaultsX, the server's vanilla ban lists and
+any other Vault economy plugin into Atrium. It reads the old plugin's files (or CMI's database) directly, so the
+old plugin does not have to be running, with two exceptions: the Vault economy import reads balances through the
+old economy plugin, so that plugin and Vault must be installed and enabled, and PlayerVaultsX vaults that are
+stored with Java object serialization are refused (see below).
 
 ## Steps
 
@@ -27,6 +28,7 @@ Run imports from the console. One import runs at a time; `/atrium-import status`
 | `/atrium-import sources` | Lists every detected source and what it can import, plus every Vault economy provider. |
 | `/atrium-import cmi [dry-run\|run] [--only=...] [--overwrite]` | CMI files and database. |
 | `/atrium-import essentials [dry-run\|run] [--only=...] [--overwrite]` | EssentialsX (and EssentialsSpawn) files. |
+| `/atrium-import pvx [dry-run\|run] [--only=vaults] [--overwrite]` | PlayerVaultsX vaults. |
 | `/atrium-import vanilla [dry-run\|run] [--overwrite]` | `banned-players.json` and `banned-ips.json`. |
 | `/atrium-import economy <plugin> [dry-run\|run] [--overwrite]` | Balances from another Vault economy provider. |
 | `/atrium-import status` / `cancel` | Progress of the running import / stop it. |
@@ -40,22 +42,23 @@ ledger already marked.
 ✔ imported · ◐ imported with limits (see notes) · ✘ not imported (counted and explained in the report) · – the
 source has no such data
 
-| Category (`--only=`) | CMI | EssentialsX | Vanilla | Vault economy |
-|---|---|---|---|---|
-| `economy` | ✔ database | ✔ `userdata/*.yml` | – | ✔ any provider |
-| `homes` | ✔ database | ✔ `userdata/*.yml` | – | – |
-| `warps` | ✔ `Saves/Warps.yml` | ✔ `warps/*.yml` | – | – |
-| `nicks` | ✔ database | ✔ `userdata/*.yml` | – | – |
-| `playtime` | ✔ database | – | – | – |
-| `holograms` | ✔ `Saves/Holograms.yml` | – | – | – |
-| `spawn` | ✔ `config.yml` (main and first-join spawn) | ◐ `EssentialsSpawn/spawn.yml` | – | – |
-| `kits` | ◐ `Kits/*.yml` | ◐ `kits.yml` | – | – |
-| `jails` | ◐ `Saves/Jails.yml` | ◐ `jail.yml` / `jails.yml` | – | – |
-| `punishments` | ◐ mutes + vanilla ban lists | ✔ mutes, jail sentences, bans + vanilla ban lists | ✔ bans, temp bans, IP bans | – |
-| `locations` | ✔ last location → `/back` | ✔ logout location → `/back` | – | – |
-| `mail` | – | ✔ `userdata/*.yml` | – | – |
-| `history` | – | ✘ login/logout times | – | – |
-| `ignore` | – | ✘ ignore lists | – | – |
+| Category (`--only=`) | CMI | EssentialsX | PlayerVaultsX | Vanilla | Vault economy |
+|---|---|---|---|---|---|
+| `economy` | ✔ database | ✔ `userdata/*.yml` | – | – | ✔ any provider |
+| `homes` | ✔ database | ✔ `userdata/*.yml` | – | – | – |
+| `warps` | ✔ `Saves/Warps.yml` | ✔ `warps/*.yml` | – | – | – |
+| `nicks` | ✔ database | ✔ `userdata/*.yml` | – | – | – |
+| `playtime` | ✔ database | – | – | – | – |
+| `holograms` | ✔ `Saves/Holograms.yml` | – | – | – | – |
+| `spawn` | ✔ `config.yml` (main and first-join spawn) | ◐ `EssentialsSpawn/spawn.yml` | – | – | – |
+| `kits` | ◐ `Kits/*.yml` | ◐ `kits.yml` | – | – | – |
+| `jails` | ◐ `Saves/Jails.yml` | ◐ `jail.yml` / `jails.yml` | – | – | – |
+| `punishments` | ◐ mutes + vanilla ban lists | ✔ mutes, jail sentences, bans + vanilla ban lists | – | ✔ bans, temp bans, IP bans | – |
+| `locations` | ✔ last location → `/back` | ✔ logout location → `/back` | – | – | – |
+| `mail` | – | ✔ `userdata/*.yml` | – | – | – |
+| `ignore` | ✔ database (UUIDs separated by `;`) | ✔ `userdata/*.yml` | – | – | – |
+| `vaults` | – | – | ✔ `newvaults/*.yml` (gzip item NBT) | – | – |
+| `history` | – | ✘ login/logout times | – | – | – |
 
 ### Notes per category
 
@@ -88,8 +91,37 @@ source has no such data
 - **Locations.** The last (CMI) or logout (EssentialsX) location becomes the newest `/back` entry of that player.
 - **Mail.** Expired mail is skipped; identical mail (same sender, text and time) is never stored twice. Imported
   mail never expires and ignores the mailbox limit.
-- **History and ignore lists** are counted in the report only. Atrium derives first-join and last-seen from its own
-  sessions, and players re-add ignores with `/ignore`.
+- **Ignore lists.** Entries are added to the player's existing list, never removed, through the chat module's
+  `IgnoreAdminService`; the import is therefore idempotent and safe to re-run. EssentialsX entries are UUIDs
+  (older files: names) and CMI stores UUIDs separated by `;`; a name is resolved against accounts Atrium knows,
+  and a name it does not know is reported as invalid. The player's own entry is dropped (`/ignore` refuses
+  self-ignores). The write is confirmed by a save before it is counted, so an ignore list is never reported as
+  imported when its save failed. Online players can be imported here: the write is one atomic component update,
+  like `/ignore` itself, and cannot lose an entry the player adds at the same time.
+- **History** is counted in the report only: Atrium derives first-join and last-seen from its own sessions.
+
+## PlayerVaultsX vaults
+
+`/atrium-import pvx` reads `plugins/PlayerVaults/newvaults/<uuid>.yml` (configurable with `pvxFolder`) and
+writes the contents into the inventories module's `/pv` vaults through `VaultImportService`.
+
+PlayerVaultsX 4.4 stores one base64 value per vault (`vault1`, `vault2`, ...). The payload is a slot count
+followed by, per slot, a length and that many item bytes; the item bytes are gzip-compressed item NBT. That is
+the same item format as Paper's `ItemStack#serializeAsBytes`, so it is read with the public Paper API and no
+object stream. Every vault of one player is written in a single transaction: if one of their vaults cannot be
+read, none of that player's vaults is written.
+
+Two shapes are refused on purpose:
+
+- **Java object serialization** (`BukkitObjectOutputStream`, payload magic `AC ED`). Old PlayerVaults and old
+  PlayerVaultsX builds stored vaults this way. Reading it means deserializing classes chosen by the file, which
+  can execute code, so Atrium does not do it. The report marks those players `unsupported` with that reason.
+  Alternative with PlayerVaultsX installed and enabled: open each vault with `/pv <player> <n>` and copy the
+  items into the matching `/pv` vault, or ask the plugin author for an NBT export. Atrium does not call the
+  PlayerVaultsX API: the plugin has no documented API for reading another player's vaults, so a live import
+  would depend on its internals.
+- **YAML item maps** (`==: org.bukkit.inventory.ItemStack`). This is not the base64 format PlayerVaultsX
+  writes; the file is reported as invalid instead of guessed.
 
 ## Vault economy import
 
@@ -120,5 +152,7 @@ skip, and every problem with the record it belongs to. The console shows the fir
 |---|---|
 | Balances, homes, nicknames, playtime | Ledger per source, category and player |
 | `/back` entry, mail | Ledger per source and player; identical mail is never stored twice |
+| Ignore lists | Ledger per source and player; the write is additive, so a repeated run never removes or duplicates an entry |
+| Personal vaults | Ledger per source and player; nothing is written when a vault of that player already exists unless `--overwrite` |
 | Punishments | Ledger per source, kind and player (or IP address); active duplicates are skipped |
 | Warps, spawn, kits, jails, holograms | Skipped when they already exist in Atrium, unless `--overwrite` |

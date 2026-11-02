@@ -1,5 +1,7 @@
 package dev.yanianz.atrium.module.importer;
 
+import dev.yanianz.atrium.api.chat.IgnoreAdminService;
+import dev.yanianz.atrium.api.chat.IgnoreService;
 import dev.yanianz.atrium.api.kits.KitAdminService;
 import dev.yanianz.atrium.api.mail.MailAdminService;
 import dev.yanianz.atrium.api.moderation.ModerationImportService;
@@ -9,6 +11,7 @@ import dev.yanianz.atrium.api.moderation.PunishmentType;
 import dev.yanianz.atrium.api.teleport.BackHistoryAdminService;
 import dev.yanianz.atrium.api.teleport.SpawnAdminService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
+import dev.yanianz.atrium.api.user.PlayerRef;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -19,6 +22,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -42,6 +46,8 @@ abstract class ExtendedImportJob extends ImportJob {
     protected PunishmentService punishments;
     protected KitAdminService kitAdmin;
     protected MailAdminService mailAdmin;
+    protected IgnoreService ignoreRead;
+    protected IgnoreAdminService ignoreAdmin;
 
     private EssentialsLocations.WorldIndex worldIndex;
     /** Jails found in the source (lower case), so a dry run can tell whether a jail sentence would import. */
@@ -61,6 +67,12 @@ abstract class ExtendedImportJob extends ImportJob {
         punishments = ctx.services().get(PunishmentService.class).orElse(null);
         kitAdmin = ctx.services().get(KitAdminService.class).orElse(null);
         mailAdmin = ctx.services().get(MailAdminService.class).orElse(null);
+        ignoreRead = ctx.services().get(IgnoreService.class).orElse(null);
+        ignoreAdmin = ctx.services().get(IgnoreAdminService.class).orElse(null);
+        if (options.includes(ImportCategory.IGNORE) && ignoreAdmin == null) {
+            report.note("IgnoreAdminService is unavailable; ignore lists are counted but not imported "
+                    + "(update the chat module)");
+        }
     }
 
     /** Adds a report note only the first time {@code key} is seen. */
@@ -648,9 +660,99 @@ abstract class ExtendedImportJob extends ImportJob {
         }
     }
 
+    /**
+     * Imports a player's ignore list; ledger category {@link ImportCategory#IGNORE}. The write is additive
+     * (chat's {@link IgnoreAdminService}), so a name the source only knows by UUID needs no account in
+     * Atrium and a repeated run can never remove an entry the player added in between.
+     */
+    protected void importIgnores(UUID owner, String label, List<String> entries) {
+        if (!options.includes(ImportCategory.IGNORE) || entries == null || entries.isEmpty()) {
+            return;
+        }
+        List<String> unique = IgnoreEntries.dedupe(entries);
+        report.found(ImportCategory.IGNORE, unique.size());
+        if (ignoreAdmin == null) {
+            report.unsupported(ImportCategory.IGNORE, unique.size(),
+                    "chat module (IgnoreAdminService) not available");
+            return;
+        }
+        Set<UUID> targets = new LinkedHashSet<>();
+        int ownEntries = 0;
+        for (String entry : unique) {
+            UUID uuid = IgnoreEntries.uuid(entry);
+            if (uuid != null) {
+                if (uuid.equals(owner)) {
+                    ownEntries++;
+                } else {
+                    targets.add(uuid);
+                }
+                continue;
+            }
+            // A legacy name: resolve it the same way a command would, without a Mojang lookup per name.
+            Optional<PlayerRef> resolved;
+            try {
+                resolved = await(ctx.users().resolveAccount(entry, false), ImportCategory.IGNORE);
+            } catch (StepFailed failure) {
+                report.failed(ImportCategory.IGNORE, label,
+                        "cannot resolve ignore entry '" + shorten(entry, 40) + "': " + failure.getMessage());
+                continue;
+            }
+            if (resolved.isEmpty()) {
+                report.invalid(ImportCategory.IGNORE, label,
+                        "ignore entry '" + shorten(entry, 40) + "' is neither a UUID nor a name Atrium knows");
+            } else if (resolved.get().uuid().equals(owner)) {
+                ownEntries++;
+            } else {
+                targets.add(resolved.get().uuid());
+            }
+        }
+        if (ownEntries > 0) {
+            report.skipped(ImportCategory.IGNORE, ownEntries, "the player's own entry (nobody can ignore themselves)");
+        }
+        if (targets.isEmpty()) {
+            return;
+        }
+        Set<UUID> current = Set.of();
+        if (ignoreRead != null) {
+            try {
+                Set<UUID> snapshot = ignoreRead.ignored(owner);
+                current = snapshot == null ? Set.of() : snapshot;
+            } catch (RuntimeException e) {
+                ctx.logger().warn("Reading the ignore list of {} for the dry run failed", label, e);
+            }
+        }
+        int already = 0;
+        for (UUID target : targets) {
+            if (current.contains(target)) {
+                already++;
+            }
+        }
+        if (!options.overwrite() && alreadyImported(ledgerSource(), ImportCategory.IGNORE, owner)) {
+            report.skipped(ImportCategory.IGNORE, targets.size(), "ignore list already imported (use --overwrite)");
+            return;
+        }
+        if (already > 0) {
+            report.skipped(ImportCategory.IGNORE, already, "already ignored");
+        }
+        int planned = targets.size() - already;
+        if (options.dryRun()) {
+            report.imported(ImportCategory.IGNORE, planned);
+            return;
+        }
+        try {
+            mark(ledgerSource(), ImportCategory.IGNORE, owner);
+            int added = awaitWrite(ignoreAdmin.importIgnores(owner, targets), ImportCategory.IGNORE,
+                    "ignore list of " + label);
+            report.imported(ImportCategory.IGNORE, added);
+            report.skipped(ImportCategory.IGNORE, Math.max(0, targets.size() - added), "already ignored");
+        } catch (StepFailed failure) {
+            report.failed(ImportCategory.IGNORE, label, failure.getMessage());
+            unmark(ledgerSource(), ImportCategory.IGNORE, owner, label);
+        }
+    }
+
     /** Path of the server folder (where the vanilla ban lists live). */
-    protected Path serverFolder() {
-        Path cwd = Path.of("").toAbsolutePath();
+    protected Path serverFolder() {        Path cwd = Path.of("").toAbsolutePath();
         if (Files.isRegularFile(cwd.resolve("banned-players.json")) || Files.isRegularFile(cwd.resolve("server.properties"))) {
             return cwd;
         }

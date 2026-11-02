@@ -37,6 +37,12 @@ record ChatUser(Set<UUID> ignored, @Nullable UUID replyTo, @Nullable String repl
                 chatTag, rangeSpy);
     }
 
+    /** Replaces the ignore set; used by the additive import, which computes the union itself. */
+    ChatUser withIgnored(Set<UUID> uuids) {
+        return new ChatUser(uuids, replyTo, replyToName, messagesEnabled, socialSpy, staffChat, chatColor, chatRoom,
+                chatTag, rangeSpy);
+    }
+
     ChatUser withReplyTo(@Nullable UUID uuid, @Nullable String name) {
         return new ChatUser(ignored, uuid, name, messagesEnabled, socialSpy, staffChat, chatColor, chatRoom, chatTag,
                 rangeSpy);

@@ -30,10 +30,52 @@ final class VaultStore {
     /** One stored vault: the saved size and the raw item bytes. */
     record Stored(int rows, int size, byte[] items, long updated) {}
 
+    /** One vault to write from an import; {@code size} must be {@code rows * 9}. */
+    record Draft(int vault, int rows, int size, byte[] items) {}
+
     private final Database db;
 
     VaultStore(Database db) {
         this.db = db;
+    }
+
+    /**
+     * Writes every draft of one owner in a single transaction. With {@code replace == false} nothing is
+     * written when any of the drafts already exists, so a player's vaults are imported all-or-nothing.
+     *
+     * @return {@code true} when the drafts were written, {@code false} when an existing row blocked them
+     */
+    CompletableFuture<Boolean> importAll(UUID owner, List<Draft> drafts, boolean replace) {
+        if (drafts.isEmpty()) {
+            return CompletableFuture.completedFuture(true);
+        }
+        String sql = db.dialect().upsert(db.table("inventories_vaults"),
+                "uuid, vault, rows, size, updated, items", "?, ?, ?, ?, ?, ?", "uuid, vault",
+                "rows, size, updated, items");
+        return db.transaction(c -> {
+            if (!replace) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT 1 FROM " + db.table("inventories_vaults") + " WHERE uuid = ? AND vault = ?")) {
+                    for (Draft draft : drafts) {
+                        ps.setString(1, owner.toString());
+                        ps.setInt(2, draft.vault());
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            long now = System.currentTimeMillis();
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                for (Draft draft : drafts) {
+                    Database.bind(ps, owner.toString(), draft.vault(), draft.rows(), draft.size(), now, draft.items());
+                    ps.executeUpdate();
+                }
+            }
+            return true;
+        });
     }
 
     CompletableFuture<Optional<Stored>> load(UUID owner, int vault) {

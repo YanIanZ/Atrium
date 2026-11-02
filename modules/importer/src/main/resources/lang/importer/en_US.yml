@@ -36,6 +36,8 @@ backup-missing: "<prefix><error>Atrium SQLite database not found: <highlight><fi
 backup-failed: "<prefix><error>Backup failed: <highlight><reason></highlight>. See the server log."
 backup-mysql: "<prefix><warning>Atrium uses MySQL/MariaDB. Run mysqldump on the database host, for example: <highlight>mysqldump --single-transaction -h <host> -P <port> -u <user> <database> > backup.sql</highlight>"
 usage-vanilla: "<prefix><error>Usage: /atrium-import vanilla [dry-run|run] [--overwrite] — <reason>"
+usage-pvx: "<prefix><error>Usage: /atrium-import pvx [dry-run|run] [--only=vaults] [--overwrite] — <reason>"
+no-pvx-folder: "<prefix><error>PlayerVaultsX vault folder not found: <highlight><path></highlight>. Set <highlight>pvxFolder</highlight> in modules/importer.yml (it is plugins/PlayerVaults/newvaults)."
 usage-economy: "<prefix><error>Usage: /atrium-import economy <plugin> [dry-run|run] [--overwrite] — <reason>"
 reason-missing-plugin: "name the economy plugin to import from (see /atrium-import sources)"
 economy-no-vault: "<prefix><error>Vault is not installed, so no economy provider can be read. Install Vault (or Atrium Vault) next to the old economy plugin, then run this again."

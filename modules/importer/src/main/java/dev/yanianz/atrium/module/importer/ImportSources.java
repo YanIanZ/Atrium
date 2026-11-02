@@ -18,7 +18,7 @@ final class ImportSources {
     record Source(String name, String command, boolean available, String detail) {}
 
     static List<Source> scan(Path cmi, String cmiHint, Path essentials, String essentialsHint, Path essentialsSpawn,
-            Path serverFolder) {
+            Path pvx, String pvxHint, Path serverFolder) {
         List<Source> out = new ArrayList<>();
         if (cmi == null) {
             out.add(new Source("CMI", "/atrium-import cmi", false, "not found at " + cmiHint));
@@ -34,7 +34,8 @@ final class ImportSources {
             for (String file : List.of("cmi.sqlite.db", "cmi.sqlite", "cmi.db", "DataBase/cmi.sqlite.db")) {
                 sqlite |= Files.isRegularFile(cmi.resolve(file));
             }
-            add(parts, sqlite, "SQLite database (economy, homes, nicks, playtime, last location, mutes)");
+            add(parts, sqlite, "SQLite database (economy, homes, nicks, playtime, last location, mutes, ignore "
+                    + "lists)");
             add(parts, !sqlite, "users from the MySQL database in config.yml, if configured");
             out.add(new Source("CMI", "/atrium-import cmi", true, cmi + ": " + join(parts)));
         }
@@ -43,7 +44,8 @@ final class ImportSources {
         } else {
             List<String> parts = new ArrayList<>();
             int users = count(essentials.resolve("userdata"), ".yml");
-            add(parts, users > 0, users + " userdata file(s) (economy, homes, nicks, mail, mute/jail/ban, last location)");
+            add(parts, users > 0, users + " userdata file(s) (economy, homes, nicks, mail, mute/jail/ban, last "
+                    + "location, ignore lists)");
             int warps = count(essentials.resolve("warps"), ".yml");
             add(parts, warps > 0, warps + " warp(s)");
             add(parts, Files.isRegularFile(essentials.resolve("kits.yml")), "kits.yml");
@@ -52,6 +54,15 @@ final class ImportSources {
             add(parts, essentialsSpawn != null && Files.isRegularFile(essentialsSpawn.resolve("spawn.yml")),
                     "EssentialsSpawn spawn.yml");
             out.add(new Source("EssentialsX", "/atrium-import essentials", true, essentials + ": " + join(parts)));
+        }
+        if (pvx == null) {
+            out.add(new Source("PlayerVaultsX", "/atrium-import pvx", false, "not found at " + pvxHint));
+        } else {
+            int files = count(pvx, ".yml");
+            out.add(new Source("PlayerVaultsX", "/atrium-import pvx", files > 0,
+                    files == 0 ? pvx + ": no <uuid>.yml vault file found"
+                            : pvx + ": " + files + " vault file(s), base64 gzip item NBT (Java-serialized vaults "
+                                    + "are refused as unsafe)"));
         }
         List<String> bans = new ArrayList<>();
         add(bans, serverFolder != null && Files.isRegularFile(serverFolder.resolve("banned-players.json")),

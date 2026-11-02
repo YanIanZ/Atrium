@@ -38,6 +38,7 @@ final class CmiDatabaseSource implements AutoCloseable {
     private final String economyColumn;
     private final String locationColumn;
     private final String muteColumn;
+    private final String ignoreColumn;
     private final String playtimeTable;
     private final Map<String, String> playtimeColumns;
 
@@ -59,6 +60,7 @@ final class CmiDatabaseSource implements AutoCloseable {
             this.economyColumn = pick("economy", "balance");
             this.locationColumn = pick("lastteleportlocation", "teleportlocation", "logoutlocation", "logout_location");
             this.muteColumn = pick("mutedtill", "muteduntil", "mutetill", "muted_until");
+            this.ignoreColumn = pick("ignored", "ignores", "ignore", "ignorelist", "ignore_list");
             if (uuidColumn == null) {
                 throw new SQLException("CMI users table has no player_uuid/uuid column");
             }
@@ -124,6 +126,11 @@ final class CmiDatabaseSource implements AutoCloseable {
         return muteColumn;
     }
 
+    /** Column with the ignored player UUIDs, or {@code null} when this CMI version has none. */
+    String ignoreColumn() {
+        return ignoreColumn;
+    }
+
     boolean hasPlaytimeTable() {
         return playtimeTable != null;
     }
@@ -148,6 +155,7 @@ final class CmiDatabaseSource implements AutoCloseable {
         addIfPresent(selected, economyColumn);
         addIfPresent(selected, locationColumn);
         addIfPresent(selected, muteColumn);
+        addIfPresent(selected, ignoreColumn);
         StringBuilder sql = new StringBuilder("SELECT ");
         for (int i = 0; i < selected.size(); i++) {
             sql.append(i == 0 ? "" : ", ").append(quote(selected.get(i)));
@@ -177,7 +185,7 @@ final class CmiDatabaseSource implements AutoCloseable {
                     }
                     result.add(new CmiUserRecord(id, uuid, rawUuid, value(rs, nameColumn),
                             value(rs, nickColumn), value(rs, homesColumn), value(rs, economyColumn),
-                            value(rs, locationColumn), value(rs, muteColumn)));
+                            value(rs, locationColumn), value(rs, muteColumn), value(rs, ignoreColumn)));
                 }
             }
         }

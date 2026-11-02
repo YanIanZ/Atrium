@@ -36,6 +36,8 @@ backup-missing: "<prefix><error>Basis data SQLite Atrium tidak ditemukan: <highl
 backup-failed: "<prefix><error>Cadangan gagal: <highlight><reason></highlight>. Lihat log server."
 backup-mysql: "<prefix><warning>Atrium memakai MySQL/MariaDB. Jalankan mysqldump di host basis data, misalnya: <highlight>mysqldump --single-transaction -h <host> -P <port> -u <user> <database> > backup.sql</highlight>"
 usage-vanilla: "<prefix><error>Penggunaan: /atrium-import vanilla [dry-run|run] [--overwrite] — <reason>"
+usage-pvx: "<prefix><error>Penggunaan: /atrium-import pvx [dry-run|run] [--only=vaults] [--overwrite] — <reason>"
+no-pvx-folder: "<prefix><error>Folder vault PlayerVaultsX tidak ditemukan: <highlight><path></highlight>. Atur <highlight>pvxFolder</highlight> di modules/importer.yml (biasanya plugins/PlayerVaults/newvaults)."
 usage-economy: "<prefix><error>Penggunaan: /atrium-import economy <plugin> [dry-run|run] [--overwrite] — <reason>"
 reason-missing-plugin: "sebutkan plugin ekonomi sumbernya (lihat /atrium-import sources)"
 economy-no-vault: "<prefix><error>Vault tidak terpasang, jadi provider ekonomi tidak bisa dibaca. Pasang Vault (atau Atrium Vault) di samping plugin ekonomi lama, lalu jalankan lagi."

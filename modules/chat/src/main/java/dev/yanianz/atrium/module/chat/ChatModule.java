@@ -6,6 +6,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.yanianz.atrium.api.actions.ActionService;
 import dev.yanianz.atrium.api.chat.ChatChannel;
 import dev.yanianz.atrium.api.chat.ChatGate;
+import dev.yanianz.atrium.api.chat.IgnoreAdminService;
 import dev.yanianz.atrium.api.chat.IgnoreService;
 import dev.yanianz.atrium.api.chat.StaffChatEvent;
 import dev.yanianz.atrium.api.economy.EconomyService;
@@ -120,6 +121,7 @@ public final class ChatModule implements AtriumModule, Listener {
         this.roomStore = new ChatRoomStore(ctx.database());
         ctx.component(store.component);
         ctx.service(IgnoreService.class, new ChatIgnoreService(uuid -> cachedUser(uuid).ignored()));
+        ctx.service(IgnoreAdminService.class, new ChatIgnoreAdminService(ctx.users(), store.component));
         rebuild();
         try {
             roomStore.install(roomStore.loadAll().get(30, TimeUnit.SECONDS));

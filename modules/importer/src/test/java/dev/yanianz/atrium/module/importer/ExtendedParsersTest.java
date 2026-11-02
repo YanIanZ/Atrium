@@ -361,10 +361,12 @@ class ExtendedParsersTest {
         Files.createDirectories(ess.resolve("userdata"));
         Files.writeString(ess.resolve("userdata/a.yml"), "money: 1");
         Files.writeString(ess.resolve("kits.yml"), "kits: {}");
+        Path pvx = Files.createDirectories(server.resolve("plugins/PlayerVaults/newvaults"));
+        Files.writeString(pvx.resolve("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.yml"), "vault1: ''");
         Files.writeString(server.resolve("banned-players.json"), "[]");
 
-        List<ImportSources.Source> sources = ImportSources.scan(cmi, "x", ess, "y", null, server);
-        assertEquals(3, sources.size());
+        List<ImportSources.Source> sources = ImportSources.scan(cmi, "x", ess, "y", null, pvx, "z", server);
+        assertEquals(4, sources.size());
         assertTrue(sources.get(0).available());
         assertTrue(sources.get(0).detail().contains("warps"));
         assertTrue(sources.get(0).detail().contains("jails"));
@@ -372,11 +374,17 @@ class ExtendedParsersTest {
         assertTrue(sources.get(1).detail().contains("1 userdata file(s)"));
         assertTrue(sources.get(1).detail().contains("kits.yml"));
         assertTrue(sources.get(2).available());
-        assertTrue(sources.get(2).detail().contains("banned-players.json"));
+        assertTrue(sources.get(2).detail().contains("1 vault file(s)"));
+        assertTrue(sources.get(2).detail().contains("refused"));
+        assertTrue(sources.get(3).available());
+        assertTrue(sources.get(3).detail().contains("banned-players.json"));
 
-        List<ImportSources.Source> none = ImportSources.scan(null, "/p/CMI", null, "/p/Essentials", null, server.resolve("x"));
+        List<ImportSources.Source> none = ImportSources.scan(null, "/p/CMI", null, "/p/Essentials", null, null,
+                "/p/PlayerVaults/newvaults", server.resolve("x"));
         assertFalse(none.get(0).available());
         assertTrue(none.get(0).detail().contains("/p/CMI"));
+        assertFalse(none.get(3).available());
         assertFalse(none.get(2).available());
+        assertTrue(none.get(2).detail().contains("/p/PlayerVaults/newvaults"));
     }
 }

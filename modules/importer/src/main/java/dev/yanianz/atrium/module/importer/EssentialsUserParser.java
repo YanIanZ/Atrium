@@ -33,10 +33,15 @@ final class EssentialsUserParser {
     record UserFile(String id, UUID uuid, String label, String nickname, BigDecimal money, String moneyProblem,
             List<RawHome> homes, EssentialsLocations.EssLocation lastLocation,
             EssentialsLocations.EssLocation logoutLocation, Long login, Long logout, Long lastLogin,
-            int ignored, int mail, boolean jailed, boolean muted, boolean banned, String stateDetail,
+            List<String> ignores, int mail, boolean jailed, boolean muted, boolean banned, String stateDetail,
             States states, List<ParsedMail> mails) {
         boolean hasTimestamps() {
             return login != null || logout != null || lastLogin != null;
+        }
+
+        /** Number of ignore entries, as shown in the parser's own tests and the report. */
+        int ignored() {
+            return ignores.size();
         }
     }
 
@@ -97,7 +102,7 @@ final class EssentialsUserParser {
 
         return new UserFile(id, uuid, label, nickname, money, moneyProblem, homes(root), lastLocation(root),
                 logoutLocation(root), timestamp(root, "login"), timestamp(root, "logout"),
-                timestamp(root, "lastlogin", "lastLogin", "lastlogout", "lastLogout"), ignoreCount(root),
+                timestamp(root, "lastlogin", "lastLogin", "lastlogout", "lastLogout"), ignoreEntries(root),
                 mailCount(root), truthy(root, "jailed"), muted(root), banned(root), stateDetail(root),
                 states(root), mails(root));
     }
@@ -173,11 +178,24 @@ final class EssentialsUserParser {
         }
     }
 
-    // ---- report-only data ----
+    // ---- lists ----
 
-    private static int ignoreCount(ConfigurationNode root) {
+    private static List<String> ignoreEntries(ConfigurationNode root) {
         ConfigurationNode ignore = child(root, "ignore", "ignored");
-        return listSize(ignore);
+        if (ignore == null || ignore.virtual()) {
+            return List.of();
+        }
+        List<ConfigurationNode> nodes = ignore.isList() ? new ArrayList<ConfigurationNode>(ignore.childrenList())
+                : ignore.isMap() ? new ArrayList<ConfigurationNode>(ignore.childrenMap().values())
+                : List.of(ignore);
+        List<String> entries = new ArrayList<>();
+        for (ConfigurationNode node : nodes) {
+            if (node.isMap() || node.isList()) {
+                continue;
+            }
+            entries.addAll(IgnoreEntries.parse(node.getString()));
+        }
+        return IgnoreEntries.dedupe(entries);
     }
 
     private static int mailCount(ConfigurationNode root) {

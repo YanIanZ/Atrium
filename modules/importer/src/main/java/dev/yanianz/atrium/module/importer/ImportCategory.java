@@ -27,8 +27,10 @@ public enum ImportCategory {
     MAIL("mail"),
     /** Login/logout timestamps; reported only. */
     HISTORY("history"),
-    /** Ignore lists; reported only (the chat module has no write API for them). */
+    /** Ignore lists, imported additively through the chat module's IgnoreAdminService. */
     IGNORE("ignore"),
+    /** Personal vaults into the inventories module's /pv vaults (VaultImportService). */
+    VAULTS("vaults"),
     /** Row-level source problems that are not tied to one importable record. */
     SOURCE("source");
 
@@ -61,13 +63,18 @@ public enum ImportCategory {
     /** Categories the CMI importer understands, in display order. */
     public static Set<ImportCategory> cmi() {
         return Collections.unmodifiableSet(EnumSet.of(ECONOMY, HOMES, WARPS, NICKS, PLAYTIME, HOLOGRAMS, SPAWN,
-                KITS, JAILS, PUNISHMENTS, LOCATIONS));
+                KITS, JAILS, PUNISHMENTS, LOCATIONS, IGNORE));
     }
 
     /** Categories the EssentialsX importer understands, in display order. */
     public static Set<ImportCategory> essentials() {
         return Collections.unmodifiableSet(EnumSet.of(ECONOMY, HOMES, WARPS, NICKS, SPAWN, KITS, JAILS,
                 PUNISHMENTS, LOCATIONS, MAIL, HISTORY, IGNORE));
+    }
+
+    /** Categories of the PlayerVaultsX files. */
+    public static Set<ImportCategory> pvx() {
+        return Collections.unmodifiableSet(EnumSet.of(VAULTS));
     }
 
     /** Categories of the server's own ban files ({@code banned-players.json}, {@code banned-ips.json}). */

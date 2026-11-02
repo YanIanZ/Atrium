@@ -64,7 +64,8 @@ final class CmiImportJob extends ExtendedImportJob {
         }
         boolean needsUsers = options.includes(ImportCategory.ECONOMY) || options.includes(ImportCategory.HOMES)
                 || options.includes(ImportCategory.NICKS) || options.includes(ImportCategory.PLAYTIME)
-                || options.includes(ImportCategory.LOCATIONS) || options.includes(ImportCategory.PUNISHMENTS);
+                || options.includes(ImportCategory.LOCATIONS) || options.includes(ImportCategory.PUNISHMENTS)
+                || options.includes(ImportCategory.IGNORE);
         if (needsUsers) {
             CmiConnectionConfig connection = CmiConnectionConfig.read(cmiFolder);
             sourceDescription = connection.describe();
@@ -129,10 +130,14 @@ final class CmiImportJob extends ExtendedImportJob {
                 + ", economy=" + yesNo(source.hasEconomyColumn())
                 + ", playtime_table=" + yesNo(source.hasPlaytimeTable())
                 + ", last_location=" + (source.locationColumn() == null ? "no" : source.locationColumn())
-                + ", mute=" + (source.muteColumn() == null ? "no" : source.muteColumn()));
+                + ", mute=" + (source.muteColumn() == null ? "no" : source.muteColumn())
+                + ", ignore=" + (source.ignoreColumn() == null ? "no" : source.ignoreColumn()));
         if (options.includes(ImportCategory.PUNISHMENTS) && source.muteColumn() == null) {
             noteOnce("cmi-mutes", "No mute column found in the CMI users table: CMI mutes are not imported "
                     + "(re-apply them with /mute). CMI bans are read from the server's ban lists.");
+        }
+        if (options.includes(ImportCategory.IGNORE) && source.ignoreColumn() == null) {
+            noteOnce("cmi-ignores", "No ignore column found in the CMI users table: ignore lists are not imported.");
         }
     }
 
@@ -186,10 +191,13 @@ final class CmiImportJob extends ExtendedImportJob {
         report.note("Users processed: " + processed + (isCancelled() ? " (cancelled)" : ""));
     }
 
-    /** The last location as a /back entry, and an active mute. */
+    /** The last location as a /back entry, an active mute and the ignore list. */
     private void importUserExtras(CmiUserRecord user) {
         if (user.uuid() == null) {
             return;
+        }
+        if (options.includes(ImportCategory.IGNORE) && user.ignored() != null && !user.ignored().isBlank()) {
+            importIgnores(user.uuid(), user.label(), IgnoreEntries.parse(user.ignored()));
         }
         if (options.includes(ImportCategory.LOCATIONS) && user.lastLocation() != null && !user.lastLocation().isBlank()) {
             Optional<dev.yanianz.atrium.api.teleport.StoredLocation> location = CmiLocations.parse(user.lastLocation());

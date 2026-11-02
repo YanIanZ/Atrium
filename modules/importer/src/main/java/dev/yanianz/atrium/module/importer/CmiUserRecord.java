@@ -4,9 +4,9 @@ import java.util.UUID;
 
 /** One row of CMI's users table, as read from the source database. */
 record CmiUserRecord(long id, UUID uuid, String rawUuid, String name, String nickname, String homes, String economy,
-        String lastLocation, String mutedUntil) {
+        String lastLocation, String mutedUntil, String ignored) {
     CmiUserRecord(long id, UUID uuid, String rawUuid, String name, String nickname, String homes, String economy) {
-        this(id, uuid, rawUuid, name, nickname, homes, economy, null, null);
+        this(id, uuid, rawUuid, name, nickname, homes, economy, null, null, null);
     }
 
     String label() {
