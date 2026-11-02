@@ -27,12 +27,24 @@ public class ScoreboardConfig {
               packets - always PacketEvents packets, also on Paper (requires the packetevents plugin);
               tab     - the TAB plugin's scoreboard API: Atrium renders the boards below per player and TAB shows
                         them. Needs TAB with its scoreboard feature enabled in TAB's config; otherwise Atrium falls
-                        back to the auto choice without TAB and logs why once. When Atrium hides its sidebar (no
-                        matching board, or /sidebar toggle), TAB's own scoreboards take the slot back; the score
-                        number format follows TAB's config.
+                        back to the auto choice without TAB and logs why once. TAB's own scoreboards never show
+                        while Atrium shows a sidebar; see tab-default-scoreboard for when it shows none. The
+                        score number format follows TAB's config. Use /sidebar, not TAB's scoreboard toggle
+                        command: Atrium keeps its sidebar visible in TAB while the player wants it.
+            With TAB's scoreboard feature on, keep this on auto or tab: bukkit or packets would draw a second
+            sidebar that fights TAB's (Atrium logs a warning).
             Folia has no scoreboard API, so without PacketEvents or TAB sidebars stay hidden there.
             /sidebar engine shows the active backend. Changes apply on /atrium reload.""")
     public String backend = "auto";
+
+    @Comment("""
+            Only with the tab backend: what players see when Atrium shows them no sidebar (no board matches, or
+            they turned it off with /sidebar):
+              hide - nothing: TAB's own default scoreboards are hidden too (TAB's scoreboard visibility is turned
+                     off for that player; with TAB's remember-toggle-choice it is also stored by TAB and turned
+                     back on when Atrium shows a sidebar again or stops using TAB);
+              show - TAB's own scoreboards from TAB's config take the slot.""")
+    public String tabDefaultScoreboard = "hide";
 
     @Comment("""
             Sidebar boards, checked top to bottom; a player sees the first board whose worlds and permission match.

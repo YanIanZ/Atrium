@@ -8,7 +8,8 @@ import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 /** Immutable, validated view of {@link ScoreboardConfig}; replaced as a whole on reload. */
-record ScoreboardSettings(BackendMode backend, int intervalTicks, List<BoardSpec> boards, Animations animations) {
+record ScoreboardSettings(BackendMode backend, int intervalTicks, List<BoardSpec> boards, Animations animations,
+        TabSidebarSync.DefaultMode tabDefault) {
     static final int MAX_LINES = 15;
 
     record BoardSpec(String name, Targeting targeting, String title, List<String> lines) {
@@ -41,7 +42,8 @@ record ScoreboardSettings(BackendMode backend, int intervalTicks, List<BoardSpec
             }
         }
         return new ScoreboardSettings(BackendMode.parse(config.backend, problems), interval, List.copyOf(boards),
-                Animations.from(config.animations, (n, problem) -> problems.accept("animations." + n, problem)));
+                Animations.from(config.animations, (n, problem) -> problems.accept("animations." + n, problem)),
+                TabSidebarSync.DefaultMode.parse(config.tabDefaultScoreboard, problems));
     }
 
     static int clamp(int value, int min, int max, String option, BiConsumer<String, String> problems) {

@@ -42,8 +42,30 @@ interface SidebarBackend {
     default void stop() {
     }
 
+    /**
+     * Global thread, TAB backend only: TAB (re)loaded these players or everyone, so what Atrium set there is gone;
+     * the next {@link #flush()} sets it again.
+     */
+    default void invalidate(dev.yanianz.atrium.module.display.TabResync.Batch batch) {
+    }
+
     /** The plugin behind this backend is being disabled: forget all state without calling into it. */
     default void detach() {
+    }
+
+    /**
+     * Global thread, TAB backend only (null otherwise), for {@code /sidebar engine}.
+     *
+     * @param loadedPlayers  players TAB has loaded
+     * @param appliedPlayers loaded players whose sidebar slot Atrium currently controls in TAB (its board shown,
+     *                       or TAB's own scoreboards hidden by Atrium)
+     * @param hiddenDefaults loaded players for whom Atrium hid TAB's own scoreboards
+     * @param reapplied      times Atrium found its board gone in TAB and showed it again
+     */
+    record TabStatus(int loadedPlayers, int appliedPlayers, int hiddenDefaults, long reapplied) {}
+
+    default @org.jspecify.annotations.Nullable TabStatus tabStatus() {
+        return null;
     }
 
     /**

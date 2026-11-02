@@ -1,6 +1,7 @@
 package dev.yanianz.atrium.module.nick;
 
 import dev.yanianz.atrium.api.nick.NickService;
+import dev.yanianz.atrium.api.tablist.TabListService;
 import dev.yanianz.atrium.api.user.AtriumUser;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.module.AtriumModule;
@@ -257,6 +258,7 @@ public final class NickModule implements AtriumModule, NickService, Listener {
         if (updatesListName()) {
             player.playerListName(displayName);
         }
+        renderTabList(player);
     }
 
     void reset(Player player) {
@@ -264,6 +266,15 @@ public final class NickModule implements AtriumModule, NickService, Listener {
         if (updatesListName()) {
             player.playerListName(null);
         }
+        renderTabList(player);
+    }
+
+    /**
+     * The tablist module renders list names from the display name (also through the TAB plugin): ask it to show
+     * the new name now instead of on its next update.
+     */
+    private void renderTabList(Player player) {
+        ctx.services().get(TabListService.class).ifPresent(tabList -> tabList.requestRender(player.getUniqueId()));
     }
 
     private void applyStored(Player player, int retries) {
@@ -291,7 +302,10 @@ public final class NickModule implements AtriumModule, NickService, Listener {
         }
     }
 
-    /** The tablist module formats list names itself (using the display name), so do not fight over them. */
+    /**
+     * The tablist module formats list names itself (using the display name, natively or through the TAB plugin),
+     * so do not fight over them.
+     */
     private boolean updatesListName() {
         return config.get().updatePlayerListName
                 && !dev.yanianz.atrium.api.Atrium.api().enabledModules().contains("tablist");

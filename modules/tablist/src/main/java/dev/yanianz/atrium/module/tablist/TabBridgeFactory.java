@@ -1,6 +1,7 @@
 package dev.yanianz.atrium.module.tablist;
 
 import dev.yanianz.atrium.api.service.ServiceRegistry;
+import dev.yanianz.atrium.module.display.TabResync;
 import org.bukkit.Bukkit;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -17,13 +18,16 @@ final class TabBridgeFactory {
         return Bukkit.getPluginManager().isPluginEnabled(TablistEngineSelection.TAB_PLUGIN);
     }
 
-    /** @return a ready bridge, or {@code null} when TAB is missing or its API cannot be used */
-    static @Nullable TabBridge create(Logger logger, ServiceRegistry services) {
+    /**
+     * @param resync receives TAB's load events and Atrium's "new texts ready" wake-ups
+     * @return a ready bridge, or {@code null} when TAB is missing or its API cannot be used
+     */
+    static @Nullable TabBridge create(Logger logger, ServiceRegistry services, TabResync resync) {
         if (!pluginEnabled()) {
             return null;
         }
         try {
-            return TabApiBridge.create(logger, services);
+            return TabApiBridge.create(logger, services, resync);
         } catch (RuntimeException | LinkageError e) {
             // A broken or incompatible TAB must not take the whole module down.
             logger.warn("TAB is enabled but its API cannot be used; the tab list uses the native engine", e);

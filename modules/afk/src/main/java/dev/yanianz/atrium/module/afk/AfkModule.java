@@ -6,6 +6,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.yanianz.atrium.api.afk.AfkReason;
 import dev.yanianz.atrium.api.afk.AfkService;
 import dev.yanianz.atrium.api.afk.AfkStateChangeEvent;
+import dev.yanianz.atrium.api.tablist.TabListService;
 import dev.yanianz.atrium.api.vanish.VanishService;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
@@ -58,6 +59,8 @@ public final class AfkModule implements AtriumModule, Listener, AfkService {
     static final String PERM_AFK = "atrium.afk";
     static final String PERM_KICK_EXEMPT = "atrium.afk.kickexempt";
     private static final Pattern PLAYER_NAME = Pattern.compile("[A-Za-z0-9_]{1,16}");
+    /** Source id of the AFK tag in the tab list. */
+    static final String TAB_TAG_SOURCE = "afk";
     private static final Title.Times TITLE_TIMES =
             Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(3), Duration.ofMillis(500));
 
@@ -117,6 +120,7 @@ public final class AfkModule implements AtriumModule, Listener, AfkService {
     @Override
     public void disable() {
         checkTask.cancel();
+        ctx.services().get(TabListService.class).ifPresent(tabList -> tabList.clearNameTags(TAB_TAG_SOURCE));
         long now = System.currentTimeMillis();
         for (AfkTracker tracker : List.copyOf(trackers.values())) {
             if (!tracker.isAfk()) {
@@ -149,6 +153,15 @@ public final class AfkModule implements AtriumModule, Listener, AfkService {
         validate(config.get());
         this.rules = AfkRules.from(config.get());
         scheduleChecks();
+        // The tag text or position may have changed: re-apply it for everyone who is AFK.
+        ctx.services().get(TabListService.class).ifPresent(tabList -> {
+            tabList.clearNameTags(TAB_TAG_SOURCE);
+            for (AfkTracker tracker : List.copyOf(trackers.values())) {
+                if (tracker.isAfk()) {
+                    tabListTag(tracker.uuid(), true);
+                }
+            }
+        });
     }
 
     private void scheduleChecks() {
@@ -277,13 +290,39 @@ public final class AfkModule implements AtriumModule, Listener, AfkService {
                 player.setInvulnerable(true);
             }
             broadcast(player, message, true, reason);
+            tabListTag(player.getUniqueId(), true);
         } else {
             AfkTracker.Exit exit = tracker.endAfk(now);
             restore(player, exit);
             recordAfkSession(player.getUniqueId(), exit.durationMillis());
             broadcast(player, "", false, reason);
+            tabListTag(player.getUniqueId(), false);
         }
         return true;
+    }
+
+    /**
+     * Asks the tablist module to show or remove the AFK tag in this player's list name. The tablist module owns
+     * list names (and, with the TAB engine, TAB does), so the AFK module never sets one itself.
+     */
+    private void tabListTag(UUID player, boolean afk) {
+        Optional<TabListService> service = ctx.services().get(TabListService.class);
+        if (service.isEmpty()) {
+            return;
+        }
+        AfkConfig cfg = config.get();
+        Component tag = null;
+        if (afk && cfg.tabListTag != null && !cfg.tabListTag.isEmpty()) {
+            tag = ctx.messages().parseTrusted(cfg.tabListTag);
+        }
+        TabListService.Placement placement = "before".equalsIgnoreCase(String.valueOf(cfg.tabListTagPosition).strip())
+                ? TabListService.Placement.BEFORE
+                : TabListService.Placement.AFTER;
+        try {
+            service.get().setNameTag(player, TAB_TAG_SOURCE, placement, tag);
+        } catch (RuntimeException e) {
+            ctx.logger().warn("Updating the AFK tab list tag of {} failed", player, e);
+        }
     }
 
     private void restore(Player player, AfkTracker.Exit exit) {

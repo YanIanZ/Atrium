@@ -1,5 +1,7 @@
 package dev.yanianz.atrium.module.scoreboard;
 
+import dev.yanianz.atrium.module.display.TabResync;
+import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -31,13 +33,17 @@ final class TabBackendFactory {
         }
     }
 
-    /** @return a ready backend, or {@code null} when TAB's scoreboard API cannot be used */
-    static @Nullable SidebarBackend create(Logger logger) {
+    /**
+     * @param resync receives TAB's load events and Atrium's "new sidebar ready" wake-ups
+     * @param mode   current tab-default-scoreboard setting
+     * @return a ready backend, or {@code null} when TAB's scoreboard API cannot be used
+     */
+    static @Nullable SidebarBackend create(Logger logger, TabResync resync, Supplier<TabSidebarSync.DefaultMode> mode) {
         if (!pluginEnabled()) {
             return null;
         }
         try {
-            return TabSidebarBackend.create(logger);
+            return TabSidebarBackend.create(logger, resync, mode);
         } catch (RuntimeException | LinkageError e) {
             logger.warn("TAB is enabled but its scoreboard API cannot be used; sidebars use another backend", e);
             return null;

@@ -75,4 +75,13 @@ public class AfkConfig {
 
     @Comment("Maximum length of a message passed to /afk. 1 through 1024.")
     public int maxMessageLength = 256;
+
+    @Comment("Tag added to the player's tab list name while they are AFK (MiniMessage, trusted admin text). It is\n"
+            + "composed by the tablist module into the name it renders, so it works with the native and the TAB\n"
+            + "engine and never stacks with TAB's own name. Empty disables it. Needs the tablist module with\n"
+            + "set-list-name: true; without the tablist module no tag is shown.")
+    public String tabListTag = " <gray>[AFK]</gray>";
+
+    @Comment("Where the tab list tag goes: before or after the name.")
+    public String tabListTagPosition = "after";
 }

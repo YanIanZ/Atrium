@@ -14,13 +14,20 @@ public class TablistConfig {
     @Comment("""
             Engine that shows the tab list:
               auto   - tab when the TAB plugin (by NEZNAMY) is enabled, otherwise native;
-              native - Atrium sends the header, footer, list names and list order itself;
-              tab    - Atrium renders everything below and hands it to TAB through TAB's API; Atrium then sends
-                       none of it itself. Each part needs the matching TAB feature (header-footer,
-                       tablist-name-formatting, sorting through scoreboard-teams); a part whose TAB feature is
-                       disabled is left to TAB's own config (logged once). Falls back to native when TAB is missing.
-            With tab, list names replace TAB's prefix/name/suffix for each player, and sorting uses TAB team names.
-            Check the active engine with /tablist engine. Changes apply on /atrium reload.""")
+              native - Atrium sends the header, footer, list names and list order itself. Do not use this while
+                       TAB runs: both would draw the tab list and their content mixes;
+              tab    - Atrium renders everything below and hands it to TAB through TAB's API. What is shown is
+                       exactly this file, never TAB's own header/footer, tabprefix/customtabname/tabsuffix or
+                       sorting: an empty header here is an empty header in game. A part whose TAB feature is
+                       disabled in TAB's config (header-footer, tablist-name-formatting, sorting) is sent by
+                       Atrium itself instead. Atrium re-applies everything whenever TAB loads a player or
+                       reloads (/tab reload). Falls back to native when TAB is missing.
+            Not managed by Atrium, so they keep following TAB's config with the tab engine: nametags above heads
+            (TAB's scoreboard-teams tagprefix/tagsuffix; Atrium has no nametag settings), TAB's
+            playerlist-objective and belowname-objective, and TAB's layout (which replaces the whole list).
+            With set-list-name: false or sort-by-group: false that part is left to TAB as well.
+            /tablist engine shows who owns each part; /tablist debug <player> compares Atrium's values with
+            what TAB shows. Changes apply on /atrium reload.""")
     public String engine = "auto";
 
     @Comment("""
@@ -66,7 +73,9 @@ public class TablistConfig {
     @Comment("""
             Groups in display order: the first group is listed at the top of the tab list. A player belongs to the
             first group whose permission they have; players without any group use default-list-name.
-            list-name: player list name format (same placeholders; <displayname> respects nicknames).""")
+            list-name: player list name format (same placeholders; <displayname> respects nicknames). This is the
+            whole visible name: with the tab engine TAB's group prefix and suffix are not added around it. Tags of
+            other modules (for example [AFK] from the afk module) are added to it automatically.""")
     public List<Group> groups = new ArrayList<>(List.of(
             Group.of("admin", "atrium.tablist.group.admin", "<red>[Admin]</red> <displayname>"),
             Group.of("moderator", "atrium.tablist.group.moderator", "<gold>[Mod]</gold> <displayname>"),
@@ -76,8 +85,8 @@ public class TablistConfig {
     public String defaultListName = "<gray><displayname>";
 
     @Comment("""
-            Sort the tab list by group order (Paper's player list order, no scoreboard teams). Inside a group the
-            client sorts by account name.""")
+            Sort the tab list by group order (Paper's player list order, no scoreboard teams; with the tab engine,
+            TAB's sorting through forced team names). Inside a group the client sorts by account name.""")
     public boolean sortByGroup = true;
 
     @Comment("""

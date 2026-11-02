@@ -11,6 +11,7 @@ import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import dev.yanianz.atrium.core.scheduler.TaskHandle;
 import dev.yanianz.atrium.module.display.DisplayPlaceholders;
+import dev.yanianz.atrium.module.display.TabResync;
 import dev.yanianz.atrium.module.display.TemplateRenderer;
 import dev.yanianz.atrium.module.display.ToggleCommand;
 import dev.yanianz.atrium.module.display.ToggleStore;
@@ -33,6 +34,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.event.server.PluginEnableEvent;
@@ -43,6 +45,10 @@ import org.bukkit.permissions.PermissionDefault;
  * TAB runs its scoreboard feature, the Bukkit scoreboard API on Paper, or PacketEvents on Folia where no
  * scoreboard API exists. A player whose scoreboard was replaced by another plugin is left alone.
  * {@code /sidebar toggle} is persisted per player. Backend switches run on the global thread.
+ *
+ * <p>With TAB, Atrium's sidebar is the only one shown while Atrium shows one, and {@code tab-default-scoreboard}
+ * decides whether TAB's own default scoreboards appear while it shows none ({@link TabSidebarSync}). TAB's load
+ * and reload events re-apply Atrium's sidebars right away ({@link TabResync}).
  */
 public final class ScoreboardModule implements AtriumModule, Listener {
     static final String PERM_TOGGLE = "atrium.scoreboard.toggle";
@@ -56,6 +62,9 @@ public final class ScoreboardModule implements AtriumModule, Listener {
     private volatile ScoreboardSettings settings;
     private volatile TaskHandle timer = TaskHandle.NOOP;
     private volatile long clock;
+    private volatile boolean enabled;
+    /** Backend + mode of the last "two sidebar sources" warning; avoids repeating it. */
+    private volatile String conflictLogged = "";
     private volatile SidebarBackend backend = SidebarBackend.NONE;
     /** Backend mode the log line was last written for; avoids repeating it on every reload. */
     private volatile BackendMode appliedBackendMode;
@@ -84,9 +93,11 @@ public final class ScoreboardModule implements AtriumModule, Listener {
         ctx.component(store.component);
         this.renderer = new TemplateRenderer(ctx.messages(), ctx.logger());
         applyConfig();
+        enabled = true;
         configureBackend();
         ctx.permission(PERM_TOGGLE, PermissionDefault.TRUE, "Hide or show your own sidebar");
-        ctx.permission(PERM_ENGINE, PermissionDefault.OP, "Show the sidebar engine and what it supports (/sidebar engine)");
+        ctx.permission(PERM_ENGINE, PermissionDefault.OP,
+                "Show the sidebar engine and who owns the sidebar slot (/sidebar engine)");
         ctx.listen(this);
         ctx.listen(new PluginWatcher());
         ToggleCommand toggle = new ToggleCommand(ctx, store, this::applyToggle);
@@ -112,6 +123,7 @@ public final class ScoreboardModule implements AtriumModule, Listener {
 
     @Override
     public void disable() {
+        enabled = false;
         timer.cancel();
         SidebarBackend current = backend;
         backend = SidebarBackend.NONE;
@@ -165,9 +177,16 @@ public final class ScoreboardModule implements AtriumModule, Listener {
             tabPlugin = TabBackendFactory.pluginEnabled();
             boolean feature = tabPlugin && TabBackendFactory.scoreboardEnabled(ctx.logger());
             if (feature) {
-                tabCandidate = active.kind() == SidebarBackend.Kind.TAB && active.usable()
-                        ? active
-                        : TabBackendFactory.create(ctx.logger());
+                if (active.kind() == SidebarBackend.Kind.TAB && active.usable()) {
+                    tabCandidate = active;
+                } else {
+                    TabResync resync = new TabResync(task -> ctx.track(ctx.scheduler().global(task)),
+                            this::onTabResync);
+                    tabCandidate = TabBackendFactory.create(ctx.logger(), resync, () -> settings.tabDefault());
+                    if (tabCandidate == null) {
+                        resync.close();
+                    }
+                }
             }
             tabProblem = BackendSelection.tabProblem(tabPlugin, feature, tabCandidate != null);
         }
@@ -183,6 +202,7 @@ public final class ScoreboardModule implements AtriumModule, Listener {
         boolean changed = appliedBackendMode != mode || !reason.equals(fallbackReason);
         appliedBackendMode = mode;
         fallbackReason = reason;
+        warnConflict(kind, tabPlugin || TabBackendFactory.pluginEnabled());
         if (active.kind() == kind && (kind != SidebarBackend.Kind.TAB || active == tabCandidate)) {
             if (changed) {
                 logFallback(reason, kind);
@@ -205,6 +225,63 @@ public final class ScoreboardModule implements AtriumModule, Listener {
             case TAB -> ctx.logger().info("Sidebar backend: the TAB plugin's scoreboard API.");
             case NONE -> logUnavailable(mode, folia);
         }
+    }
+
+    /** Atrium draws a sidebar itself while TAB runs its scoreboard feature: both fight over the sidebar slot. */
+    private void warnConflict(SidebarBackend.Kind kind, boolean tabPlugin) {
+        boolean tabScoreboard = tabPlugin && TabBackendFactory.scoreboardEnabled(ctx.logger());
+        TabSidebarSync.Defaults defaults = TabSidebarSync.defaults(kind, tabScoreboard, settings.tabDefault());
+        String state = kind.id() + "|" + defaults;
+        if (state.equals(conflictLogged)) {
+            return;
+        }
+        conflictLogged = state;
+        if (defaults == TabSidebarSync.Defaults.CONFLICT) {
+            ctx.logger().warn("TAB runs its scoreboard feature while Atrium draws sidebars with the {} backend: two "
+                    + "sidebars fight over the slot. Set backend: auto or tab in scoreboard.yml, or disable TAB's "
+                    + "scoreboard feature.", kind.id());
+        }
+    }
+
+    /**
+     * Global thread: TAB loaded players or reloaded (Atrium's sidebars there are gone), or new sidebars are
+     * waiting. Hands them to TAB right away, then re-renders the reloaded players so new joiners are covered.
+     */
+    private void onTabResync(TabResync.Batch batch) {
+        SidebarBackend current = backend;
+        if (current.kind() != SidebarBackend.Kind.TAB || !enabled) {
+            return;
+        }
+        if (!current.usable()) {
+            configureBackend();
+            return;
+        }
+        current.invalidate(batch);
+        current.flush();
+        if (batch.onlyWake()) {
+            return;
+        }
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (batch.affects(player.getUniqueId())) {
+                renderSoon(player);
+            }
+        }
+    }
+
+    /** Any thread: renders one player soon instead of on the next cycle. */
+    private void renderSoon(Player player) {
+        ScoreboardSettings currentSettings = settings;
+        ctx.scheduler().supplyGlobal(placeholders::serverView).thenAccept(view -> {
+            SidebarBackend current = backend;
+            if (current.kind() == SidebarBackend.Kind.NONE) {
+                return;
+            }
+            ctx.scheduler().entity(player, () -> render(player, current, currentSettings,
+                    currentSettings.animations().framesAt(clock), view), null);
+        }).exceptionally(error -> {
+            ctx.logger().warn("Rendering the sidebar of {} failed", player.getName(), error);
+            return null;
+        });
     }
 
     private void logFallback(String reason, SidebarBackend.Kind kind) {
@@ -317,7 +394,7 @@ public final class ScoreboardModule implements AtriumModule, Listener {
     /** Player's thread. */
     private void render(Player player, SidebarBackend sidebarBackend, ScoreboardSettings s,
             Map<String, String> frames, DisplayPlaceholders.ServerView view) {
-        if (!player.isOnline() || sidebarBackend != backend) {
+        if (!player.isOnline() || sidebarBackend != backend || !enabled) {
             return;
         }
         UUID id = player.getUniqueId();
@@ -359,33 +436,47 @@ public final class ScoreboardModule implements AtriumModule, Listener {
         if (hidden) {
             current.hide(player);
         } else {
-            ScoreboardSettings currentSettings = settings;
-            ctx.scheduler().supplyGlobal(placeholders::serverView).thenAccept(view -> ctx.scheduler().entity(player,
-                    () -> render(player, current, currentSettings, currentSettings.animations().framesAt(clock), view),
-                    null)).exceptionally(error -> {
-                        ctx.logger().warn("Showing the sidebar of {} failed", player.getName(), error);
-                        return null;
-                    });
+            renderSoon(player);
         }
     }
 
     private int engineInfo(CommandContext<CommandSourceStack> c) {
         CommandSender sender = c.getSource().getSender();
+        // The TAB backend is only called from the global thread.
+        ctx.track(ctx.scheduler().global(() -> sendEngineInfo(sender)));
+        return Cmds.OK;
+    }
+
+    /** Global thread. */
+    private void sendEngineInfo(CommandSender sender) {
         SidebarBackend active = backend;
+        ScoreboardSettings current = settings;
         boolean folia = ctx.scheduler().isFolia();
+        boolean tabScoreboard = TabBackendFactory.scoreboardEnabled(ctx.logger());
         SidebarCapabilities capabilities = SidebarCapabilities.of(active.kind(), folia);
-        ctx.messages().send(sender, "scoreboard.engine-header", Msg.unparsed("engine", active.kind().id()),
-                Msg.unparsed("configured", settings.backend().name().toLowerCase(Locale.ROOT)));
-        ctx.messages().send(sender, "scoreboard.engine-capabilities",
+        reply(sender, "scoreboard.engine-header", Msg.unparsed("engine", active.kind().id()),
+                Msg.unparsed("configured", current.backend().name().toLowerCase(Locale.ROOT)));
+        reply(sender, "scoreboard.engine-owner-sidebar",
+                Msg.component("owner", ctx.messages().render(sender, "scoreboard.owner-" + active.kind().id())));
+        TabSidebarSync.Defaults defaults = TabSidebarSync.defaults(active.kind(), tabScoreboard, current.tabDefault());
+        reply(sender, "scoreboard.engine-owner-tab-defaults",
+                Msg.component("owner", ctx.messages().render(sender, "scoreboard.defaults-" + defaults.key)));
+        SidebarBackend.TabStatus status = active.tabStatus();
+        if (status != null) {
+            reply(sender, "scoreboard.engine-applied", Msg.number("applied", status.appliedPlayers()),
+                    Msg.number("loaded", status.loadedPlayers()), Msg.number("hidden", status.hiddenDefaults()),
+                    Msg.number("reapplied", status.reapplied()));
+        }
+        reply(sender, "scoreboard.engine-capabilities",
                 Msg.unparsed("supported", SidebarCapabilities.describe(capabilities.supported())));
         if (capabilities.missing().isEmpty()) {
-            ctx.messages().send(sender, "scoreboard.engine-all-capabilities");
+            reply(sender, "scoreboard.engine-all-capabilities");
         } else {
-            ctx.messages().send(sender, "scoreboard.engine-capabilities-missing",
+            reply(sender, "scoreboard.engine-capabilities-missing",
                     Msg.unparsed("missing", SidebarCapabilities.describe(capabilities.missing())));
         }
         if (active.kind() == SidebarBackend.Kind.TAB) {
-            ctx.messages().send(sender, "scoreboard.engine-tab-note");
+            reply(sender, "scoreboard.engine-tab-sidebar-note");
         }
         List<String> available = new ArrayList<>();
         if (!folia) {
@@ -394,20 +485,34 @@ public final class ScoreboardModule implements AtriumModule, Listener {
         if (Bukkit.getPluginManager().isPluginEnabled(PacketBackendFactory.PLUGIN)) {
             available.add(SidebarBackend.Kind.PACKETS.id());
         }
-        if (TabBackendFactory.scoreboardEnabled(ctx.logger())) {
+        if (tabScoreboard) {
             available.add(SidebarBackend.Kind.TAB.id());
         }
-        ctx.messages().send(sender, "scoreboard.engine-available",
+        reply(sender, "scoreboard.engine-available",
                 Msg.unparsed("engines", available.isEmpty() ? "-" : String.join(", ", available)));
         String reason = fallbackReason;
         if (!reason.isEmpty()) {
-            ctx.messages().send(sender, "scoreboard.engine-fallback-note",
+            reply(sender, "scoreboard.engine-fallback-note",
                     Msg.component("reason", ctx.messages().render(sender, "scoreboard.engine-reason-" + reason)));
         } else if (active.kind() == SidebarBackend.Kind.NONE) {
-            ctx.messages().send(sender, "scoreboard.engine-fallback-note",
+            reply(sender, "scoreboard.engine-fallback-note",
                     Msg.component("reason", ctx.messages().render(sender, "scoreboard.engine-reason-none")));
         }
-        return Cmds.OK;
+    }
+
+    /** Messages to a player go out on the player's own thread. */
+    private void reply(CommandSender sender, String key, TagResolver... resolvers) {
+        if (sender instanceof Player player) {
+            ctx.scheduler().entity(player, () -> ctx.messages().send(player, key, resolvers), null);
+        } else {
+            ctx.messages().send(sender, key, resolvers);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onJoin(PlayerJoinEvent event) {
+        // Render right away; the TAB backend hands it to TAB as soon as TAB has loaded the player.
+        renderSoon(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
