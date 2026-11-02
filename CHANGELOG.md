@@ -3,10 +3,12 @@
 All notable changes to Atrium are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-releases built from `main` are named
-`X.Y.Z-build.N` and are not listed separately.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every push to `main` is released as the next patch
+version; patch releases with no notable change are not listed separately.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-11-03
 
 Initial feature set.
 
@@ -82,4 +84,5 @@ Initial feature set.
 - Folia-ready drop-in replacement for the Vault plugin (bundles VaultAPI 1.7.1 unmodified, LGPL-3.0) with a
   guarded economy wrapper, optional audit log, SuperPerms fallback, `/vault-info` and `/vault-convert`.
 
-[Unreleased]: https://github.com/YanIanZ/Atrium/commits/main
+[Unreleased]: https://github.com/YanIanZ/Atrium/compare/v1.0.0...main
+[1.0.0]: https://github.com/YanIanZ/Atrium/releases/tag/v1.0.0

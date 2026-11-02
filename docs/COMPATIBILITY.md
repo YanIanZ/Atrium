@@ -18,12 +18,12 @@ version). The SourbyCraft target uses the pinned `YanIanZ/SourbyCraft` release a
 
 ## Tested matrix
 
-Tested on 2026-11-03 with Atrium `0.1.0-SNAPSHOT`, Atrium Vault `1.7.3-atrium.2`,
+Tested on 2026-11-03 with Atrium `1.0.0`, Atrium Vault `1.7.3-atrium.2`,
 Paper `26.1.2` build 74 and SourbyCraft `26.2-r50` (Folia).
 
 | Plugin | Version | Paper 26.1.2 | SourbyCraft 26.2 | Notes |
 |---|---|---|---|---|
-| Atrium | 0.1.0-SNAPSHOT | pass | pass | 60/60 modules enabled on both |
+| Atrium | 1.0.0 | pass | pass | 60/60 modules enabled on both |
 | Atrium Vault | 1.7.3-atrium.2 | pass | pass | economy provider registered; guard active |
 | LuckPerms | 5.5.71 | pass | pass | metadata provider active (`/integrations`) |
 | PlaceholderAPI | 2.12.3 | pass | pass | `/papi` responds; no placeholder errors |

@@ -151,11 +151,15 @@ Source: <https://github.com/MilkBowl/VaultAPI>. Everything else in the jar (`net
 
 ## Releases
 
-- Every push to `main` publishes a **pre-release** named `X.Y.Z-build.N`.
-- A tag `vX.Y.Z` publishes a **stable release** with `Atrium-<version>.jar`, `Vault-<version>.jar` and
-  `SHA256SUMS`. Verify a download with `sha256sum -c SHA256SUMS`.
+Versions are plain semantic versions (`MAJOR.MINOR.PATCH`, e.g. `1.0.3`).
 
-Use stable releases on production servers. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+- Every push to `main` publishes the next patch release of the line in `gradle.properties` (`1.0.0`, `1.0.1`, ...).
+- A new feature line starts by raising `version` in `gradle.properties` (e.g. `1.1.0`); a tag `vX.Y.Z` publishes exactly
+  that version.
+- Every release contains `Atrium-<version>.jar`, `Vault-<version>.jar` (Atrium Vault) and `SHA256SUMS`. Verify a
+  download with `sha256sum -c SHA256SUMS`.
+
+Changes are listed in [CHANGELOG.md](CHANGELOG.md). `/updates` (performance module) tells operators about newer releases.
 
 ## Build from source
 

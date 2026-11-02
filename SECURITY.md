@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Only the **latest stable release** receives security fixes. Pre-releases (`X.Y.Z-build.N`) are fixed by the next
-build from `main`. Please reproduce a problem on the latest release before reporting it.
+Only the **latest release** receives security fixes; a fix ships as the next patch version. Please reproduce a
+problem on the latest release before reporting it.
 
 | Version | Supported |
 |---|---|

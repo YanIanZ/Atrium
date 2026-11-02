@@ -1,7 +1,7 @@
 name: Release
 
-# Every push to main publishes a pre-release X.Y.Z-build.N (X.Y.Z from gradle.properties).
-# Every tag vX.Y.Z publishes a stable release with that version.
+# Every push to main publishes the next patch release (1.0.0, 1.0.1, ...) of the MAJOR.MINOR line in
+# gradle.properties. A tag vX.Y.Z publishes exactly that version.
 on:
   push:
     branches: [main]
@@ -33,22 +33,36 @@ jobs:
         id: version
         shell: bash
         run: |
+          # Plain semantic versions. A tag push vX.Y.Z publishes exactly that version. Every push to main
+          # publishes the next patch of the MAJOR.MINOR line in gradle.properties (1.0.0, 1.0.1, ...);
+          # raise MAJOR.MINOR there (e.g. version=1.1.0) to start a new line.
+          git fetch --tags --force --quiet
           base="$(grep '^version=' gradle.properties | cut -d= -f2 | sed 's/-SNAPSHOT$//')"
+          if [[ ! "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "gradle.properties version must be MAJOR.MINOR.PATCH, got: $base" >&2; exit 1
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
-            prerelease=false
-            tag="$GITHUB_REF_NAME"
           else
-            version="${base}-build.${GITHUB_RUN_NUMBER}"
-            prerelease=true
-            tag="v${version}"
+            line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            base_patch="${BASH_REMATCH[3]}"
+            latest="$(git tag -l "v${line}.*" | grep -E "^v${line//./\\.}\.[0-9]+$" | sed 's/^v//' | sort -V | tail -1 || true)"
+            if [[ -z "$latest" ]]; then
+              version="$base"
+            else
+              next=$(( ${latest##*.} + 1 ))
+              (( next < base_patch )) && next=$base_patch
+              version="${line}.${next}"
+            fi
           fi
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version: $version" >&2; exit 1
           fi
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null && [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Tag v${version} already exists" >&2; exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Build and test
         run: ./gradlew build -Pversion=${{ steps.version.outputs.version }} --no-daemon --stacktrace
@@ -72,13 +86,7 @@ jobs:
         run: |
           tag="${{ steps.version.outputs.tag }}"
           title="Atrium ${{ steps.version.outputs.version }}"
-          args=(--title "$title" --generate-notes --target "$GITHUB_SHA")
-          if [[ "${{ steps.version.outputs.prerelease }}" == "true" ]]; then
-            args+=(--prerelease)
-          else
-            args+=(--latest)
-          fi
-          gh release create "$tag" dist/* "${args[@]}"
+          gh release create "$tag" dist/* --title "$title" --generate-notes --target "$GITHUB_SHA" --latest
 
       - name: Upload test reports
         if: failure()
