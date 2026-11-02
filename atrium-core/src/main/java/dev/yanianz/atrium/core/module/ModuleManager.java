@@ -123,6 +123,19 @@ public final class ModuleManager {
         return result;
     }
 
+    /** Reads modules.yml without adding or saving anything: used by a reload, which must not rewrite the file. */
+    private Map<String, Boolean> readToggles() throws IOException {
+        Path file = plugin.getDataPath().resolve("modules.yml");
+        CommentedConfigurationNode root = ConfigService.loader(file).load();
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        for (AtriumModule module : modules.values()) {
+            CommentedConfigurationNode node = root.node(module.id());
+            result.put(module.id(), node.virtual()
+                    ? module.enabledByDefault() : node.getBoolean(module.enabledByDefault()));
+        }
+        return result;
+    }
+
     public void enableAll() throws IOException {
         Map<String, Boolean> toggles = toggles();
         for (String id : order()) {
@@ -208,6 +221,7 @@ public final class ModuleManager {
     /** Reloads module configs through each module's {@link AtriumModule#reload()}. Returns failures. */
     public List<String> reloadAll() {
         List<String> failed = new ArrayList<>();
+        reportToggleChanges();
         for (Context context : contexts.values()) {
             AtriumModule module = modules.get(context.id);
             try {
@@ -221,6 +235,33 @@ public final class ModuleManager {
             }
         }
         return failed;
+    }
+
+    /**
+     * modules.yml is read when modules are enabled; commands are registered once through Paper's lifecycle
+     * event, so a module cannot be started safely by a reload. Disabling is equally unsafe: its listeners and
+     * services would stop while its commands stayed in the tree. Tell the admin instead of half-applying it.
+     */
+    private void reportToggleChanges() {
+        Map<String, Boolean> toggles;
+        try {
+            toggles = readToggles();
+        } catch (IOException | RuntimeException e) {
+            logger.warn("Cannot read modules.yml while reloading; module toggles were not checked", e);
+            return;
+        }
+        List<String> changed = new ArrayList<>();
+        for (AtriumModule module : modules.values()) {
+            boolean wanted = toggles.getOrDefault(module.id(), module.enabledByDefault());
+            boolean running = contexts.containsKey(module.id());
+            if (wanted != running) {
+                changed.add(module.id() + (wanted ? " (start)" : " (stop)"));
+            }
+        }
+        if (!changed.isEmpty()) {
+            logger.warn("modules.yml changed for {}; module start/stop needs a server restart: {}",
+                    changed.size(), String.join(", ", changed));
+        }
     }
 
     public Map<String, State> states() {

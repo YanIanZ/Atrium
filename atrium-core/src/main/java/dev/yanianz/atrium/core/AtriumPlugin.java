@@ -76,6 +76,7 @@ public final class AtriumPlugin extends JavaPlugin implements AtriumApi {
         Cmds cmds = new Cmds(messages);
         commands = new CommandService(log);
         commands.setDisabled(core.disabledCommands);
+        commands.setPreferOtherPluginCommands(core.preferOtherPluginCommands);
         corePermissions.register(AtriumCommand.HELP, org.bukkit.permissions.PermissionDefault.TRUE,
                 "List the commands you may use with /atrium help");
         corePermissions.register(AtriumCommand.MENU, org.bukkit.permissions.PermissionDefault.TRUE,

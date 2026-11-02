@@ -211,7 +211,8 @@ final class AtriumCommand {
         var sender = ctx.getSource().getSender();
         String version = plugin.getPluginMeta().getVersion();
         var service = plugin.commandService();
-        java.util.Set<String> disabled = service.disabled();
+        java.util.Set<String> disabled = new java.util.HashSet<>(service.disabled());
+        disabled.addAll(service.skippedByConflict());
         List<DocsGenerator.CommandDoc> commands = new java.util.ArrayList<>();
         for (var entry : service.entries()) {
             var spec = entry.spec();

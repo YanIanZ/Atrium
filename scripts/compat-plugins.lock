@@ -1,0 +1,24 @@
+# Pinned third-party plugins for scripts/compat-smoke.sh.
+#
+# Format (pipe separated, '#' starts a comment):
+#   id | targets | version | file name | digest | download URL
+#
+# targets: comma separated list of paper,sourby. "sourby" is the Folia-based
+# SourbyCraft target; a plugin is only installed there when its jar declares
+# folia-supported: true (the script checks this and skips it otherwise).
+# digest:  sha512:<hex> (Modrinth metadata) or sha256:<hex> (GitHub release digest).
+#
+# Every entry comes from an official download endpoint:
+#   Modrinth API/CDN (sha512 from the version metadata) or GitHub releases (sha256 digest).
+# Update this file deliberately: the download is rejected when the digest does not match.
+
+luckperms|paper,sourby|v5.5.71-bukkit|LuckPerms-Bukkit-5.5.71.jar|sha512:188a91f0a543d23bfda32385fca6db63d61e49c8a422bd452a260bd9cbc6a7d7fe45071199e9fca8f3ce43c2b41ee84fd315bd15464577028ff3951a7d4fab27|https://cdn.modrinth.com/data/Vebnzrzj/versions/b0mk8uS6/LuckPerms-Bukkit-5.5.71.jar
+placeholderapi|paper,sourby|2.12.3|PlaceholderAPI-2.12.3.jar|sha512:f048d55b633fd816c08e2e4472bd54a75fc4d13534682e6e7745408253d2f393706efdc389d12ca2cf28d4dc035a9afdda3eed9ecde51c7e332831391d9b6479|https://cdn.modrinth.com/data/lKEzGugV/versions/pIvQcXW8/PlaceholderAPI-2.12.3.jar
+worldedit|paper,sourby|7.4.6|worldedit-bukkit-7.4.6.jar|sha512:1fe3975132857093f971fed9efc601299bfa76fa7885f52a542fee41e7a0165ca9cb3cbcf5ae244474887d774d650b0db6f8f79aa80f98b245dea44f1c1b4152|https://cdn.modrinth.com/data/1u6JkXh5/versions/YFnqiUlL/worldedit-bukkit-7.4.6.jar
+worldguard|paper,sourby|7.0.18|worldguard-bukkit-7.0.18.jar|sha512:9404a0eacebc5c85bdcf4a7d343330b4894dcd87246548adca75c43dbf2a3c0539f75bb15665cdd04d7f980e8d0d2a95d79e96861ba74fcd5636d685496f47f2|https://cdn.modrinth.com/data/DKY9btbd/versions/btHBavWa/worldguard-bukkit-7.0.18.jar
+decentholograms|paper,sourby|2.10.2|DecentHolograms-2.10.2.jar|sha512:f2247802a175cf0c71f0e069ab4c3b2ff2aba683051e474ff54f2ad3ea08da5156de7e11f768087fadbf7bdeac491b5935b2ebb2f4d8fc9f48b3df41558936ce|https://cdn.modrinth.com/data/w02MKsTg/versions/fbE7wARc/DecentHolograms-2.10.2.jar
+packetevents|paper,sourby|2.14.0+spigot|packetevents-spigot-2.14.0.jar|sha512:18a942cb55f64783a63b28deea2cebbbe782e5d6a1089f6700430e183bfbce0a45398a640ed0dff4361b55190dcf47017f2ca7788f4a5c8c9efad1f549a63fe3|https://cdn.modrinth.com/data/HYKaKraK/versions/m78nFxYg/packetevents-spigot-2.14.0.jar
+protocollib|paper,sourby|5.4.0|ProtocolLib.jar|sha256:ee2e7ab9b5386f2d103081c4d108e61b1035df2ca692b53d6e2409fb1f5caccf|https://github.com/dmulloy2/ProtocolLib/releases/download/5.4.0/ProtocolLib.jar
+tab|paper|6.2.1|TAB.v6.2.1.jar|sha256:0b6a21af6fd3b113c05821daaed00ff92234a84ca94b29b3aec0ef1bd313b8a9|https://github.com/NEZNAMY/TAB/releases/download/6.2.1/TAB.v6.2.1.jar
+multiverse-core|paper|5.8.2|multiverse-core-5.8.2.jar|sha512:1165c96755229583477d120485b49ddf731f44a97e17b99f955892e8e90d1f6b24d2e06bd15b6fc4240197c32970592a2af2febe31044afed949dc2d722d17a8|https://cdn.modrinth.com/data/3wmN97b8/versions/de7TbcZG/multiverse-core-5.8.2.jar
+essentialsx|paper|2.22.0|EssentialsX-2.22.0.jar|sha512:472ecf71924801723643ca6e1f9931297de5aa0874a544f8a719e2e2f7c81af81ef7bcbd38b6e43f0260a9dae6abe42c97907e70e2430e326ff8cff12ebd61cf|https://cdn.modrinth.com/data/hXiIvTyT/versions/nY6VN1XH/EssentialsX-2.22.0.jar

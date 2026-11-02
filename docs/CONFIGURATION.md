@@ -18,7 +18,11 @@ plugins/Atrium/
 
 | Applied by `/atrium reload` | Needs a restart |
 |---|---|
-| `default-locale`, `per-player-locale`, the whole `theme` section, every lang file, module settings that support reloading | `database.*`, `disabled-commands`, `modules.yml`, module settings whose comment says so |
+| `default-locale`, `per-player-locale`, the whole `theme` section, every lang file, module settings that support reloading | `database.*`, `disabled-commands`, `prefer-other-plugin-commands`, `modules.yml`, module settings whose comment says so |
+
+When `modules.yml` differs from the running set, `/atrium reload` logs which modules were added or removed and
+asks for a restart instead of half-starting a module. Commands are registered once by Paper, so a running
+server cannot gain or lose a module's commands safely.
 
 ## `config.yml`
 
@@ -37,6 +41,7 @@ plugins/Atrium/
 | `user-load-timeout-seconds` | `10` | Seconds to wait for player data during login before the login is refused. |
 | `offline-cache-minutes` | `10` | How long an offline player's data stays cached after it was last used. |
 | `disabled-commands` | `[]` | Command names (without slash) that are not registered at all. |
+| `prefer-other-plugin-commands` | `false` | Keep another plugin's command when it already registers the same name (or an Atrium alias). Atrium logs every conflict; see `docs/COMPATIBILITY.md`. Requires a restart. |
 
 ### `theme`
 

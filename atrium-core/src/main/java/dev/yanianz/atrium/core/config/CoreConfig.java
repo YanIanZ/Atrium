@@ -29,6 +29,11 @@ public class CoreConfig {
     @Comment("Commands that are not registered at all (name without slash). Requires a restart.")
     public List<String> disabledCommands = new ArrayList<>();
 
+    @Comment("Keep another plugin's command when it already registers the same name (for example EssentialsX\n"
+            + "or WorldEdit). Atrium then skips its own command for that name or alias and lists the decision in\n"
+            + "the console. Requires a restart; disabled-commands always wins over this option.")
+    public boolean preferOtherPluginCommands = false;
+
     @Comment("Colours and GUI defaults shared by every module. Lang files use them as MiniMessage tags:\n"
             + "<primary>, <secondary>, <accent>, <muted>, <success>, <warning>, <error>, <highlight>.\n"
             + "Values are hex (#5FB3A1) or named colours (gray, green, ...). Applied by /atrium reload.")
