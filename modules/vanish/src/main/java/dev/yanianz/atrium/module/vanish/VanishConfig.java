@@ -47,6 +47,10 @@ public class VanishConfig {
     public boolean hideAdvancements = true;
 
     @Comment("Open chests, barrels and shulker boxes without animation or sound while vanished. The view is\n"
-            + "read-only unless the player has atrium.vanish.silentchest.modify; edits apply to the real container.")
+            + "read-only unless the player has atrium.vanish.silentchest.modify; edits apply to the real container.\n"
+            + "Players who are visible can opt in per player with /silentchest.")
     public boolean silentContainers = true;
+
+    @Comment("Open chests, barrels and shulker boxes silently for every player, without /silentchest.")
+    public boolean silentChestForEveryone = false;
 }

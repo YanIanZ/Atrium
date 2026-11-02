@@ -55,6 +55,10 @@ class NickLogicTest {
         assertEquals("Bob", NickLogic.restrictTags(raw, false, false, false));
         assertEquals("Bob", NickLogic.restrictTags(
                 "<click:open_url:'https://example.org'>Bob</click>", true, true, true));
+        assertEquals("<rainbow>Bob</rainbow>", NickLogic.restrictTags("<rainbow>Bob</rainbow>", false, false, true));
+        assertEquals("Bob", NickLogic.restrictTags("<rainbow>Bob</rainbow>", true, true, false));
+        assertEquals("<transition:red:blue>Bob</transition>",
+                NickLogic.restrictTags("<transition:red:blue>Bob</transition>", false, false, true));
     }
 
     @Test void restrictTagsHandlesClosingSelfClosingAndAliases() {

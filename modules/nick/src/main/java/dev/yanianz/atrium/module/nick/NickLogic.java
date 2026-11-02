@@ -118,7 +118,7 @@ final class NickLogic {
         if (root.equals("reset")) {
             return color || format || gradient;
         }
-        if (root.equals("gradient")) {
+        if (root.equals("gradient") || root.equals("rainbow") || root.equals("transition")) {
             return gradient;
         }
         if (root.startsWith("!")) {

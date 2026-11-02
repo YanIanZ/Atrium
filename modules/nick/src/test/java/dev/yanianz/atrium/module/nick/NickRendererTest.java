@@ -26,6 +26,12 @@ class NickRendererTest {
         Component gradient = renderer.typed("<gradient:red:blue>Bob</gradient>", false, false, true);
         assertEquals("Bob", renderer.plain(gradient));
         assertNotEquals(Component.text("Bob"), gradient);
+
+        Component rainbow = renderer.typed("<rainbow>Bob</rainbow>", false, false, true);
+        assertEquals("Bob", renderer.plain(rainbow));
+        assertNotEquals(Component.text("Bob"), rainbow);
+        assertEquals("<rainbow>Bob</rainbow>",
+                renderer.plain(renderer.typed("<rainbow>Bob</rainbow>", false, false, false)));
     }
 
     @Test void storedNamesAreDowngradedWithoutLeavingLiteralTags() {

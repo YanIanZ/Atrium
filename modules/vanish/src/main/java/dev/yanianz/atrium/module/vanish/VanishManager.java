@@ -111,6 +111,25 @@ final class VanishManager implements VanishService {
         return ctx.users().cached(player.getUniqueId()).flatMap(this::state).map(VanishState::pickup).orElse(false);
     }
 
+    /** Containers open silently for vanished players (config), everyone (config) or after /silentchest. */
+    boolean silentChestEnabled(Player player) {
+        if (config.get().silentChestForEveryone) {
+            return true;
+        }
+        if (config.get().silentContainers && isOnlineVanished(player.getUniqueId())) {
+            return true;
+        }
+        return ctx.users().cached(player.getUniqueId()).flatMap(this::state)
+                .map(VanishState::silentChest).orElse(false);
+    }
+
+    /** Toggles the manual silent-chest flag on the player's thread; returns the new value. */
+    CompletableFuture<Boolean> toggleSilentChest(Player player) {
+        return ctx.scheduler().supplyOnEntity(player,
+                () -> ctx.users().user(player).update(store.component,
+                        s -> s.withSilentChest(!s.silentChest())).silentChest());
+    }
+
     // ---- changes ----
 
     @Override

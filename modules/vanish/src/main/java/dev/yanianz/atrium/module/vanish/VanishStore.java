@@ -13,7 +13,9 @@ import java.util.concurrent.CompletableFuture;
 final class VanishStore {
     static final List<Migration> MIGRATIONS = List.of(Migration.of(1, "vanish_state",
             "CREATE TABLE {prefix}vanish_state (uuid CHAR(36) NOT NULL PRIMARY KEY, vanished BOOLEAN NOT NULL,"
-                    + " pickup BOOLEAN NOT NULL)"));
+                    + " pickup BOOLEAN NOT NULL)"),
+            Migration.of(2, "vanish_silent_chest",
+                    "ALTER TABLE {prefix}vanish_state ADD COLUMN silent_chest BOOLEAN NOT NULL DEFAULT FALSE"));
 
     private final Database db;
     final UserComponentType<VanishState> component;
@@ -26,21 +28,21 @@ final class VanishStore {
     CompletableFuture<VanishState> load(UUID uuid) {
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT vanished, pickup FROM " + db.table("vanish_state") + " WHERE uuid = ?")) {
+                    "SELECT vanished, pickup, silent_chest FROM " + db.table("vanish_state") + " WHERE uuid = ?")) {
                 ps.setString(1, uuid.toString());
                 try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? new VanishState(rs.getBoolean(1), rs.getBoolean(2)) : null;
+                    return rs.next() ? new VanishState(rs.getBoolean(1), rs.getBoolean(2), rs.getBoolean(3)) : null;
                 }
             }
         });
     }
 
     private CompletableFuture<Void> save(UUID uuid, VanishState state) {
-        String sql = db.dialect().upsert(db.table("vanish_state"), "uuid, vanished, pickup", "?, ?, ?", "uuid",
-                "vanished, pickup");
+        String sql = db.dialect().upsert(db.table("vanish_state"), "uuid, vanished, pickup, silent_chest",
+                "?, ?, ?, ?", "uuid", "vanished, pickup, silent_chest");
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement(sql)) {
-                Database.bind(ps, uuid.toString(), state.vanished(), state.pickup());
+                Database.bind(ps, uuid.toString(), state.vanished(), state.pickup(), state.silentChest());
                 ps.executeUpdate();
             }
             return null;

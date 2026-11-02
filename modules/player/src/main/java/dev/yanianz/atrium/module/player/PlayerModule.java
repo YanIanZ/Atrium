@@ -32,6 +32,7 @@ public final class PlayerModule implements AtriumModule, Listener {
     private ConfigHandle<PlayerConfig> config;
     private PlayerStore store;
     private FlightManager flight;
+    private NameChangeWatcher nameChanges;
 
     @Override
     public String id() {
@@ -51,12 +52,16 @@ public final class PlayerModule implements AtriumModule, Listener {
         ctx.migrate(PlayerStore.MIGRATIONS);
         this.store = new PlayerStore(ctx.database());
         ctx.component(store.component);
+        ctx.component(store.identity);
         this.flight = new FlightManager(ctx);
         ctx.listen(flight);
         ctx.service(FlightService.class, flight);
         ctx.listen(this);
         new PlayerCommands(ctx, config, store).register();
         new InventoryCommands(ctx, config).register();
+        new UtilityCommands(ctx, config, store).register();
+        this.nameChanges = new NameChangeWatcher(ctx, config, store);
+        nameChanges.register();
 
         ctx.permission("atrium.fly", PermissionDefault.OP, "Toggle own flight");
         ctx.permission("atrium.fly.others", PermissionDefault.OP, "Toggle flight of others");
@@ -134,6 +139,9 @@ public final class PlayerModule implements AtriumModule, Listener {
 
     @Override
     public void disable() {
+        if (nameChanges != null) {
+            nameChanges.stop();
+        }
         if (flight != null) {
             flight.clear();
         }

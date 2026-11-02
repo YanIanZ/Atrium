@@ -58,7 +58,7 @@ final class InventoryCommands implements Listener, TaskHandle {
                 "loom", "cartographytable", "smithingtable", "clear", "near", "skull", "more", "itemname", "lore"))
             ctx.permission("atrium." + name, PermissionDefault.OP, "Use /" + name);
         for (String node : List.of("enderchest.others", "enderchest.others.modify", "invsee.others", "invsee.modify",
-                "clear.others", "itemname.color"))
+                "clear.others", "itemname.color", "more.clone", "more.oversize"))
             ctx.permission("atrium." + node, PermissionDefault.OP, "Player utility permission: " + node);
         ctx.permission("atrium.invsee.modify.offline", PermissionDefault.OP,
                 "Edit the last saved inventory of an offline player");
@@ -81,13 +81,7 @@ final class InventoryCommands implements Listener, TaskHandle {
                 .executes(c -> usage(c, "skull"))
                 .then(Commands.argument("name", StringArgumentType.word())
                         .suggests(Cmds.knownPlayers(ctx.users())).executes(this::skull)));
-        menu("more", p -> {
-            ItemStack hand = p.getInventory().getItemInMainHand();
-            if (hand.isEmpty()) { reply(p, "empty-hand"); return; }
-            hand.setAmount(hand.getMaxStackSize());
-            p.getInventory().setItemInMainHand(hand);
-            reply(p, "item-updated");
-        });
+        registerMore();
         register(Cmds.literal("itemname", "atrium.itemname")
                 .executes(c -> usage(c, "itemname"))
                 .then(Commands.argument("text", StringArgumentType.greedyString()).executes(c -> edit(c, "name"))));
@@ -95,20 +89,76 @@ final class InventoryCommands implements Listener, TaskHandle {
         lore.then(Commands.literal("clear").executes(c -> edit(c, "clear")));
         lore.then(Commands.literal("add").executes(c -> usage(c, "lore")).then(Commands.argument("text", StringArgumentType.greedyString())
                 .executes(c -> edit(c, "add"))));
+        lore.then(Commands.literal("insert").executes(c -> usage(c, "lore"))
+                .then(loreLine().then(Commands.argument("text", StringArgumentType.greedyString())
+                        .executes(c -> edit(c, "insert")))));
         lore.then(Commands.literal("set").executes(c -> usage(c, "lore"))
-                .then(Commands.argument("line", IntegerArgumentType.integer(1)).executes(c -> usage(c, "lore"))
-                .then(Commands.argument("text", StringArgumentType.greedyString()).executes(c -> edit(c, "set")))));
-        lore.then(Commands.literal("remove").executes(c -> usage(c, "lore")).then(Commands.argument("line", IntegerArgumentType.integer(1))
-                .executes(c -> edit(c, "remove"))));
-        register(lore);
+                .then(loreLine().then(Commands.argument("text", StringArgumentType.greedyString())
+                        .executes(c -> edit(c, "set")))));
+        lore.then(Commands.literal("remove").executes(c -> usage(c, "lore"))
+                .then(loreLine().executes(c -> edit(c, "remove"))));
+        register(lore, "itemlore");
+    }
+
+    /** A lore line number (1-based) or {@code *} for every line. */
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<CommandSourceStack, String> loreLine() {
+        return Commands.argument("line", StringArgumentType.word())
+                .suggests(Cmds.suggest(() -> List.of("1", "2", "3", "*")));
     }
 
     private void register(LiteralArgumentBuilder<CommandSourceStack> node) {
-        ctx.command(CommandSpec.of(node.build(), CommandDescriptions.of(node.getLiteral())));
+        register(node, new String[0]);
+    }
+
+    private void register(LiteralArgumentBuilder<CommandSourceStack> node, String... aliases) {
+        ctx.command(CommandSpec.of(node.build(), CommandDescriptions.of(node.getLiteral()), aliases));
     }
 
     private int usage(CommandContext<CommandSourceStack> c, String command) throws CommandSyntaxException {
         throw cmds.fail(c.getSource(), "player.usage." + command);
+    }
+
+    private void registerMore() {
+        var root = Cmds.literal("more", "atrium.more").executes(c -> more(c, null, false));
+        for (String alias : List.of("clone", "-clone")) {
+            root.then(Commands.literal(alias).requires(Cmds.permission("atrium.more.clone"))
+                    .executes(c -> more(c, null, true)));
+        }
+        root.then(Commands.argument("amount", IntegerArgumentType.integer(1, 99))
+                .suggests(Cmds.suggest(() -> List.of("1", "8", "16", "32", "64")))
+                .executes(c -> more(c, IntegerArgumentType.getInteger(c, "amount"), false)));
+        register(root);
+    }
+
+    private int more(CommandContext<CommandSourceStack> c, Integer amount, boolean clone)
+            throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        onPlayer(player, () -> {
+            ItemStack hand = player.getInventory().getItemInMainHand();
+            if (hand.isEmpty()) { reply(player, "empty-hand"); return; }
+            if (clone) {
+                ItemStack copy = hand.clone();
+                var leftover = player.getInventory().addItem(copy);
+                int leftoverAmount = leftover.values().stream().mapToInt(ItemStack::getAmount).sum();
+                int added = copy.getAmount() - leftoverAmount;
+                if (added <= 0) { reply(player, "inventory-full"); return; }
+                reply(player, "more-clone", Msg.number("count", added));
+                return;
+            }
+            int oversizeLimit = Math.clamp(config.get().maxOversizeStack, 1, 99);
+            int limit = player.hasPermission("atrium.more.oversize")
+                    ? Math.max(hand.getMaxStackSize(), oversizeLimit)
+                    : hand.getMaxStackSize();
+            int target = amount == null ? limit : amount;
+            if (target > limit) {
+                reply(player, "more-limit", Msg.number("max", limit));
+                return;
+            }
+            hand.setAmount(target);
+            player.getInventory().setItemInMainHand(hand);
+            reply(player, "more", Msg.number("count", target));
+        });
+        return Cmds.OK;
     }
 
     private void menu(String name, Consumer<Player> action) {
@@ -143,7 +193,7 @@ final class InventoryCommands implements Listener, TaskHandle {
     private int edit(CommandContext<CommandSourceStack> c, String operation) throws CommandSyntaxException {
         Player player = cmds.player(c.getSource());
         String input = Cmds.hasArgument(c, "text") ? StringArgumentType.getString(c, "text") : "";
-        int line = Cmds.hasArgument(c, "line") ? IntegerArgumentType.getInteger(c, "line") : 0;
+        String line = Cmds.hasArgument(c, "line") ? StringArgumentType.getString(c, "line") : "";
         if (input.length() > Math.clamp(config.get().maxItemTextLength, 1, 8192))
             throw cmds.fail(c.getSource(), "player.text-too-long");
         onPlayer(player, () -> {

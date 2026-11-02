@@ -13,7 +13,8 @@ class CommandDescriptionsTest {
         for (String command : List.of("feed", "god", "extinguish", "suicide", "hat", "lightning", "gamemode",
                 "gmc", "gms", "gma", "gmsp", "speed", "repair", "burn", "exp", "workbench", "anvil", "grindstone",
                 "stonecutter", "loom", "cartographytable", "smithingtable", "clear", "near", "skull", "more",
-                "itemname", "lore", "enderchest", "invsee")) {
+                "itemname", "lore", "enderchest", "invsee", "falldistance", "tgod", "sound", "smite", "solve",
+                "shoot")) {
             String description = CommandDescriptions.of(command);
             assertFalse(description.isBlank(), command);
             assertFalse(description.startsWith("Player utility"), command);

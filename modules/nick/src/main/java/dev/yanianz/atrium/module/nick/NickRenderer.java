@@ -29,6 +29,8 @@ final class NickRenderer {
             }
             if ((mask & GRADIENT) != 0) {
                 resolvers.add(StandardTags.gradient());
+                resolvers.add(StandardTags.rainbow());
+                resolvers.add(StandardTags.transition());
             }
             resolvers.add(StandardTags.reset());
             PARSERS[mask] = MiniMessage.builder()

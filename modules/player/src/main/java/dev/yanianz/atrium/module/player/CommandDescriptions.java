@@ -30,9 +30,15 @@ final class CommandDescriptions {
             Map.entry("clear", "Clear items from your inventory or, after confirming, another player's"),
             Map.entry("near", "List the visible players near you"),
             Map.entry("skull", "Get the head of a player"),
-            Map.entry("more", "Fill the held stack up to its maximum size"),
+            Map.entry("more", "Fill the held stack, add a copy with /more clone, or set an oversized amount"),
             Map.entry("itemname", "Rename the held item"),
-            Map.entry("lore", "Add, set, remove or clear the lore lines of the held item"),
+            Map.entry("lore", "Add, insert, set, remove or clear the lore lines of the held item"),
+            Map.entry("falldistance", "Set the fall distance of yourself or another player"),
+            Map.entry("tgod", "Enable god mode for a limited number of seconds"),
+            Map.entry("sound", "Play a sound for yourself, one player or everyone"),
+            Map.entry("smite", "Strike lightning at yourself or another player, or a safe effect"),
+            Map.entry("solve", "Evaluate an arithmetic expression"),
+            Map.entry("shoot", "Launch a projectile in the direction you are looking"),
             Map.entry("enderchest", "Open your ender chest or another player's, live or from their last saved snapshot"),
             Map.entry("invsee", "Inspect or edit a player's inventory, live or from their last saved snapshot"));
 

@@ -29,6 +29,9 @@ class PlayerStoreTest {
             UUID fresh = UUID.randomUUID();
             store.component.saver().save(fresh, new PlayerState(false, true)).join();
             assertEquals(new PlayerState(false, true), store.component.loader().load(fresh).join());
+            store.identity.saver().save(uuid, new PlayerIdentity("Alice", 123L)).join();
+            assertEquals(new PlayerIdentity("Alice", 123L), store.identity.loader().load(uuid).join());
+            assertNull(store.identity.loader().load(fresh).join());
         }
     }
 

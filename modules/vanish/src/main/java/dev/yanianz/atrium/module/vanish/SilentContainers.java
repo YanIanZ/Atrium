@@ -1,6 +1,5 @@
 package dev.yanianz.atrium.module.vanish;
 
-import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import dev.yanianz.atrium.core.scheduler.TaskHandle;
 import java.util.Map;
@@ -47,7 +46,6 @@ final class SilentContainers implements Listener, TaskHandle {
 
     private final ModuleContext ctx;
     private final VanishManager manager;
-    private final ConfigHandle<VanishConfig> config;
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
     private volatile boolean cancelled;
 
@@ -85,10 +83,9 @@ final class SilentContainers implements Listener, TaskHandle {
         }
     }
 
-    SilentContainers(ModuleContext ctx, VanishManager manager, ConfigHandle<VanishConfig> config) {
+    SilentContainers(ModuleContext ctx, VanishManager manager) {
         this.ctx = ctx;
         this.manager = manager;
-        this.config = config;
     }
 
     // ---- opening ----
@@ -101,7 +98,7 @@ final class SilentContainers implements Listener, TaskHandle {
         }
         Player player = event.getPlayer();
         Block block = event.getClickedBlock();
-        if (block == null || !config.get().silentContainers || !manager.isOnlineVanished(player.getUniqueId())) {
+        if (block == null || !manager.silentChestEnabled(player)) {
             return;
         }
         // Sneaking with an item uses the item instead of opening the block.

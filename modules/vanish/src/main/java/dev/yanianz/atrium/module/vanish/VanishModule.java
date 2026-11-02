@@ -61,9 +61,11 @@ public final class VanishModule implements AtriumModule {
                 "See vanished players up to the atrium.vanish.see.<level> level (default 1)");
         ctx.permission(VanishManager.PERM_SILENT_MODIFY, PermissionDefault.OP,
                 "Edit containers opened silently while vanished");
+        ctx.permission("atrium.silentchest", PermissionDefault.OP,
+                "Open containers silently with /silentchest while visible");
 
         ctx.listen(new VanishListener(ctx, manager, config));
-        SilentContainers silent = new SilentContainers(ctx, manager, config);
+        SilentContainers silent = new SilentContainers(ctx, manager);
         ctx.listen(silent);
         ctx.track(silent);
         ctx.service(VanishService.class, manager);
@@ -75,6 +77,9 @@ public final class VanishModule implements AtriumModule {
                 .then(Cmds.literal("pickup").executes(this::pickup))
                 .then(Commands.argument("target", ArgumentTypes.player()).executes(this::toggle))
                 .build(), "Hide yourself or another player from other players; /vanish pickup toggles item pickup", "v"));
+        ctx.command(CommandSpec.of(Cmds.literal("silentchest", "atrium.silentchest")
+                .executes(this::silentChest)
+                .build(), "Toggle opening containers without animation or sound while visible"));
     }
 
     /** After a module reload, players already online get their stored state back. */
@@ -160,8 +165,7 @@ public final class VanishModule implements AtriumModule {
         return Cmds.OK;
     }
 
-    private int pickup(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
-        Player player = cmds.player(c.getSource());
+    private int pickup(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {        Player player = cmds.player(c.getSource());
         manager.togglePickup(player)
                 .thenCompose(enabled -> ctx.users().saveNow(player.getUniqueId()).thenApply(v -> enabled))
                 .whenComplete((enabled, error) -> {
@@ -171,6 +175,21 @@ public final class VanishModule implements AtriumModule {
                         return;
                     }
                     reply(player, enabled ? "vanish.pickup-enabled" : "vanish.pickup-disabled");
+                });
+        return Cmds.OK;
+    }
+
+    private int silentChest(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        manager.toggleSilentChest(player)
+                .thenCompose(enabled -> ctx.users().saveNow(player.getUniqueId()).thenApply(saved -> enabled))
+                .whenComplete((enabled, error) -> {
+                    if (error != null) {
+                        ctx.logger().error("Saving the silent chest toggle of {} failed", player.getName(), error);
+                        reply(player, "vanish.failed");
+                        return;
+                    }
+                    reply(player, enabled ? "vanish.silentchest-enabled" : "vanish.silentchest-disabled");
                 });
         return Cmds.OK;
     }

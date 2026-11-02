@@ -22,15 +22,17 @@ class VanishStoreTest {
             UUID uuid = UUID.randomUUID();
             assertNull(store.load(uuid).join(), "nothing stored yet");
             assertEquals(VanishState.DEFAULT, store.component.defaults().get());
-            store.component.saver().save(uuid, new VanishState(true, false)).join();
-            assertEquals(new VanishState(true, false), store.component.loader().load(uuid).join());
-            store.component.saver().save(uuid, new VanishState(false, true)).join();
-            assertEquals(new VanishState(false, true), store.load(uuid).join());
+            store.component.saver().save(uuid, new VanishState(true, false, false)).join();
+            assertEquals(new VanishState(true, false, false), store.component.loader().load(uuid).join());
+            store.component.saver().save(uuid, new VanishState(false, true, true)).join();
+            assertEquals(new VanishState(false, true, true), store.load(uuid).join());
         }
     }
 
-    @Test void togglesPreserveTheOtherFlag() {
-        assertEquals(new VanishState(true, true), new VanishState(false, true).withVanished(true));
-        assertEquals(new VanishState(true, false), new VanishState(true, true).withPickup(false));
+    @Test void togglesPreserveTheOtherFlags() {
+        assertEquals(new VanishState(true, true, false), new VanishState(false, true, false).withVanished(true));
+        assertEquals(new VanishState(true, false, false), new VanishState(true, true, false).withPickup(false));
+        assertEquals(new VanishState(true, true, true),
+                new VanishState(true, true, false).withSilentChest(true));
     }
 }

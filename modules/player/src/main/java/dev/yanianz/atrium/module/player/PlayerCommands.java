@@ -20,6 +20,9 @@ import java.util.Locale;
 import java.util.function.BiConsumer;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.GameMode;
+import org.bukkit.Material;
+import org.bukkit.Tag;
+import org.bukkit.block.ShulkerBox;
 import org.bukkit.command.CommandSender;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
@@ -27,7 +30,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.permissions.PermissionDefault;
 
@@ -234,10 +239,47 @@ final class PlayerCommands implements Listener, TaskHandle {
         if (hand.isEmpty() || hand.getAmount() != 1) { reply(sender, "hat-single"); return; }
         if (helmet != null && helmet.containsEnchantment(Enchantment.BINDING_CURSE)
                 && player.getGameMode() != GameMode.CREATIVE) { reply(sender, "hat-bound"); return; }
+        PlayerConfig cfg = config.get();
+        HatRules.Result rule = HatRules.check(
+                HatRules.Filters.from(cfg.hatWhitelist, cfg.hatBlockArmour, cfg.hatBlockEnchanted,
+                        cfg.hatBlockFilledShulkers),
+                hand.getType().getKey().getKey(), isArmour(hand.getType()),
+                hand.getItemMeta().hasEnchants(), filledShulker(hand));
+        switch (rule) {
+            case NOT_WHITELISTED -> { reply(sender, "hat-not-whitelisted"); return; }
+            case ARMOUR -> { reply(sender, "hat-armour"); return; }
+            case ENCHANTED -> { reply(sender, "hat-enchanted"); return; }
+            case FILLED_SHULKER -> { reply(sender, "hat-shulker"); return; }
+            case ALLOW -> { }
+        }
         // Swap complete stacks in one entity task; no drops, spare slot, or delayed snapshot.
         inventory.setItemInMainHand(helmet);
         inventory.setHelmet(hand);
         done(sender, player, "hat");
+    }
+
+    /** Armour slots include helmets, chestplates, leggings and boots, but not pumpkins or mob heads. */
+    private static boolean isArmour(Material material) {
+        if (material == null || material.isBlock() || Tag.ITEMS_SKULLS.isTagged(material)) {
+            return false;
+        }
+        var slot = material.getEquipmentSlot();
+        return slot == EquipmentSlot.HEAD || slot == EquipmentSlot.CHEST
+                || slot == EquipmentSlot.LEGS || slot == EquipmentSlot.FEET;
+    }
+
+    /** A shulker box item that still holds at least one item. */
+    private static boolean filledShulker(ItemStack item) {
+        if (!(item.getItemMeta() instanceof BlockStateMeta meta)
+                || !(meta.getBlockState() instanceof ShulkerBox box)) {
+            return false;
+        }
+        for (ItemStack content : box.getInventory().getContents()) {
+            if (content != null && !content.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void registerRepair() {

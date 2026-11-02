@@ -16,13 +16,19 @@ class InventoryValuesTest {
     @Test void loreUsesOneBasedLinesAndDoesNotMutateInput() {
         var a = Component.text("a"); var b = Component.text("b");
         var original = List.of(a, b);
-        assertEquals(List.of(b, b), InventoryValues.lore(original, "set", 1, b));
-        assertEquals(List.of(a), InventoryValues.lore(original, "remove", 2, null));
-        assertEquals(List.of(a, b, a), InventoryValues.lore(original, "add", 0, a));
-        assertEquals(List.of(), InventoryValues.lore(original, "clear", 0, null));
+        assertEquals(List.of(b, b), InventoryValues.lore(original, "set", "1", b));
+        assertEquals(List.of(a, a, b), InventoryValues.lore(original, "insert", "1", a));
+        assertEquals(List.of(a, b, a), InventoryValues.lore(original, "insert", "3", a));
+        assertEquals(List.of(a), InventoryValues.lore(original, "remove", "2", null));
+        assertEquals(List.of(), InventoryValues.lore(original, "remove", "*", null));
+        assertEquals(List.of(a, a), InventoryValues.lore(original, "set", "*", a));
+        assertEquals(List.of(a, b, a), InventoryValues.lore(original, "add", "", a));
+        assertEquals(List.of(), InventoryValues.lore(original, "clear", "", null));
         assertEquals(List.of(a, b), original);
-        assertThrows(IllegalArgumentException.class, () -> InventoryValues.lore(original, "set", 0, a));
-        assertThrows(IllegalArgumentException.class, () -> InventoryValues.lore(original, "remove", 3, null));
+        assertThrows(IllegalArgumentException.class, () -> InventoryValues.lore(original, "set", "0", a));
+        assertThrows(IllegalArgumentException.class, () -> InventoryValues.lore(original, "remove", "3", null));
+        assertThrows(IllegalArgumentException.class, () -> InventoryValues.lore(original, "insert", "4", a));
+        assertThrows(IllegalArgumentException.class, () -> InventoryValues.lore(original, "set", "one", a));
     }
     @Test void unprivilegedTextIsEntirelyLiteral() {
         String text = "<red>Hello</red><click:run_command:'/op me'>x</click>%player_name%";

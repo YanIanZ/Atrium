@@ -84,4 +84,11 @@ public class AfkConfig {
 
     @Comment("Where the tab list tag goes: before or after the name.")
     public String tabListTagPosition = "after";
+
+    @Comment("AFK players are not chosen as a target by mobs, and shulker bullets let go of an AFK target.\n"
+            + "This only affects targeting, never damage from a projectile that is already in flight.")
+    public boolean protectFromTargeting = true;
+
+    @Comment("Interacting with an entity (a villager, a chest boat, an item frame, ...) ends AFK.")
+    public boolean exitOnEntityInteract = true;
 }

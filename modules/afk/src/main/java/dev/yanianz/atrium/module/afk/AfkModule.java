@@ -35,9 +35,12 @@ import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.ShulkerBullet;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
+import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
@@ -570,12 +573,39 @@ public final class AfkModule implements AtriumModule, Listener, AfkService {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInteractEntity(PlayerInteractEntityEvent event) {
-        activity(event.getPlayer());
+        if (config.get().exitOnEntityInteract) {
+            activity(event.getPlayer());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInteractAtEntity(PlayerInteractAtEntityEvent event) {
-        activity(event.getPlayer());
+        if (config.get().exitOnEntityInteract) {
+            activity(event.getPlayer());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTarget(EntityTargetLivingEntityEvent event) {
+        if (!config.get().protectFromTargeting || !(event.getTarget() instanceof Player player)) {
+            return;
+        }
+        if (isAfk(player.getUniqueId())) {
+            event.setTarget(null);
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onProjectileLaunch(ProjectileLaunchEvent event) {
+        if (!config.get().protectFromTargeting) {
+            return;
+        }
+        if (event.getEntity() instanceof ShulkerBullet bullet
+                && bullet.getTarget() instanceof Player player
+                && isAfk(player.getUniqueId())) {
+            bullet.setTarget(null);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
