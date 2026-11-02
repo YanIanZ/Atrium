@@ -1,7 +1,10 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
 location: "<prefix><muted>Kamu mati di <highlight><death_world></highlight> <highlight><death_x></highlight>, <highlight><death_y></highlight>, <highlight><death_z></highlight>."
 stats-header: "<prefix><primary>Statistik kematian <highlight><player></highlight>:"
-stats-kills: "<prefix><muted>Kill: <highlight><kills>"
+stats-kills: "<prefix><muted>Bunuh: <highlight><kills>"
 stats-deaths: "<prefix><muted>Mati: <highlight><deaths>"
 stats-ratio: "<prefix><muted>Rasio K/D: <highlight><ratio>"
-no-permission: "<prefix><error>Kamu butuh <highlight><permission></highlight> untuk melihat statistik pemain lain."
+no-permission: "<prefix><error>Kamu perlu <highlight><permission></highlight> untuk melihat statistik pemain lain."
+killtop-header: "<prefix><primary>Peringkat pembunuhan — halaman <highlight><page></highlight>:"
+killtop-entry: "<prefix><muted><rank>. <highlight><player></highlight> — <highlight><kills></highlight> bunuh, <highlight><deaths></highlight> mati <dark_gray>(K/D <ratio>)</dark_gray>"
+killtop-empty: "<prefix><muted>Belum ada pembunuhan yang tercatat."

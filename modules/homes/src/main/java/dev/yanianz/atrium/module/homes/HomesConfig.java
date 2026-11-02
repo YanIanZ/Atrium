@@ -1,7 +1,10 @@
 package dev.yanianz.atrium.module.homes;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import org.jspecify.annotations.Nullable;
 import org.spongepowered.configurate.objectmapping.ConfigSerializable;
 import org.spongepowered.configurate.objectmapping.meta.Comment;
 
@@ -11,6 +14,12 @@ public class HomesConfig {
     @Comment("Homes a player may have without a limit permission. Grant atrium.homes.<number> for more\n"
             + "(the highest one wins, never below this value) or atrium.homes.unlimited.")
     public int defaultLimit = 3;
+
+    @Comment("""
+            Extra per-world limit, by world name. The global limit still applies; this one caps only homes
+            stored in that world, so a player can keep a small base in a PvP world or a lobby. A world that
+            is not listed has no extra cap. Example: world_pvp: 1""")
+    public Map<String, Integer> worldLimits = new LinkedHashMap<>();
 
     @Comment("Name used by /sethome and /home without a name.")
     public String defaultName = "home";
@@ -33,5 +42,19 @@ public class HomesConfig {
 
     boolean blocked(List<String> worlds, String world) {
         return worlds != null && worlds.stream().anyMatch(w -> w != null && w.equalsIgnoreCase(world));
+    }
+
+    /** Configured extra limit for a world, or null when that world is not capped. */
+    @Nullable Integer worldLimit(String world) {
+        if (worldLimits == null || world == null) {
+            return null;
+        }
+        for (Map.Entry<String, Integer> entry : worldLimits.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(world.trim())) {
+                Integer limit = entry.getValue();
+                return limit == null || limit < 0 ? null : limit;
+            }
+        }
+        return null;
     }
 }

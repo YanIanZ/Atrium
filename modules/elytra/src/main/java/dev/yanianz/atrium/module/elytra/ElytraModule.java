@@ -48,6 +48,10 @@ public final class ElytraModule implements AtriumModule {
         this.ctx = ctx;
         this.cmds = ctx.commands();
         this.config = ctx.config(ElytraConfig.class, ElytraConfig::new);
+        ElytraConfig.Boost boost = config.get().boost;
+        if (!ElytraRules.validCost(boost.minimumLevels, boost.costPoints)) {
+            throw new IllegalArgumentException("elytra.yml: boost cost must be 0-1000 levels and 0-100000 points");
+        }
         ctx.migrate(ElytraStore.MIGRATIONS);
         this.store = new ElytraStore(ctx.database());
         ctx.component(store.component);

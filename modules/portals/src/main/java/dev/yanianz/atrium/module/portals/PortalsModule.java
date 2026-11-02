@@ -19,6 +19,7 @@ import dev.yanianz.atrium.core.module.ModuleContext;
 import dev.yanianz.atrium.core.scheduler.TaskHandle;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -46,12 +47,14 @@ import org.bukkit.persistence.PersistentDataType;
 public final class PortalsModule implements AtriumModule {
     static final String PERM_ADMIN = "atrium.portal.admin";
     static final String PERM_COMMAND = "atrium.portal.command";
+    static final String PERM_FREE = "atrium.portal.free";
 
     private ModuleContext ctx;
     private Cmds cmds;
     private Messages messages;
     private ConfigHandle<PortalsConfig> config;
     private PortalRegistry registry;
+    private PortalListener listener;
     private final EntryTracker tracker = new EntryTracker();
     private final Map<UUID, Selection> selections = new ConcurrentHashMap<>();
     private NamespacedKey wandKey;
@@ -89,7 +92,9 @@ public final class PortalsModule implements AtriumModule {
         ctx.permission(PERM_ADMIN, PermissionDefault.OP, "Create, edit and delete portals (/portal)");
         ctx.permission(PERM_COMMAND, PermissionDefault.OP,
                 "Attach action lines to portals (they can run console commands)");
-        ctx.listen(new PortalListener(this, ctx));
+        ctx.permission(PERM_FREE, PermissionDefault.FALSE, "Use portals without paying the per-move cost");
+        this.listener = new PortalListener(this, ctx);
+        ctx.listen(listener);
         registerCommand();
         startOutline();
         ctx.logger().info("Loaded {} portals", loaded);
@@ -104,6 +109,9 @@ public final class PortalsModule implements AtriumModule {
     @Override
     public void disable() {
         outlineTask.cancel();
+        if (listener != null) {
+            listener.cancelWarmups();
+        }
         selections.clear();
         tracker.clearAll();
     }
@@ -214,6 +222,10 @@ public final class PortalsModule implements AtriumModule {
                         .then(Commands.argument("permission", StringArgumentType.word())
                                 .suggests(Cmds.suggest(() -> List.of("none")))
                                 .executes(this::setPermission))))
+                .then(Commands.literal("setcost").then(nameArg()
+                        .then(Commands.argument("amount", StringArgumentType.word())
+                                .suggests(Cmds.suggest(() -> List.of("default", "0", "10", "100")))
+                                .executes(this::setCost))))
                 .build(), "Create and manage portal regions and where they lead", "portals"));
     }
 
@@ -323,7 +335,10 @@ public final class PortalsModule implements AtriumModule {
                 Msg.unparsed("target", portal.target().describe()),
                 Msg.unparsed("permission", portal.permission() == null ? none : portal.permission()),
                 Msg.unparsed("action", portal.action() == null ? none : portal.action()),
-                Msg.unparsed("creator", creator));
+                Msg.unparsed("creator", creator),
+                Msg.unparsed("cost", portal.cost() == null
+                        ? String.format(Locale.ROOT, "default (%.2f)", Math.max(0, config.get().defaultCost))
+                        : String.format(Locale.ROOT, "%.2f", portal.cost())));
         return Cmds.OK;
     }
 
@@ -388,6 +403,37 @@ public final class PortalsModule implements AtriumModule {
             messages.send(sender, value == null ? "portals.permission-cleared" : "portals.permission-set",
                     Msg.unparsed("portal", result.portal().map(Portal::name).orElse(name)),
                     Msg.unparsed("permission", value == null ? "" : value));
+            return true;
+        });
+        return Cmds.OK;
+    }
+
+    private int setCost(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        String name = StringArgumentType.getString(c, "name");
+        String raw = StringArgumentType.getString(c, "amount").trim();
+        Double value;
+        if (raw.equalsIgnoreCase("default")) {
+            value = null;
+        } else {
+            try {
+                BigDecimal parsed = new BigDecimal(raw);
+                if (parsed.signum() < 0 || parsed.compareTo(PortalCost.MAX) > 0) {
+                    throw new NumberFormatException("out of range");
+                }
+                value = parsed.doubleValue();
+            } catch (NumberFormatException e) {
+                throw cmds.fail(c.getSource(), "portals.cost-invalid");
+            }
+        }
+        report(sender, name, registry.update(name, p -> p.withCost(value)), result -> {
+            if (result.outcome() != PortalRegistry.Outcome.UPDATED) {
+                return send(sender, "portals.not-found", name);
+            }
+            String shown = value == null ? String.format(Locale.ROOT, "%.2f", Math.max(0, config.get().defaultCost)) : raw;
+            messages.send(sender, value == null ? "portals.cost-cleared" : "portals.cost-set",
+                    Msg.unparsed("portal", result.portal().map(Portal::name).orElse(name)),
+                    Msg.unparsed("cost", shown));
             return true;
         });
         return Cmds.OK;

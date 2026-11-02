@@ -11,6 +11,7 @@ not-found-other: "<prefix><error><highlight><player></highlight> has no home cal
 invalid-name: "<prefix><error>Home names may only contain letters, digits, _ and - (at most 32 characters)."
 name-reserved: "<prefix><error><highlight><home></highlight> is reserved for your bed."
 limit-reached: "<prefix><error>You reached your limit of <highlight><limit></highlight> homes. Delete one with <highlight>/delhome</highlight> first."
+limit-reached-world: "<prefix><error>You reached the limit of <highlight><limit></highlight> homes in <highlight><world></highlight>. Use <highlight>/homes</highlight> to see your homes and <highlight>/delhome</highlight> to free a slot."
 set-world-blocked: "<prefix><error>You cannot set homes in <highlight><world></highlight>."
 world-blocked: "<prefix><error>Homes in <highlight><world></highlight> cannot be used."
 world-not-loaded: "<prefix><error>The world <highlight><world></highlight> of this home is not loaded."

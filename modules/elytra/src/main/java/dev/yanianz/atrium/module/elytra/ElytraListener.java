@@ -18,6 +18,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.block.Block;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -132,6 +133,10 @@ final class ElytraListener implements Listener {
         if (!boost.enabled || !player.hasPermission(PERM_BOOST) || !worldAllowed(player) || !prefs(player).boost()) {
             return;
         }
+        if (ElytraRules.blocksBoost(boost.riptideGuard, holdsRiptide(player), player.isRiptiding())) {
+            ctx.messages().actionBar(player, "elytra.boost-riptide");
+            return;
+        }
         double max = Math.clamp(boost.maxSpeed, 0.5, 10.0);
         Vector server = player.getVelocity();
         SpeedMath.Vec reported = new SpeedMath.Vec(server.getX(), server.getY(), server.getZ());
@@ -144,12 +149,6 @@ final class ElytraListener implements Listener {
             ctx.messages().actionBar(player, "elytra.boost-max-speed");
             return;
         }
-        long left = cooldowns.tryAcquire(player.getUniqueId(), "boost", System.currentTimeMillis(),
-                Math.clamp(boost.cooldownMillis, 0L, 60_000L));
-        if (left > 0) {
-            ctx.messages().actionBar(player, "elytra.boost-cooldown", Msg.duration("time", Duration.ofMillis(left)));
-            return;
-        }
         Vector look = player.getLocation().getDirection();
         SpeedMath.Vec base = measured.orElse(reported);
         Optional<SpeedMath.Vec> result = SpeedMath.boost(base, speed, new SpeedMath.Vec(look.getX(), look.getY(), look.getZ()),
@@ -157,10 +156,38 @@ final class ElytraListener implements Listener {
         if (result.isEmpty()) {
             return;
         }
+        if (!ElytraRules.canPay(player.getLevel(), player.calculateTotalExperiencePoints(),
+                boost.minimumLevels, boost.costPoints)) {
+            ctx.messages().actionBar(player, "elytra.boost-cost",
+                    Msg.number("levels", boost.minimumLevels), Msg.number("points", boost.costPoints));
+            return;
+        }
+        long left = cooldowns.tryAcquire(player.getUniqueId(), "boost", System.currentTimeMillis(),
+                Math.clamp(boost.cooldownMillis, 0L, 60_000L));
+        if (left > 0) {
+            ctx.messages().actionBar(player, "elytra.boost-cooldown", Msg.duration("time", Duration.ofMillis(left)));
+            return;
+        }
         SpeedMath.Vec v = result.get();
+        charge(player, boost.costPoints);
         player.setVelocity(new Vector(v.x(), v.y(), v.z()));
         ctx.messages().actionBar(player, "elytra.boosted",
                 Msg.unparsed("speed", String.format(Locale.ROOT, "%.1f", v.length() * 20.0)));
+    }
+
+    /** Takes the configured experience. The cost was checked immediately before, on the player's thread. */
+    private static void charge(Player player, int points) {
+        if (points > 0) {
+            player.giveExp(-points);
+        }
+    }
+
+    /** A Riptide trident in either hand makes a boost an exploit. */
+    static boolean holdsRiptide(Player player) {
+        ItemStack main = player.getInventory().getItemInMainHand();
+        ItemStack off = player.getInventory().getItemInOffHand();
+        return (main != null && main.getEnchantmentLevel(Enchantment.RIPTIDE) > 0)
+                || (off != null && off.getEnchantmentLevel(Enchantment.RIPTIDE) > 0);
     }
 
     // ---- movement: speed samples and arming ----
@@ -240,6 +267,7 @@ final class ElytraListener implements Listener {
 
     private boolean eligible(Player player) {
         return config.get().launch.enabled && survivalLike(player.getGameMode()) && !player.isGliding()
+                && !player.isRiptiding() && (!config.get().boost.riptideGuard || !holdsRiptide(player))
                 && player.getVehicle() == null && worldAllowed(player) && !hasFlyPermission(player)
                 && player.hasPermission(PERM_LAUNCH) && prefs(player).launch() && wearingGlider(player);
     }

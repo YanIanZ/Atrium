@@ -46,6 +46,34 @@ class HomesTest {
     }
 
     @Test
+    void worldLimitCapsOnlyThatWorldAndKeepsTheGlobalLimit() {
+        Homes homes = Homes.of(List.of(home("a", "world"), home("b", "world_pvp")));
+        assertEquals(1, homes.countIn("WORLD_PVP"));
+        // A new home in the capped world is refused even though the global limit has room.
+        assertFalse(homes.canSet("c", "world_pvp", 5, 1));
+        assertTrue(homes.canSet("c", "world_nether", 5, 1));
+        // Replacing a home in the same world needs no free slot there.
+        assertTrue(homes.canSet("b", "world_pvp", 5, 1));
+        // Moving a home into the capped world needs one.
+        assertFalse(homes.canSet("a", "world_pvp", 5, 1));
+        assertTrue(homes.canSet("a", "world_pvp", 5, 2));
+        // An unlisted world has no extra cap.
+        assertTrue(homes.canSet("c", "world_nether", 3, null));
+        assertFalse(homes.canSet("c", "world_nether", 2, null), "the global limit still applies");
+    }
+
+    @Test
+    void worldLimitsAreCaseInsensitiveAndUnlistedWorldsAreUncapped() {
+        HomesConfig config = new HomesConfig();
+        config.worldLimits.put("world_pvp", 1);
+        config.worldLimits.put("world_zero", 0);
+        assertEquals(1, config.worldLimit("WORLD_PVP"));
+        assertEquals(0, config.worldLimit("world_zero"));
+        assertEquals(null, config.worldLimit("world"));
+        assertEquals(null, config.worldLimit(null));
+    }
+
+    @Test
     void validNames() {
         assertTrue(Homes.validName("base_1-x"));
         assertFalse(Homes.validName(""));

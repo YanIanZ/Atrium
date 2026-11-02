@@ -80,6 +80,35 @@ public record Homes(SortedMap<String, Home> byName) {
         return contains(name) || count() < limit;
     }
 
+    /**
+     * World-aware limit. The global limit counts every home; a non-null {@code worldLimit} additionally
+     * caps the homes stored in {@code world}. Replacing a home inside the same world never needs a free
+     * slot, while moving a home into another world does.
+     */
+    public boolean canSet(String name, String world, int globalLimit, @org.jspecify.annotations.Nullable Integer worldLimit) {
+        boolean existing = contains(name);
+        boolean sameWorld = existing && get(name)
+                .map(home -> world != null && world.equalsIgnoreCase(home.location().world()))
+                .orElse(false);
+        if (!existing && count() >= globalLimit) {
+            return false;
+        }
+        if (sameWorld) {
+            return true;
+        }
+        return worldLimit == null || countIn(world) < worldLimit;
+    }
+
+    /** Homes whose stored world matches {@code world} (case-insensitive). */
+    public int countIn(String world) {
+        if (world == null) {
+            return 0;
+        }
+        return (int) byName.values().stream()
+                .filter(home -> world.equalsIgnoreCase(home.location().world()))
+                .count();
+    }
+
     Map<String, Home> asMap() {
         return byName;
     }

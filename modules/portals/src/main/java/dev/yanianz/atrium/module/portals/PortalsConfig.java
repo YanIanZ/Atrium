@@ -34,6 +34,34 @@ public class PortalsConfig {
     @Comment("Tell players on the action bar when they lack the permission of a portal they walked into.")
     public boolean notifyNoPermission = true;
 
+    @Comment("""
+            Price of one portal use when the portal has no own price (/portal setcost). Needs the economy
+            module; without it every portal stays free. Charged only after a destination was resolved,
+            refunded when the teleport or server switch does not happen. Bypass: atrium.portal.free.""")
+    public double defaultCost = 0.0;
+
+    @Comment("Seconds a player must stay inside a portal before it teleports them (0 = immediate).")
+    public int warmupSeconds = 0;
+
+    @Comment("Cancel the warmup when the player leaves the portal region before it finishes.")
+    public boolean cancelWarmupOnExit = true;
+
+    @Comment("Push a player who walks into a portal they may not use back out of it.")
+    public Kickback kickback = new Kickback();
+
+    @ConfigSerializable
+    public static class Kickback {
+        @Comment("Enable the kickback. Off by default so a missing permission never moves a player unexpectedly.")
+        public boolean enabled = false;
+
+        @Comment("Multiplier of the reversed movement (0.1-4).")
+        public double strength = 0.9;
+
+        @Comment("Also cancel the move itself. Setting the destination back already stops the entry; cancelling\n"
+                + "additionally prevents any other plugin from acting on the blocked move.")
+        public boolean cancelMove = true;
+    }
+
     @Comment("Particle outline shown to admins holding the wand.")
     public Outline outline = new Outline();
 

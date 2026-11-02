@@ -11,6 +11,7 @@ not-found-other: "<prefix><error><highlight><player></highlight> tidak punya hom
 invalid-name: "<prefix><error>Nama home hanya boleh berisi huruf, angka, _ dan - (maksimal 32 karakter)."
 name-reserved: "<prefix><error><highlight><home></highlight> dipakai untuk kasurmu."
 limit-reached: "<prefix><error>Kamu sudah mencapai batas <highlight><limit></highlight> home. Hapus satu dengan <highlight>/delhome</highlight> dulu."
+limit-reached-world: "<prefix><error>Kamu mencapai batas <highlight><limit></highlight> home di <highlight><world></highlight>. Gunakan <highlight>/homes</highlight> untuk melihat home dan <highlight>/delhome</highlight> untuk mengosongkan slot."
 set-world-blocked: "<prefix><error>Kamu tidak bisa membuat home di <highlight><world></highlight>."
 world-blocked: "<prefix><error>Home di <highlight><world></highlight> tidak bisa dipakai."
 world-not-loaded: "<prefix><error>World <highlight><world></highlight> dari home ini tidak dimuat."

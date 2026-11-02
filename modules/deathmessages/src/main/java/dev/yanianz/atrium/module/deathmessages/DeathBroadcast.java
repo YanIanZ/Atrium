@@ -1,6 +1,6 @@
 package dev.yanianz.atrium.module.deathmessages;
 
-/** Pure radius rule: {@code 0} (or less) is global, otherwise same world and within the radius. */
+/** Pure radius and visibility rules for a death broadcast. */
 public final class DeathBroadcast {
     private DeathBroadcast() {}
 
@@ -14,5 +14,20 @@ public final class DeathBroadcast {
             return true;
         }
         return sameWorld && distanceSquared <= (double) radius * radius;
+    }
+
+    /**
+     * The full rule: a broadcast is hidden entirely while fewer than {@code hideBelowPlayers} players are
+     * online, then the radius rule applies.
+     *
+     * @param online          players online on this server
+     * @param hideBelowPlayers threshold below which death messages are not broadcast; {@code <= 0} disables
+     */
+    public static boolean receives(int radius, boolean sameWorld, double distanceSquared, int online,
+            int hideBelowPlayers) {
+        if (hideBelowPlayers > 0 && online < hideBelowPlayers) {
+            return false;
+        }
+        return receives(radius, sameWorld, distanceSquared);
     }
 }

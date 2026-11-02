@@ -12,14 +12,17 @@ import org.slf4j.Logger;
 
 /** Portal table {@code {prefix}portals_portals}. All calls run on the storage executor. */
 final class PortalStorage {
-    static final List<Migration> MIGRATIONS = List.of(Migration.of(1, "portals_portals",
-            "CREATE TABLE {prefix}portals_portals (name_lower VARCHAR(32) NOT NULL PRIMARY KEY, name VARCHAR(32) NOT NULL, "
-                    + "world VARCHAR(128) NOT NULL, min_x INT NOT NULL, min_y INT NOT NULL, min_z INT NOT NULL, "
-                    + "max_x INT NOT NULL, max_y INT NOT NULL, max_z INT NOT NULL, target VARCHAR(512) NOT NULL, "
-                    + "action_line VARCHAR(1024), permission VARCHAR(128), creator CHAR(36), created BIGINT NOT NULL)"));
+    static final List<Migration> MIGRATIONS = List.of(
+            Migration.of(1, "portals_portals",
+                    "CREATE TABLE {prefix}portals_portals (name_lower VARCHAR(32) NOT NULL PRIMARY KEY, name VARCHAR(32) NOT NULL, "
+                            + "world VARCHAR(128) NOT NULL, min_x INT NOT NULL, min_y INT NOT NULL, min_z INT NOT NULL, "
+                            + "max_x INT NOT NULL, max_y INT NOT NULL, max_z INT NOT NULL, target VARCHAR(512) NOT NULL, "
+                            + "action_line VARCHAR(1024), permission VARCHAR(128), creator CHAR(36), created BIGINT NOT NULL)"),
+            Migration.of(2, "portals cost per use",
+                    "ALTER TABLE {prefix}portals_portals ADD COLUMN cost DOUBLE"));
 
     private static final String COLUMNS = "name_lower, name, world, min_x, min_y, min_z, max_x, max_y, max_z, target, "
-            + "action_line, permission, creator, created";
+            + "action_line, permission, creator, created, cost";
 
     private final Database db;
     private final Logger logger;
@@ -40,8 +43,11 @@ final class PortalStorage {
                         Cuboid area = Cuboid.of(rs.getString(3), rs.getInt(4), rs.getInt(5), rs.getInt(6),
                                 rs.getInt(7), rs.getInt(8), rs.getInt(9));
                         String creator = rs.getString(13);
+                        double cost = rs.getDouble(15);
+                        boolean hasCost = !rs.wasNull();
                         portals.add(new Portal(name, area, PortalTarget.decode(rs.getString(10)), rs.getString(11),
-                                rs.getString(12), creator == null ? null : UUID.fromString(creator), rs.getLong(14)));
+                                rs.getString(12), creator == null ? null : UUID.fromString(creator), rs.getLong(14),
+                                hasCost ? cost : null));
                     } catch (IllegalArgumentException e) {
                         logger.warn("Skipping broken portal row '{}': {}", name, e.getMessage());
                     }
@@ -55,7 +61,7 @@ final class PortalStorage {
     CompletableFuture<Void> insert(Portal portal) {
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + db.table("portals_portals") + " (" + COLUMNS
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 bind(ps, portal);
                 ps.executeUpdate();
             }
@@ -83,6 +89,10 @@ final class PortalStorage {
             sets.add("permission = ?");
             params.add(after.permission());
         }
+        if (!java.util.Objects.equals(after.cost(), before.cost())) {
+            sets.add("cost = ?");
+            params.add(after.cost());
+        }
         if (sets.isEmpty()) {
             sets.add("name_lower = name_lower");
         }
@@ -99,6 +109,6 @@ final class PortalStorage {
         Cuboid a = portal.area();
         Database.bind(ps, portal.key(), portal.name(), a.world(), a.minX(), a.minY(), a.minZ(), a.maxX(), a.maxY(), a.maxZ(),
                 portal.target().encode(), portal.action(), portal.permission(),
-                portal.creator() == null ? null : portal.creator().toString(), portal.createdAt());
+                portal.creator() == null ? null : portal.creator().toString(), portal.createdAt(), portal.cost());
     }
 }

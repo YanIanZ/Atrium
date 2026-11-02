@@ -1,5 +1,7 @@
 package dev.yanianz.atrium.module.economy;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.spongepowered.configurate.objectmapping.ConfigSerializable;
 import org.spongepowered.configurate.objectmapping.meta.Comment;
 
@@ -41,4 +43,64 @@ public class EconomyConfig {
             most this long for the commit: raising it lengthens the worst-case tick stall, lowering it makes a
             write that times out more likely, and a timed-out write has an unknown outcome. Do not retry blindly.""")
     public int vaultTimeoutMillis = 2000;
+
+    @Comment("Tax taken from /pay transfers. Disabled by default: turning it on changes what players receive.")
+    public Tax payTax = new Tax();
+
+    @Comment("Tradable banknote items created by /cheque and redeemed by right-clicking them.")
+    public Cheque cheque = new Cheque();
+
+    @Comment("Filters for the /baltop snapshot.")
+    public Baltop baltop = new Baltop();
+
+    @ConfigSerializable
+    public static class Tax {
+        @Comment("Enable the /pay tax.")
+        public boolean enabled = false;
+
+        @Comment("""
+                true  = the sender pays the amount plus the tax, the receiver gets the full amount.
+                false = the sender pays the amount, the receiver gets the amount minus the tax.
+                Tax money disappears (an economy sink) and is never credited to another account.""")
+        public boolean deductOnTop = false;
+
+        @Comment("Percentage component of the tax (0-100000000).")
+        public String percent = "0";
+
+        @Comment("Flat component of the tax, added to the percentage part.")
+        public String flat = "0";
+
+        @Comment("Lowest tax charged when a maximum above zero is configured.")
+        public String minimum = "0";
+
+        @Comment("Highest tax charged; 0 disables the clamp.")
+        public String maximum = "0";
+    }
+
+    @ConfigSerializable
+    public static class Cheque {
+        @Comment("Allow /cheque. The money is withdrawn when the note is created, so a lost note is lost money.")
+        public boolean enabled = true;
+
+        @Comment("Item type of a cheque; it is always given as a single, non-stackable item.")
+        public String material = "PAPER";
+
+        @Comment("Largest amount one cheque may carry.")
+        public String maximumAmount = "1000000";
+
+        @Comment("Allow redeeming cheques while in creative mode. Off by default so a creative test world cannot mint money.")
+        public boolean allowCreativeRedemption = false;
+    }
+
+    @ConfigSerializable
+    public static class Baltop {
+        @Comment("Names hidden from /baltop (case-insensitive). Useful for server-owned or fake accounts.")
+        public List<String> excludedPlayers = new ArrayList<>();
+
+        @Comment("""
+                Hide accounts that have not joined for this many days. 0 disables the filter. Accounts without a
+                recorded last join are hidden while the filter is active. The filter is applied to the periodic
+                snapshot, so a change appears after the next refresh.""")
+        public int inactiveDays = 0;
+    }
 }

@@ -19,16 +19,40 @@ public class DeathMessagesConfig {
             + "in the same world within that many blocks of the death location.")
     public int broadcastRadius = 0;
 
+    @Comment("Hide the broadcast entirely while fewer than this many players are online (0 disables).\n"
+            + "This suppresses spawn-server noise on an empty server; the victim still sees their message.")
+    public int hideBelowPlayers = 0;
+
+    @Comment("Seconds in which the same victim, cause and killer may be broadcast at most 'spam-max' times.\n"
+            + "0 disables the suppression. Suppressed messages are only sent to the victim.")
+    public int spamWindowSeconds = 0;
+
+    @Comment("Messages allowed per spam window and key; further copies are suppressed.")
+    public int spamMax = 2;
+
     @Comment("Send the death location to the dead player only.")
     public boolean sendLocationToVictim = true;
 
     @Comment("Component inserted for <weapon> when the killer has an empty hand (admin MiniMessage).")
     public String fistsText = "<gray>fists";
 
-    @Comment("MiniMessage template per cause key. Placeholders: <victim> <killer> <weapon> <world> <x> <y> <z>.\n"
+    @Comment("Seconds for which a previous hit still explains a death (fall after a knockback). 0 disables\n"
+            + "the damage history. The history also feeds <lastkiller>, <lastweapon> and <lastblock>.")
+    public int historyWindowSeconds = 15;
+
+    @Comment("When the final damage has no player killer but the damage history has one, use that player as\n"
+            + "<killer> and the 'player' template (for example 'was slain by Steve using a sword' after a\n"
+            + "knockback into lava). Off by default because it can credit a death to the wrong player.")
+    public boolean lastDamageAsKiller = false;
+
+    @Comment("MiniMessage template per cause key. Placeholders: <victim> <killer> <weapon> <world> <x> <y> <z>,\n"
+            + "plus <lastkiller> <lastweapon> <lastblock> <lastcause> from the damage history.\n"
             + "Keys used by the selector: fall, lava, drowning, explosion, projectile, player, mob,\n"
             + "mob.<entity> (for example mob.zombie) and fallback. The first matching key wins.")
     public Map<String, String> templates = defaults();
+
+    @Comment("Rows shown per /killtop page (1-100).")
+    public int killtopPageSize = 10;
 
     static Map<String, String> defaults() {
         Map<String, String> map = new LinkedHashMap<>();
@@ -61,5 +85,15 @@ public class DeathMessagesConfig {
             }
         }
         return "<victim> <gray>died";
+    }
+
+    /** Window of the damage history in milliseconds; zero when disabled. */
+    public long historyWindowMillis() {
+        return historyWindowSeconds <= 0 ? 0 : historyWindowSeconds * 1000L;
+    }
+
+    /** Window of the spam guard in milliseconds; zero when disabled. */
+    public long spamWindowMillis() {
+        return spamWindowSeconds <= 0 ? 0 : spamWindowSeconds * 1000L;
     }
 }

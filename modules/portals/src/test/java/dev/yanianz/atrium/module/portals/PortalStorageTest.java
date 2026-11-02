@@ -32,6 +32,7 @@ class PortalStorageTest {
             registry.update("hub", p -> p.withTarget(new PortalTarget(TargetType.WARP, "spawn"))).join();
             registry.update("HUB", p -> p.withPermission("x.y")).join();
             registry.update("hub", p -> p.withAction("msg: hi")).join();
+            registry.update("hub", p -> p.withCost(12.5)).join();
             assertEquals(PortalRegistry.Outcome.NOT_FOUND, registry.update("nope", p -> p).join().outcome());
 
             var reloaded = new PortalRegistry(storage);
@@ -41,6 +42,7 @@ class PortalStorageTest {
             assertEquals(new PortalTarget(TargetType.WARP, "spawn"), back.target());
             assertEquals("x.y", back.permission());
             assertEquals("msg: hi", back.action());
+            assertEquals(12.5, back.cost());
             assertEquals(hub.creator(), back.creator());
             assertEquals(1, reloaded.index().containing("world", 1, 65, 0.5).size());
 

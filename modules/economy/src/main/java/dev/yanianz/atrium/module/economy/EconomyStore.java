@@ -25,10 +25,19 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
             "CREATE TABLE {prefix}economy_accounts (uuid CHAR(36) NOT NULL PRIMARY KEY, balance " + decimal + " NOT NULL, updated_at BIGINT NOT NULL)" + engine,
             "CREATE TABLE {prefix}economy_transactions (id CHAR(36) NOT NULL PRIMARY KEY, account CHAR(36) NOT NULL, counterparty CHAR(36), amount " + decimal + " NOT NULL, balance_after " + decimal + " NOT NULL, reason VARCHAR(255) NOT NULL, created BIGINT NOT NULL)" + engine,
             "CREATE INDEX {prefix}economy_transactions_account ON {prefix}economy_transactions (account, created)");
+    }), new Migration(2, "cheques", dialect -> {
+        String decimal = dialect == Dialect.SQLITE ? "TEXT" : "DECIMAL(30,10)";
+        String engine = dialect == Dialect.MYSQL ? " ENGINE=InnoDB" : "";
+        return List.of(
+            "CREATE TABLE {prefix}economy_cheques (id CHAR(36) NOT NULL PRIMARY KEY, value " + decimal + " NOT NULL, creator CHAR(36) NOT NULL, created BIGINT NOT NULL, redeemed_by CHAR(36), redeemed BIGINT)" + engine,
+            "CREATE INDEX {prefix}economy_cheques_redeemed ON {prefix}economy_cheques (redeemed)");
     }));
     record AccountState(BigDecimal balance) {}
     record Entry(UUID uuid, String name, BigDecimal balance) {}
     record LogEntry(String amount, String balance, String reason, long created) {}
+    /** Outcome of a redemption attempt. {@code value} is only meaningful for {@link Claim#OK}. */
+    enum Claim { OK, MISSING, ALREADY_REDEEMED, FAILED }
+    record ClaimResult(Claim status, BigDecimal value) {}
     private record Stored(BigDecimal value, String raw) {}
     private static final class Rejected extends RuntimeException {
         final TransactionResult result;
@@ -151,27 +160,42 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
     @Override public CompletableFuture<Boolean> hasAccount(UUID id) { Objects.requireNonNull(id); return exists(id); }
     @Override public BigDecimal cachedBalance(UUID id) { return cache.get(id); }
     @Override public CompletableFuture<TransactionResult> deposit(UUID id, BigDecimal amount, String reason) {
-        return change(id, null, amount, reason, "give");
+        return change(id, null, amount, BigDecimal.ZERO, reason, "give");
     }
     @Override public CompletableFuture<TransactionResult> withdraw(UUID id, BigDecimal amount, String reason) {
-        return change(id, null, amount, reason, "take");
+        return change(id, null, amount, BigDecimal.ZERO, reason, "take");
     }
     @Override public CompletableFuture<TransactionResult> set(UUID id, BigDecimal amount, String reason) {
-        return change(id, null, amount, reason, "set");
+        return change(id, null, amount, BigDecimal.ZERO, reason, "set");
     }
     @Override public CompletableFuture<TransactionResult> transfer(UUID from, UUID to, BigDecimal amount, String reason) {
+        return transferTaxed(from, to, amount, BigDecimal.ZERO, reason);
+    }
+
+    /**
+     * Moves {@code amount} to {@code to} and removes {@code fee} from {@code from} in the same transaction.
+     * The fee is a sink: it is never credited anywhere, and both debit rows are written to the ledger.
+     */
+    CompletableFuture<TransactionResult> transferTaxed(UUID from, UUID to, BigDecimal amount, BigDecimal fee, String reason) {
         Objects.requireNonNull(to);
+        Objects.requireNonNull(fee);
         if (from.equals(to)) return rejected(from, Status.INVALID_AMOUNT);
-        return change(from, to, amount, reason, "pay");
+        return change(from, to, amount, fee, reason, "pay");
     }
     private CompletableFuture<TransactionResult> rejected(UUID id, Status status) {
         return balance(id).thenApply(value -> new TransactionResult(status, BigDecimal.ZERO, value));
     }
-    private CompletableFuture<TransactionResult> change(UUID id, UUID other, BigDecimal input, String reason, String kind) {
+    private CompletableFuture<TransactionResult> change(UUID id, UUID other, BigDecimal input, BigDecimal feeInput,
+            String reason, String kind) {
         Objects.requireNonNull(id);
         BigDecimal amount;
-        try { amount = money.amount(input); }
-        catch (IllegalArgumentException | ArithmeticException e) { return rejected(id, Status.INVALID_AMOUNT); }
+        BigDecimal fee;
+        try {
+            amount = money.amount(input);
+            fee = feeInput == null || feeInput.signum() == 0 ? BigDecimal.ZERO : money.amount(feeInput);
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            return rejected(id, Status.INVALID_AMOUNT);
+        }
         if (reason == null || reason.length() > 255) return rejected(id, Status.INVALID_AMOUNT);
         return ordered(() -> db.transaction(c -> {
             // Includes insertion locks: acquire both accounts in the same lexicographic order.
@@ -183,7 +207,7 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
             BigDecimal old = rows.get(id).value();
             BigDecimal next = switch (kind) {
                 case "set" -> amount;
-                case "take", "pay" -> old.subtract(amount);
+                case "take", "pay" -> old.subtract(amount).subtract(fee);
                 default -> old.add(amount);
             };
             Status status = within(next);
@@ -269,21 +293,122 @@ final class EconomyStore implements EconomyService, EconomyAccounts {
             if (ps.executeUpdate() != 1) throw new SQLException("Ledger insertion failed: " + id);
         }
     }
-    CompletableFuture<List<Entry>> leaderboard() {
+    CompletableFuture<List<Entry>> leaderboard(java.util.Set<String> excludedNames, long inactiveSince) {
         return ordered(() -> db.query(c -> {
             List<Entry> result = new ArrayList<>();
-            try (PreparedStatement ps = c.prepareStatement("SELECT a.uuid, u.name, a.balance FROM "
+            try (PreparedStatement ps = c.prepareStatement("SELECT a.uuid, u.name, a.balance, u.last_seen FROM "
                     + db.table("economy_accounts") + " a LEFT JOIN " + db.table("users") + " u ON a.uuid = u.uuid");
                     ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     UUID id = UUID.fromString(rs.getString(1));
-                    result.add(new Entry(id, rs.getString(2) == null ? id.toString() : rs.getString(2), new BigDecimal(rs.getString(3))));
+                    String name = rs.getString(2);
+                    if (name == null) {
+                        name = id.toString();
+                    }
+                    if (excludedNames != null && excludedNames.contains(name.toLowerCase(Locale.ROOT))) {
+                        continue;
+                    }
+                    if (inactiveSince > 0) {
+                        long lastSeen = rs.getLong(4);
+                        if (rs.wasNull() || lastSeen < inactiveSince) {
+                            continue;
+                        }
+                    }
+                    result.add(new Entry(id, name, new BigDecimal(rs.getString(3))));
                 }
             }
             result.sort(Comparator.comparing(Entry::balance).reversed().thenComparing(e -> e.uuid().toString()));
             return List.copyOf(result);
         }));
     }
+
+    // ---- cheques ----
+
+    /**
+     * Withdraws the value and stores the note in one transaction. Either the player's money and the note
+     * row both exist, or neither changes; a crash can never take the money without leaving a claimable note.
+     */
+    CompletableFuture<TransactionResult> createCheque(UUID owner, String id, BigDecimal value) {
+        Objects.requireNonNull(owner);
+        if (id == null || id.isBlank() || id.length() > 36) {
+            return rejected(owner, Status.INVALID_AMOUNT);
+        }
+        BigDecimal amount;
+        try {
+            amount = money.amount(value);
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            return rejected(owner, Status.INVALID_AMOUNT);
+        }
+        if (amount.signum() <= 0) {
+            return rejected(owner, Status.INVALID_AMOUNT);
+        }
+        return ordered(() -> db.transaction(c -> {
+            Stored row = ensureRow(c, owner);
+            BigDecimal next = row.value().subtract(amount);
+            Status status = within(next);
+            if (status != Status.SUCCESS) throw new Rejected(new TransactionResult(status, amount, row.value()));
+            update(c, owner, row, next);
+            log(c, owner, null, next.subtract(row.value()), next, "cheque:create:" + id);
+            try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + db.table("economy_cheques")
+                    + " (id, value, creator, created) VALUES (?, ?, ?, ?)")) {
+                Database.bind(ps, id, amount.toPlainString(), owner.toString(), System.currentTimeMillis());
+                if (ps.executeUpdate() != 1) throw new SQLException("Cheque insertion failed: " + id);
+            }
+            return new Outcome(new TransactionResult(Status.SUCCESS, amount, next), Map.of(owner, next));
+        }).thenApply(outcome -> { publish(outcome.balances()); return outcome.result(); }))
+            .exceptionally(failure -> {
+                Throwable cause = failure;
+                while (cause instanceof CompletionException && cause.getCause() != null) cause = cause.getCause();
+                if (cause instanceof Rejected rejected) return rejected.result;
+                logger.error("Creating cheque {} for {} failed", id, owner, failure);
+                return new TransactionResult(Status.FAILED, amount, cache.getOrDefault(owner, start));
+            });
+    }
+
+    /**
+     * Atomically marks the note as redeemed by this player. Only one caller can win, so a copied note is
+     * worthless: the loser sees {@link Claim#ALREADY_REDEEMED}. The stored value is returned, not the value
+     * printed on the item.
+     */
+    CompletableFuture<ClaimResult> claimCheque(String id, UUID player) {
+        return ordered(() -> db.transaction(c -> {
+            BigDecimal value = null;
+            String redeemed = null;
+            String select = "SELECT value, redeemed_by FROM " + db.table("economy_cheques") + " WHERE id = ?"
+                    + (db.dialect() == Dialect.MYSQL ? " FOR UPDATE" : "");
+            try (PreparedStatement ps = c.prepareStatement(select)) {
+                ps.setString(1, id);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return new ClaimResult(Claim.MISSING, BigDecimal.ZERO);
+                    }
+                    value = new BigDecimal(rs.getString(1));
+                    redeemed = rs.getString(2);
+                }
+            }
+            if (redeemed != null) {
+                return new ClaimResult(Claim.ALREADY_REDEEMED, value);
+            }
+            try (PreparedStatement ps = c.prepareStatement("UPDATE " + db.table("economy_cheques")
+                    + " SET redeemed_by = ?, redeemed = ? WHERE id = ? AND redeemed_by IS NULL")) {
+                Database.bind(ps, player.toString(), System.currentTimeMillis(), id);
+                if (ps.executeUpdate() != 1) {
+                    return new ClaimResult(Claim.ALREADY_REDEEMED, value);
+                }
+            }
+            return new ClaimResult(Claim.OK, value);
+        }).exceptionally(failure -> {
+            logger.error("Claiming cheque {} for {} failed", id, player, failure);
+            return new ClaimResult(Claim.FAILED, BigDecimal.ZERO);
+        }));
+    }
+
+    /** Gives a claimed note back when the credit could not be written, so the money is not lost. */
+    CompletableFuture<Boolean> unclaimCheque(String id, UUID player) {
+        return ordered(() -> db.update("UPDATE {prefix}economy_cheques SET redeemed_by = NULL, redeemed = NULL"
+                + " WHERE id = ? AND redeemed_by = ?", id, player.toString()).thenApply(rows -> rows == 1));
+    }
+
     CompletableFuture<List<LogEntry>> history(UUID id) {
         return ordered(() -> db.query(c -> {
             List<LogEntry> result = new ArrayList<>();

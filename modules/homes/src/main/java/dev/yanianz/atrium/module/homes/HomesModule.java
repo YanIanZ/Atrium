@@ -410,15 +410,27 @@ public final class HomesModule implements AtriumModule, HomeService {
         }
         // The limit comes from the player who owns the home (the sender), read fresh every time.
         int limit = Permissions.limit(self, LIMIT_PREFIX, cfg.defaultLimit);
+        Integer worldLimit = cfg.worldLimit(world);
         Home home = new Home(name, StoredLocation.of(here), System.currentTimeMillis());
         AtomicBoolean replaced = new AtomicBoolean();
         AtomicBoolean allowed = new AtomicBoolean();
+        AtomicBoolean worldLimited = new AtomicBoolean();
         ctx.users().user(self).update(store.component, homes -> {
             replaced.set(homes.contains(name));
-            allowed.set(homes.canSet(name, limit));
+            boolean sameWorld = homes.get(name)
+                    .map(existing -> world.equalsIgnoreCase(existing.location().world()))
+                    .orElse(false);
+            boolean globalOk = homes.contains(name) || homes.count() < limit;
+            boolean worldOk = worldLimit == null || sameWorld || homes.countIn(world) < worldLimit;
+            allowed.set(globalOk && worldOk);
+            worldLimited.set(!allowed.get() && globalOk && !worldOk);
             return allowed.get() ? homes.with(home) : homes;
         });
         if (!allowed.get()) {
+            if (worldLimited.get()) {
+                throw cmds.fail(c.getSource(), "homes.limit-reached-world", Msg.number("limit", worldLimit),
+                        Msg.unparsed("world", world));
+            }
             throw cmds.fail(c.getSource(), "homes.limit-reached", Msg.number("limit", limit));
         }
         String key = replaced.get() ? "homes.replaced" : "homes.set";

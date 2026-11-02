@@ -26,4 +26,13 @@ class DeathBroadcastTest {
         assertTrue(DeathBroadcast.receives(1, true, 1.0));
         assertFalse(DeathBroadcast.receives(1, true, 1.01));
     }
+
+    @Test
+    void tooFewPlayersHideTheBroadcast() {
+        assertFalse(DeathBroadcast.receives(0, true, 0, 2, 3));
+        assertTrue(DeathBroadcast.receives(0, true, 0, 3, 3));
+        assertTrue(DeathBroadcast.receives(10, true, 4, 99, 3));
+        assertFalse(DeathBroadcast.receives(10, false, 4, 99, 3), "the radius rule still applies");
+        assertTrue(DeathBroadcast.receives(0, false, 0, 1, 0), "zero disables the auto-hide");
+    }
 }

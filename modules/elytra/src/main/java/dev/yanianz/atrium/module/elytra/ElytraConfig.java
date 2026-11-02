@@ -38,6 +38,17 @@ public class ElytraConfig {
 
         @Comment("Milliseconds between two boosts of one player (0-60000).")
         public long cooldownMillis = 1500;
+
+        @Comment("Minimum experience levels the player must have to boost (0 = no level requirement).")
+        public int minimumLevels = 0;
+
+        @Comment("Experience points charged per boost (0 = free). The charge is taken only after every other check passed.")
+        public int costPoints = 0;
+
+        @Comment("""
+                Refuse the boost (and the launch arming) while the player holds or is using a Riptide trident.
+                A Riptide launch already moves the player fast; boosting on top of it skips the normal limits.""")
+        public boolean riptideGuard = true;
     }
 
     @ConfigSerializable

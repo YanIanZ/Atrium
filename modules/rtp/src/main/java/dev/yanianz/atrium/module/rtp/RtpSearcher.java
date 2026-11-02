@@ -264,8 +264,8 @@ final class RtpSearcher {
 
     private boolean biomeAllowed(Biome biome, WorldSettings settings) {
         String key = biome.key().asString();
-        Set<String> allowed = biomes(settings.allowedBiomes);
-        return (allowed.isEmpty() || allowed.contains(key)) && !biomes(settings.blockedBiomes).contains(key);
+        return BiomeFilter.allows(biomes(settings.preferredBiomes), biomes(settings.allowedBiomes),
+                biomes(settings.blockedBiomes), key);
     }
 
     private Set<String> biomes(List<String> names) {

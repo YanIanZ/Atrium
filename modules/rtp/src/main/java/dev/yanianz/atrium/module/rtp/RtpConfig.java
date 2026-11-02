@@ -46,7 +46,8 @@ public class RtpConfig {
     @Comment("Per-world settings, by world name. Options left out get their safe default value. Options:\n"
             + "  enabled, center (SPAWN | BORDER | FIXED), center-x, center-z, min-radius, max-radius,\n"
             + "  shape (CIRCLE: ring uniform by area | SQUARE: square ring), max-attempts (points tried per search),\n"
-            + "  generate-chunks (false = only already generated terrain), allowed-biomes (empty = all), blocked-biomes,\n"
+            + "  generate-chunks (false = only already generated terrain), allowed-biomes (empty = all), preferred-biomes,\n"
+            + "  blocked-biomes,\n"
             + "  avoid-water, avoid-leaves, avoid-blocks (lava is always avoided; the Nether bedrock roof is always\n"
             + "  skipped and the search starts below it), cooldown-seconds (per world, survives restarts),\n"
             + "  cost (economy module; charged once a spot was found, refunded if the teleport fails).\n"
@@ -143,7 +144,13 @@ public class RtpConfig {
         @Comment("Biomes allowed as destination (e.g. minecraft:plains). Empty = every biome not blocked below.")
         public List<String> allowedBiomes = new ArrayList<>();
 
-        @Comment("Biomes never used as destination.")
+        @Comment("""
+                Preferred biomes. When this list is not empty it replaces allowed-biomes and clears
+                blocked-biomes (the preferred list wins), so the default ocean block list cannot hide a
+                preferred biome. The search then only lands in these biomes and may need more attempts.""")
+        public List<String> preferredBiomes = new ArrayList<>();
+
+        @Comment("Biomes never used as destination. Ignored while preferred-biomes is not empty.")
         public List<String> blockedBiomes = new ArrayList<>();
 
         @Comment("Never land in or on water.")

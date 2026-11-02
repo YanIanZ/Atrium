@@ -87,7 +87,7 @@ class EconomyStoreTest {
         db.migrate("users", dev.yanianz.atrium.core.user.UserManager.MIGRATIONS);
         store.set(a, new BigDecimal("9"), "seed").join();
         store.set(b, new BigDecimal("10"), "seed").join();
-        var leaders = store.leaderboard().join();
+        var leaders = store.leaderboard(java.util.Set.of(), 0).join();
         assertEquals(b, leaders.getFirst().uuid());
         assertEquals(a, leaders.getLast().uuid());
         assertThrows(UnsupportedOperationException.class, leaders::clear);
@@ -179,5 +179,50 @@ class EconomyStoreTest {
         store.set(b, BigDecimal.TEN, "seed").join();
         assertFalse(store.transfer(a, b, BigDecimal.ONE, "pay").join().success());
         assertEquals(new BigDecimal("10.00"), store.balance(a).join());
+    }
+    @Test void taxedTransferDebitsTheSameFeeThatIsNotCredited() {
+        store.set(a, new BigDecimal("100"), "seed").join();
+        assertTrue(store.transferTaxed(a, b, new BigDecimal("9"), new BigDecimal("1"), "pay").join().success());
+        assertEquals(new BigDecimal("90.00"), store.balance(a).join());
+        assertEquals(new BigDecimal("9.00"), store.balance(b).join());
+    }
+    @Test void creatingAChequeWithdrawsExactlyOnceAndTheNoteIsSingleUse() {
+        store.set(a, new BigDecimal("20"), "seed").join();
+        String id = java.util.UUID.randomUUID().toString();
+        assertTrue(store.createCheque(a, id, new BigDecimal("12.5")).join().success());
+        assertEquals(new BigDecimal("7.50"), store.balance(a).join());
+        var first = store.claimCheque(id, b).join();
+        var second = store.claimCheque(id, a).join();
+        assertEquals(EconomyStore.Claim.OK, first.status());
+        assertEquals(new BigDecimal("12.50"), first.value());
+        assertEquals(EconomyStore.Claim.ALREADY_REDEEMED, second.status());
+        // A cheque for more than the balance is refused without leaving a row behind.
+        assertFalse(store.createCheque(a, java.util.UUID.randomUUID().toString(), new BigDecimal("99")).join().success());
+        assertEquals(new BigDecimal("7.50"), store.balance(a).join());
+    }
+    @Test void unclaimingLetsTheSamePlayerRedeemAgainButNotSomeoneElse() {
+        store.set(a, BigDecimal.TEN, "seed").join();
+        String id = java.util.UUID.randomUUID().toString();
+        assertTrue(store.createCheque(a, id, BigDecimal.ONE).join().success());
+        assertEquals(EconomyStore.Claim.OK, store.claimCheque(id, b).join().status());
+        assertTrue(store.unclaimCheque(id, b).join());
+        assertEquals(EconomyStore.Claim.OK, store.claimCheque(id, b).join().status());
+        assertFalse(store.unclaimCheque(id, a).join(), "Another player can never free a claimed note");
+        assertEquals(EconomyStore.Claim.ALREADY_REDEEMED, store.claimCheque(id, a).join().status());
+    }
+    @Test void baltopFiltersExcludedAndInactiveAccounts() throws Exception {
+        db.migrate("users", dev.yanianz.atrium.core.user.UserManager.MIGRATIONS);
+        db.update("INSERT INTO {prefix}users (uuid, name, name_lower, first_join, last_seen) VALUES (?, ?, ?, ?, ?)",
+                b.toString(), "Active", "active", 1L, System.currentTimeMillis()).join();
+        store.set(a, new BigDecimal("20"), "seed").join();
+        store.set(b, new BigDecimal("30"), "seed").join();
+        assertEquals(b, store.leaderboard(java.util.Set.of(), 0).join().getFirst().uuid());
+        var withoutActive = store.leaderboard(java.util.Set.of("active"), 0).join();
+        assertEquals(1, withoutActive.size());
+        assertEquals(a, withoutActive.getFirst().uuid());
+        // An active filter hides the account without a user row (the seeded "a").
+        var recent = store.leaderboard(java.util.Set.of(), System.currentTimeMillis() - 60_000).join();
+        assertEquals(1, recent.size());
+        assertEquals(b, recent.getFirst().uuid());
     }
 }
