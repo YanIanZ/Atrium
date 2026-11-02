@@ -21,6 +21,9 @@ dependencyResolutionManagement {
                 includeGroupAndSubgroups("com.github.GriefPrevention")
                 includeGroupAndSubgroups("com.github.angeschossen")
                 includeGroup("com.github.NEZNAMY")
+                // Price engines for the worth module (EconomyShopGUI, ShopGUIPlus).
+                includeGroup("com.github.Gypopo")
+                includeGroup("com.github.brcdev-minecraft")
             }
         }
         maven("https://repo.fancyinnovations.com/releases") {

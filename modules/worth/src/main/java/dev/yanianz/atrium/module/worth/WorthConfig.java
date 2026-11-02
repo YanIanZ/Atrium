@@ -8,6 +8,11 @@ import org.spongepowered.configurate.objectmapping.meta.Comment;
 /** plugins/Atrium/modules/worth.yml (prices themselves live in plugins/Atrium/data/worth/worth.yml). */
 @ConfigSerializable
 public class WorthConfig {
+    @Comment("Price engine: auto, atrium, economyshopgui or shopguiplus.\n"
+            + "auto = EconomyShopGUI if enabled, else ShopGUIPlus if enabled, else atrium.\n"
+            + "/worth engine shows the active engine and what it supports.")
+    public String priceSource = "auto";
+
     @Comment("Lower a tool's price by its lost durability (price * remaining / max durability).")
     public boolean devalueByDurability = true;
 

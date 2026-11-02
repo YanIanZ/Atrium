@@ -5,13 +5,12 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Computes exactly which slots and how many items a sale takes. Pure logic: the caller snapshots the
- * inventory, plans, and removes exactly {@link Plan#takes()} in the same tick on the player's thread,
- * then pays {@link Plan#total()}.
+ * inventory (asking the active price engine for each unit price), plans, and removes exactly
+ * {@link Plan#takes()} in the same tick on the player's thread, then pays {@link Plan#total()}.
  *
  * <p>Only storage slots {@code 0..35} and the offhand ({@link #OFFHAND}) are ever considered. Armor slots
  * are rejected even if a caller passes them, so worn armor is never paid for.
@@ -23,8 +22,8 @@ public final class SellPlanner {
 
     public enum Mode { HAND, ALL, SAME, BLOCKS, MATERIAL }
 
-    /** A non-empty slot of the player's inventory. */
-    public record Slot(int index, ItemFacts facts, int amount) {}
+    /** A non-empty slot of the player's inventory with the unit price the active engine quoted for it. */
+    public record Slot(int index, ItemFacts facts, int amount, @Nullable BigDecimal unitPrice) {}
 
     /**
      * @param heldSlot  main-hand slot (0-8)
@@ -51,7 +50,7 @@ public final class SellPlanner {
         return (index >= 0 && index < STORAGE_SIZE) || index == OFFHAND;
     }
 
-    public static Plan plan(PriceTable prices, List<Slot> slots, Request request) {
+    public static Plan plan(List<Slot> slots, Request request) {
         List<Slot> usable = new ArrayList<>();
         Slot held = null;
         for (Slot slot : slots) {
@@ -67,19 +66,19 @@ public final class SellPlanner {
         final int heldIndex = request.heldSlot();
         usable.sort(Comparator.comparingInt((Slot s) -> s.index() == heldIndex ? -1 : s.index()));
         final Slot heldSlot = held;
-        return compute(prices, usable, slot -> selected(request, slot, heldSlot), request.limit(), request.budget());
+        return compute(usable, slot -> selected(request, slot, heldSlot), request.limit(), request.budget());
     }
 
     /**
      * Plans the sale of detached stacks (e.g. the contents of the sell GUI, indexed by list position).
      * Everything sellable is taken, within the budget.
      */
-    public static Plan planDetached(PriceTable prices, List<Slot> stacks, @Nullable BigDecimal budget) {
+    public static Plan planDetached(List<Slot> stacks, @Nullable BigDecimal budget) {
         List<Slot> usable = stacks.stream().filter(s -> s.amount() > 0).toList();
-        return compute(prices, usable, slot -> true, 0, budget);
+        return compute(usable, slot -> true, 0, budget);
     }
 
-    private static Plan compute(PriceTable prices, List<Slot> ordered, java.util.function.Predicate<Slot> selector,
+    private static Plan compute(List<Slot> ordered, java.util.function.Predicate<Slot> selector,
             int limit, @Nullable BigDecimal budget) {
         List<Take> takes = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO;
@@ -94,15 +93,15 @@ public final class SellPlanner {
             if (!selector.test(slot)) {
                 continue;
             }
-            Optional<BigDecimal> unit = prices.unitPrice(slot.facts());
-            if (unit.isEmpty()) {
+            BigDecimal unitPrice = slot.unitPrice();
+            if (unitPrice == null || unitPrice.signum() <= 0) {
                 continue;
             }
             int amount = Math.min(slot.amount(), remainingLimit);
             if (budget != null) {
                 BigDecimal left = budget.subtract(total);
                 int affordable = left.signum() <= 0 ? 0
-                        : left.divide(unit.get(), 0, RoundingMode.DOWN).min(BigDecimal.valueOf(Integer.MAX_VALUE)).intValue();
+                        : left.divide(unitPrice, 0, RoundingMode.DOWN).min(BigDecimal.valueOf(Integer.MAX_VALUE)).intValue();
                 if (affordable < amount) {
                     limitedByBudget = true;
                     amount = affordable;
@@ -111,8 +110,8 @@ public final class SellPlanner {
             if (amount <= 0) {
                 continue;
             }
-            BigDecimal value = unit.get().multiply(BigDecimal.valueOf(amount));
-            takes.add(new Take(slot.index(), amount, unit.get(), value, slot.facts()));
+            BigDecimal value = unitPrice.multiply(BigDecimal.valueOf(amount));
+            takes.add(new Take(slot.index(), amount, unitPrice, value, slot.facts()));
             total = total.add(value);
             items += amount;
             remainingLimit -= amount;

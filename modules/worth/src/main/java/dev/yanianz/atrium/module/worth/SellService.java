@@ -31,23 +31,23 @@ import org.jspecify.annotations.Nullable;
  */
 final class SellService {
     private final ModuleContext ctx;
-    private final Supplier<PriceTable> prices;
     private final Supplier<ItemFactsReader> reader;
     private final Supplier<WorthConfig> config;
     private final EconomyService economy;
     private final WorthStore store;
     private final ItemReturns returns;
+    private final Supplier<PriceEngines> engines;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
 
-    SellService(ModuleContext ctx, Supplier<PriceTable> prices, Supplier<ItemFactsReader> reader,
-            Supplier<WorthConfig> config, EconomyService economy, WorthStore store, ItemReturns returns) {
+    SellService(ModuleContext ctx, Supplier<ItemFactsReader> reader, Supplier<WorthConfig> config,
+            EconomyService economy, WorthStore store, ItemReturns returns, Supplier<PriceEngines> engines) {
         this.ctx = ctx;
-        this.prices = prices;
         this.reader = reader;
         this.config = config;
         this.economy = economy;
         this.store = store;
         this.returns = returns;
+        this.engines = engines;
     }
 
     String format(BigDecimal amount) {
@@ -63,17 +63,20 @@ final class SellService {
     List<SellPlanner.Slot> slots(Player player, boolean includeOffhand) {
         PlayerInventory inventory = player.getInventory();
         ItemFactsReader facts = reader.get();
+        PriceEngines pricing = engines.get();
         List<SellPlanner.Slot> slots = new ArrayList<>();
         ItemStack[] storage = inventory.getStorageContents();
         for (int i = 0; i < Math.min(storage.length, SellPlanner.STORAGE_SIZE); i++) {
             ItemStack item = storage[i];
             if (item != null && !item.isEmpty()) {
-                slots.add(new SellPlanner.Slot(i, facts.read(item), item.getAmount()));
+                slots.add(new SellPlanner.Slot(i, facts.read(item), item.getAmount(),
+                        pricing.unitPrice(item, player).orElse(null)));
             }
         }
         ItemStack offhand = inventory.getItemInOffHand();
         if (includeOffhand && !offhand.isEmpty()) {
-            slots.add(new SellPlanner.Slot(SellPlanner.OFFHAND, facts.read(offhand), offhand.getAmount()));
+            slots.add(new SellPlanner.Slot(SellPlanner.OFFHAND, facts.read(offhand), offhand.getAmount(),
+                    pricing.unitPrice(offhand, player).orElse(null)));
         }
         return slots;
     }
@@ -81,7 +84,7 @@ final class SellService {
     /** Value preview without removing anything. Player thread. */
     SellPlanner.Plan preview(Player player, SellPlanner.Mode mode, @Nullable String material) {
         boolean offhand = mode != SellPlanner.Mode.HAND && config.get().includeOffhand;
-        return SellPlanner.plan(prices.get(), slots(player, offhand),
+        return SellPlanner.plan(slots(player, offhand),
                 new SellPlanner.Request(mode, player.getInventory().getHeldItemSlot(), material, 0, null));
     }
 
@@ -139,7 +142,7 @@ final class SellService {
         PlayerInventory inventory = player.getInventory();
         boolean offhand = mode != SellPlanner.Mode.HAND && config.get().includeOffhand;
         // Snapshot, plan and remove in the same task: nothing can change the inventory in between.
-        SellPlanner.Plan plan = SellPlanner.plan(prices.get(), slots(player, offhand),
+        SellPlanner.Plan plan = SellPlanner.plan(slots(player, offhand),
                 new SellPlanner.Request(mode, inventory.getHeldItemSlot(), material, limit, budget));
         if (plan.isEmpty()) {
             inFlight.remove(uuid);
@@ -224,11 +227,14 @@ final class SellService {
     private void sellDetachedNow(Player player, List<ItemStack> items, @Nullable BigDecimal budget) {
         UUID uuid = player.getUniqueId();
         ItemFactsReader facts = reader.get();
+        PriceEngines pricing = engines.get();
         List<SellPlanner.Slot> slots = new ArrayList<>();
         for (int i = 0; i < items.size(); i++) {
-            slots.add(new SellPlanner.Slot(i, facts.read(items.get(i)), items.get(i).getAmount()));
+            ItemStack item = items.get(i);
+            slots.add(new SellPlanner.Slot(i, facts.read(item), item.getAmount(),
+                    pricing.unitPrice(item, player).orElse(null)));
         }
-        SellPlanner.Plan plan = SellPlanner.planDetached(prices.get(), slots, budget);
+        SellPlanner.Plan plan = SellPlanner.planDetached(slots, budget);
         int[] taken = new int[items.size()];
         List<ItemStack> sold = new ArrayList<>();
         for (SellPlanner.Take take : plan.takes()) {

@@ -10,10 +10,13 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import org.bukkit.Material;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -21,12 +24,19 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.permissions.PermissionDefault;
+import org.jspecify.annotations.Nullable;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.ConfigurateException;
 import org.spongepowered.configurate.yaml.NodeStyle;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
-/** Item prices, /worth, /sell, /sellgui, /setworth and the sale log. */
+/**
+ * Item prices, /worth, /sell, /sellgui, /setworth and the sale log.
+ *
+ * <p>Prices come from a selectable engine: Atrium's own table, EconomyShopGUI or ShopGUIPlus
+ * ({@code /worth engine}). {@code /worth import} copies another plugin's sell prices into Atrium's table so
+ * the other plugin can be removed.
+ */
 public final class WorthModule implements AtriumModule, Listener, WorthService {
     static final String HEADER = """
             Atrium item prices. Edit, then run /atrium reload (or use /setworth in game).
@@ -52,6 +62,9 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
     private ItemReturns returns;
     private SellService sell;
     private SellGui gui;
+    private PriceEngines engines;
+    private PriceImportService imports;
+    private volatile PriceMaterials materials = PriceMaterials.empty();
     private volatile PriceTable prices = PriceTable.empty();
     private volatile ItemFactsReader reader = new ItemFactsReader(java.util.List.of());
     private final Object fileLock = new Object();
@@ -79,11 +92,17 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
         EconomyService economy = ctx.services().require(EconomyService.class);
         store = new WorthStore(ctx.database());
         returns = new ItemReturns(ctx, store);
+        // The item registry is read here, on the server thread; imports and reloads only use this snapshot.
+        materials = PriceMaterials.snapshot();
         loadPrices();
-        sell = new SellService(ctx, () -> prices, () -> reader, config::get, economy, store, returns);
+        engines = new PriceEngines(ctx, config::get, () -> prices, () -> reader);
+        engines.start();
+        imports = new PriceImportService(ctx, this);
+        sell = new SellService(ctx, () -> reader, config::get, economy, store, returns, () -> engines);
         gui = new SellGui(ctx, sell, returns, config::get);
         ctx.listen(this);
         ctx.listen(gui);
+        ctx.listen(engines);
         ctx.service(WorthService.class, this);
 
         ctx.permission("atrium.worth", PermissionDefault.TRUE, "Look up item prices");
@@ -91,8 +110,10 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
         ctx.permission("atrium.sellgui", PermissionDefault.TRUE, "Open the sell GUI");
         ctx.permission("atrium.selllog", PermissionDefault.TRUE, "View own recent sales");
         ctx.permission("atrium.setworth", PermissionDefault.OP, "Set the price of the held item");
+        ctx.permission("atrium.worth.engine", PermissionDefault.OP, "Show or switch the price engine");
+        ctx.permission("atrium.worth.import", PermissionDefault.OP, "Import sell prices from another plugin");
         ctx.permission("atrium.sell.limit.unlimited", PermissionDefault.FALSE, "No daily sell limit");
-        new WorthCommands(ctx, this, sell, gui, store).register();
+        new WorthCommands(ctx, this, sell, gui, store, engines, imports).register();
 
         // Online players (module enabled at runtime) may have pending returns.
         for (var user : ctx.users().online()) {
@@ -110,10 +131,30 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
     @Override
     public void reload() throws Exception {
         loadPrices();
+        if (engines != null) {
+            engines.reload();
+        }
     }
 
     PriceTable prices() {
         return prices;
+    }
+
+    PriceMaterials materials() {
+        return materials;
+    }
+
+    PriceEngines engines() {
+        return engines;
+    }
+
+    PriceImportService imports() {
+        return imports;
+    }
+
+    /** Active-engine price of an item of this stack. Call on the thread that owns the item. */
+    Optional<BigDecimal> price(ItemStack item, @Nullable Player player) {
+        return engines.unitPrice(item, player);
     }
 
     ItemFactsReader reader() {
@@ -160,7 +201,7 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
                 }
             }
             CommentedConfigurationNode root = loader(file).load();
-            WorthFile.Parsed parsed = WorthFile.parse(root, WorthModule::isItemMaterial);
+            WorthFile.Parsed parsed = WorthFile.parse(root, materials::isItem);
             parsed.warnings().forEach(w -> ctx.logger().warn("worth.yml {}", w));
             reader = new ItemFactsReader(cfg.ignoredComponents);
             prices = new PriceTable(parsed.entries(), parsed.enchantmentValues(), options);
@@ -171,17 +212,37 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
     static boolean isItemMaterial(String name) {
         Material material = Material.matchMaterial(name);
         return material != null && material.isItem() && !material.isAir();
+    }    /** Adds or replaces an entry and writes worth.yml. Blocking file I/O: call off the game threads. */
+    void saveEntry(PriceEntry entry) throws ConfigurateException {
+        saveEntries(List.of(entry));
     }
 
-    /** Adds or replaces an entry and writes worth.yml. Blocking file I/O: call off the game threads. */
-    void saveEntry(PriceEntry entry) throws ConfigurateException {
+    /** Writes several entries with one file pass; the price table is replaced once. Off the game threads. */
+    void saveEntries(List<PriceEntry> entries) throws ConfigurateException {
         synchronized (fileLock) {
             YamlConfigurationLoader loader = loader(worthFile());
             CommentedConfigurationNode root = loader.load();
-            WorthFile.write(root, entry);
+            for (PriceEntry entry : entries) {
+                WorthFile.write(root, entry);
+            }
             loader.save(root);
-            WorthFile.Parsed parsed = WorthFile.parse(root, WorthModule::isItemMaterial);
-            prices = new PriceTable(parsed.entries(), parsed.enchantmentValues(), prices.options());
+            // Merge in memory: re-reading the file would need the item registry, which is server-thread only.
+            List<PriceEntry> merged = new ArrayList<>(prices.entries());
+            for (PriceEntry entry : entries) {
+                int index = -1;
+                for (int i = 0; i < merged.size(); i++) {
+                    if (merged.get(i).id().equals(entry.id())) {
+                        index = i;
+                        break;
+                    }
+                }
+                if (index >= 0) {
+                    merged.set(index, entry);
+                } else {
+                    merged.add(entry);
+                }
+            }
+            prices = new PriceTable(merged, prices.enchantmentValues(), prices.options());
         }
     }
 
@@ -190,7 +251,7 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
         if (item == null || item.isEmpty()) {
             return Optional.empty();
         }
-        return prices.unitPrice(reader.read(item));
+        return engines.unitPrice(item, null);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

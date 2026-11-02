@@ -49,6 +49,18 @@ dependencies:
       load: BEFORE
       required: false
       join-classpath: true
+    EconomyShopGUI:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    EconomyShopGUI-Premium:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    ShopGUIPlus:
+      load: BEFORE
+      required: false
+      join-classpath: true
     Citizens:
       load: BEFORE
       required: false

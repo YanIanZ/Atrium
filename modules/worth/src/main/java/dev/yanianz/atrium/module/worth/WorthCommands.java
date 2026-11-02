@@ -30,13 +30,18 @@ final class WorthCommands {
     private final SellService sell;
     private final SellGui gui;
     private final WorthStore store;
+    private final PriceEngines engines;
+    private final PriceImportService imports;
 
-    WorthCommands(ModuleContext ctx, WorthModule module, SellService sell, SellGui gui, WorthStore store) {
+    WorthCommands(ModuleContext ctx, WorthModule module, SellService sell, SellGui gui, WorthStore store,
+            PriceEngines engines, PriceImportService imports) {
         this.ctx = ctx;
         this.module = module;
         this.sell = sell;
         this.gui = gui;
         this.store = store;
+        this.engines = engines;
+        this.imports = imports;
     }
 
     void register() {
@@ -46,6 +51,8 @@ final class WorthCommands {
                 .then(Cmds.literal("hand").executes(this::worthHand))
                 .then(Cmds.literal("all").executes(this::worthAll))
                 .then(Commands.argument("material", StringArgumentType.word()).suggests(materials).executes(this::worthMaterial))
+                .then(engineCommand())
+                .then(importCommand())
                 .build(), "Show what the held item, your whole inventory or a material is worth"));
 
         LiteralArgumentBuilder<CommandSourceStack> sellCmd = Cmds.literal("sell", "atrium.sell")
@@ -104,7 +111,7 @@ final class WorthCommands {
             throw ctx.commands().fail(c.getSource(), "worth.empty-hand");
         }
         Component name = hand.effectiveName();
-        Optional<BigDecimal> unit = module.prices().unitPrice(module.reader().read(hand));
+        Optional<BigDecimal> unit = module.price(hand, player);
         if (unit.isEmpty()) {
             ctx.messages().send(player, "worth.unsellable", Msg.component("item", name));
         } else {
@@ -244,5 +251,120 @@ final class WorthCommands {
             }
         }, null));
         return Cmds.OK;
+    }
+
+    // ---- price engine ----
+
+    private LiteralArgumentBuilder<CommandSourceStack> engineCommand() {
+        return Cmds.literal("engine", "atrium.worth.engine")
+                .executes(this::engineStatus)
+                .then(Commands.argument("engine", StringArgumentType.word())
+                        .suggests(Cmds.suggest(PriceEngineKind::names))
+                        .executes(this::engineSwitch));
+    }
+
+    private int engineStatus(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        ctx.messages().send(sender, "worth.engine",
+                Msg.unparsed("active", engines.activeKind().id),
+                Msg.unparsed("configured", engines.configuredKind().id));
+        if (!engines.fallbackReason().isEmpty()) {
+            ctx.messages().send(sender, "worth.engine-fallback",
+                    Msg.unparsed("configured", engines.configuredKind().id),
+                    Msg.unparsed("active", engines.activeKind().id),
+                    Msg.unparsed("reason", engines.fallbackReason()));
+        }
+        PriceEngineCapabilities capabilities = engines.capabilities();
+        ctx.messages().send(sender, "worth.engine-capabilities",
+                Msg.unparsed("supported", PriceEngineCapabilities.describe(capabilities.supported())),
+                Msg.unparsed("missing", PriceEngineCapabilities.describe(capabilities.missing())));
+        ctx.messages().send(sender, "worth.engine-available",
+                Msg.unparsed("engines", String.join(", ", engines.availableIds())));
+        return Cmds.OK;
+    }
+
+    private int engineSwitch(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        String raw = StringArgumentType.getString(c, "engine");
+        Optional<PriceEngineKind> parsed = PriceEngineKind.parse(raw);
+        if (parsed.isEmpty()) {
+            ctx.messages().send(sender, "worth.engine-unknown",
+                    Msg.unparsed("input", raw),
+                    Msg.unparsed("engines", String.join(", ", PriceEngineKind.names())));
+            return Cmds.OK;
+        }
+        try {
+            PriceEngineKind active = engines.switchTo(parsed.get());
+            ctx.messages().send(sender, "worth.engine-switched", Msg.unparsed("engine", active.id));
+        } catch (PriceEngineException e) {
+            ctx.messages().send(sender, "worth.engine-unavailable",
+                    Msg.unparsed("engine", parsed.get().id),
+                    Msg.unparsed("reason", e.getMessage() == null ? "unavailable" : e.getMessage()));
+        }
+        return Cmds.OK;
+    }
+
+    // ---- price import ----
+
+    private LiteralArgumentBuilder<CommandSourceStack> importCommand() {
+        var source = Commands.argument("source", StringArgumentType.word())
+                .suggests(Cmds.suggest(PriceImportSource::names))
+                .executes(c -> importPrices(c, PriceImportService.Mode.DRY_RUN, false))
+                .then(Cmds.literal("dry-run")
+                        .executes(c -> importPrices(c, PriceImportService.Mode.DRY_RUN, false))
+                        .then(Cmds.literal("--overwrite")
+                                .executes(c -> importPrices(c, PriceImportService.Mode.DRY_RUN, true))))
+                .then(Cmds.literal("run")
+                        .executes(c -> importPrices(c, PriceImportService.Mode.RUN, false))
+                        .then(Cmds.literal("--overwrite")
+                                .executes(c -> importPrices(c, PriceImportService.Mode.RUN, true))))
+                .then(Cmds.literal("--overwrite")
+                        .executes(c -> importPrices(c, PriceImportService.Mode.DRY_RUN, true)));
+        return Cmds.literal("import", "atrium.worth.import").then(source);
+    }
+
+    private int importPrices(CommandContext<CommandSourceStack> c, PriceImportService.Mode mode, boolean overwrite) {
+        CommandSender sender = c.getSource().getSender();
+        String raw = StringArgumentType.getString(c, "source");
+        Optional<PriceImportSource> parsed = PriceImportSource.parse(raw);
+        if (parsed.isEmpty()) {
+            ctx.messages().send(sender, "worth.import-unknown-source",
+                    Msg.unparsed("input", raw),
+                    Msg.unparsed("sources", String.join(", ", PriceImportSource.names())));
+            return Cmds.OK;
+        }
+        PriceImportSource source = parsed.get();
+        ctx.messages().send(sender, "worth.import-started", Msg.unparsed("source", source.id));
+        imports.run(source, new PriceImportService.Options(mode, overwrite))
+                .whenComplete((summary, failure) -> onSenderThread(sender, () -> {
+                    if (failure != null) {
+                        ctx.logger().error("Worth import from {} failed", source.id, failure);
+                        ctx.messages().send(sender, "worth.import-failed", Msg.unparsed("reason",
+                                failure.getMessage() == null ? failure.getClass().getSimpleName()
+                                        : failure.getMessage()));
+                        return;
+                    }
+                    String key = summary.dryRun() ? "worth.import-dry-run" : "worth.import-done";
+                    ctx.messages().send(sender, key,
+                            Msg.unparsed("source", source.id),
+                            Msg.number("imported", summary.imported()),
+                            Msg.number("updated", summary.updated()),
+                            Msg.number("existing", summary.existing()),
+                            Msg.number("skipped", summary.skipped()),
+                            Msg.unparsed("file", summary.report().toString()));
+                    if (!summary.dryRun() && engines.activeKind() != PriceEngineKind.ATRIUM) {
+                        ctx.messages().send(sender, "worth.import-hint",
+                                Msg.unparsed("engine", engines.activeKind().id));
+                    }
+                }));
+        return Cmds.OK;
+    }
+
+    private void onSenderThread(CommandSender sender, Runnable task) {
+        if (sender instanceof Player player) {
+            ctx.scheduler().entity(player, task, null);
+        } else {
+            ctx.scheduler().global(task);
+        }
     }
 }
