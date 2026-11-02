@@ -12,51 +12,77 @@ import org.jspecify.annotations.Nullable;
 /**
  * Offline access to the inventory snapshots captured by the inventories module.
  *
- * <p>Contents always use the stored snapshot layout: {@code inventory} has
- * {@value #INVENTORY_SLOTS} slots (0-35 storage, 36-39 armour from boots to helmet, 40 off hand) and
- * {@code enderChest} has {@value #ENDER_SLOTS} slots. Every list is padded with empty slots and copied, so a
- * caller may keep or modify its copy without touching the snapshot history.
+ * <p>Contents use the stored snapshot layout. {@code inventory} is the storage part, then four armour slots
+ * (boots to helmet), then the off hand: on a vanilla server that is {@value #INVENTORY_SLOTS} slots (0-35 storage,
+ * 36-39 armour, 40 off hand). Use {@link Contents#storage()}, {@link Contents#armour()} and
+ * {@link Contents#offhand()} instead of fixed indices, because a server fork may report a larger storage (at most
+ * {@value #MAX_STORAGE_SLOTS} slots). {@code enderChest} has at least {@value #ENDER_SLOTS} slots and as many as
+ * the ender chest had when the snapshot was taken (Paper forks and plugins allow up to
+ * {@value #MAX_ENDER_SLOTS}). Every list is padded with empty slots and copied, so a caller may keep or modify its
+ * copy without touching the snapshot history.
  *
  * <p>All methods are safe to call from any thread and never block a game thread on storage. An offline edit
  * never moves items between the administrator and the target: it replaces the target's contents with the
- * edited copy, and the administrator never receives any of the target's items.
+ * edited copy, and the administrator never receives any of the target's items. When the live inventory is
+ * smaller than the edited copy, the items past the live slot counts are added to the inventory or dropped at
+ * the player's feet, never deleted.
  */
 public interface InventorySnapshotService {
-    /** Storage (0-35), armour (36-39) and off hand (40) in one list. */
+    /** Vanilla inventory layout and minimum list size: storage (0-35), armour (36-39) and off hand (40). */
     int INVENTORY_SLOTS = 41;
-    /** One ender chest page. */
+    /** One vanilla ender chest page: the minimum ender list size. */
     int ENDER_SLOTS = 27;
+    /** Armour slots between the storage part and the off hand. */
+    int ARMOUR_SLOTS = 4;
+    /** Largest storage part accepted (six rows on a fork that enlarges it). */
+    int MAX_STORAGE_SLOTS = 54;
+    /** Largest inventory list: {@link #MAX_STORAGE_SLOTS} storage + 4 armour + off hand. */
+    int MAX_INVENTORY_SLOTS = MAX_STORAGE_SLOTS + ARMOUR_SLOTS + 1;
+    /** Largest ender chest (six rows). */
+    int MAX_ENDER_SLOTS = 54;
 
     /**
-     * A full inventory and ender chest state. The lists are padded to the fixed slot counts and are private
-     * copies; {@code null} and empty stacks are both treated as empty slots.
+     * A full inventory and ender chest state. The lists are padded to at least the vanilla slot counts and are
+     * private copies; {@code null} and empty stacks are both treated as empty slots. Larger lists are kept at
+     * their size up to {@link #MAX_INVENTORY_SLOTS} and {@link #MAX_ENDER_SLOTS}; anything larger is refused.
      */
     record Contents(List<ItemStack> inventory, List<ItemStack> enderChest) {
         public Contents {
-            inventory = slotCopies(inventory, INVENTORY_SLOTS, "inventory");
-            enderChest = slotCopies(enderChest, ENDER_SLOTS, "ender chest");
+            inventory = slotCopies(inventory, INVENTORY_SLOTS, MAX_INVENTORY_SLOTS, "inventory");
+            enderChest = slotCopies(enderChest, ENDER_SLOTS, MAX_ENDER_SLOTS, "ender chest");
         }
 
-        /** Storage slots 0-35. */
+        /** Number of storage slots: everything before armour and off hand (36 on a vanilla server). */
+        public int storageSlots() {
+            return storageSlots(inventory);
+        }
+
+        /** The storage part: hotbar and main inventory. */
         public List<ItemStack> storage() {
-            return inventory.subList(0, 36);
+            return inventory.subList(0, storageSlots());
         }
 
         /** Armour slots: boots, leggings, chestplate, helmet. */
         public List<ItemStack> armour() {
-            return inventory.subList(36, 40);
+            return inventory.subList(storageSlots(), storageSlots() + ARMOUR_SLOTS);
         }
 
         public @Nullable ItemStack offhand() {
-            return inventory.get(40);
+            return inventory.get(inventory.size() - 1);
         }
 
-        private static List<ItemStack> slotCopies(@Nullable List<ItemStack> items, int slots, String section) {
+        static int storageSlots(List<ItemStack> inventory) {
+            return inventory.size() - ARMOUR_SLOTS - 1;
+        }
+
+        private static List<ItemStack> slotCopies(@Nullable List<ItemStack> items, int min, int max,
+                String section) {
             List<ItemStack> source = items == null ? List.of() : items;
-            if (source.size() > slots) {
+            if (source.size() > max) {
                 throw new IllegalArgumentException(section + " has " + source.size()
-                        + " slots but a snapshot stores " + slots);
+                        + " slots but a snapshot stores at most " + max);
             }
+            int slots = Math.max(min, source.size());
             List<ItemStack> copy = new ArrayList<>(slots);
             for (int slot = 0; slot < slots; slot++) {
                 ItemStack item = slot < source.size() ? source.get(slot) : null;
@@ -79,18 +105,19 @@ public interface InventorySnapshotService {
             return new Contents(inventory, enderChest);
         }
 
-        /** Storage slots 0-35 of the inventory. */
+        /** The storage part of the inventory (slots 0-35 on a vanilla server). */
         public List<ItemStack> storage() {
-            return inventory.subList(0, 36);
+            return inventory.subList(0, Contents.storageSlots(inventory));
         }
 
         /** Armour slots: boots, leggings, chestplate, helmet. */
         public List<ItemStack> armour() {
-            return inventory.subList(36, 40);
+            int from = Contents.storageSlots(inventory);
+            return inventory.subList(from, from + ARMOUR_SLOTS);
         }
 
         public @Nullable ItemStack offhand() {
-            return inventory.get(40);
+            return inventory.get(inventory.size() - 1);
         }
     }
 

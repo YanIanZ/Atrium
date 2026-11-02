@@ -27,13 +27,24 @@ public record StaffSnapshot(
         byte[] armor,
         byte[] offhand,
         byte[] effects,
-        @Nullable Boolean vanished) {
+        @Nullable Boolean vanished,
+        int storageSlots,
+        int armorSlots,
+        int offhandSlots) {
 
     /**
      * Bumped whenever the encoded layout changes; older rows are read on a best-effort basis.
      * 2: adds the vanish state before staff mode ({@code null} = unknown, rows of format 1).
+     * 3: adds the captured slot counts of storage, armour and off hand ({@link #UNKNOWN_SLOTS} for older rows),
+     * so a snapshot taken with other inventory sizes is restored into the live sizes without losing items.
      */
-    public static final int CURRENT_FORMAT = 2;
+    public static final int CURRENT_FORMAT = 3;
+    /** Slot count of a row written before format 3. */
+    public static final int UNKNOWN_SLOTS = -1;
+    /** Largest storage part accepted (six rows on a fork that enlarges it). */
+    public static final int MAX_STORAGE_SLOTS = 54;
+    public static final int MAX_ARMOR_SLOTS = 4;
+    public static final int MAX_OFFHAND_SLOTS = 1;
 
     public StaffSnapshot {
         world = world == null ? "" : world;
@@ -42,6 +53,22 @@ public record StaffSnapshot(
         armor = armor == null ? new byte[0] : armor.clone();
         offhand = offhand == null ? new byte[0] : offhand.clone();
         effects = effects == null ? new byte[0] : effects.clone();
+        storageSlots = Math.max(UNKNOWN_SLOTS, storageSlots);
+        armorSlots = Math.max(UNKNOWN_SLOTS, armorSlots);
+        offhandSlots = Math.max(UNKNOWN_SLOTS, offhandSlots);
+    }
+
+    /** A snapshot without recorded slot counts (rows written before format 3). */
+    public StaffSnapshot(int format, String world, double x, double y, double z, float yaw, float pitch,
+            String gameMode, int level, float exp, int totalExperience, boolean allowFlight, boolean flying,
+            byte[] storage, byte[] armor, byte[] offhand, byte[] effects, @Nullable Boolean vanished) {
+        this(format, world, x, y, z, yaw, pitch, gameMode, level, exp, totalExperience, allowFlight, flying,
+                storage, armor, offhand, effects, vanished, UNKNOWN_SLOTS, UNKNOWN_SLOTS, UNKNOWN_SLOTS);
+    }
+
+    /** Whether the slot counts were recorded (format 3 and later). */
+    public boolean slotsKnown() {
+        return storageSlots >= 0 && armorSlots >= 0 && offhandSlots >= 0;
     }
 
     @Override

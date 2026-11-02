@@ -4,19 +4,39 @@ package dev.yanianz.atrium.module.inventories;
  * Pure framing of a stored snapshot: a magic number, a format version and two length-prefixed item
  * sections (inventory with armour and offhand, then ender chest).
  *
+ * <p>The inventory section is {@code storage + 4 armour + 1 offhand}; the storage part is everything before the
+ * last five slots. Format 1 always stored exactly {@value #INVENTORY_SLOTS} and {@value #ENDER_SLOTS} slots.
+ * Format 2 stores the real section sizes of the server that captured it (forks and plugins resize ender chests
+ * up to six rows), bounded by {@link #MAX_INVENTORY_SLOTS} and {@link #MAX_ENDER_SLOTS}; shorter sections are
+ * padded to the vanilla sizes so every reader sees at least the classic layout.
+ *
  * <p>The item encoding itself is supplied by the caller ({@link ItemCodec}), so the framing can be tested
  * without a running server. A newer format is refused with {@link UnsupportedFormatException} instead of
  * being parsed with the wrong layout.
  */
 final class SnapshotCodec {
     /** Layout written by this build. Bump it when the meaning or order of the sections changes. */
-    static final int FORMAT = 1;
+    static final int FORMAT = 2;
+    /** The first format: fixed 41 + 27 slots. Still decoded. */
+    static final int LEGACY_FORMAT = 1;
     /** {@code ATRS}: Atrium snapshot. */
     static final int MAGIC = 0x41545253;
-    /** 36 storage slots + 4 armour slots + offhand. */
-    static final int INVENTORY_SLOTS = 41;
-    /** A single ender chest page. */
+    /** Armour slots after the storage part: boots, leggings, chestplate, helmet. */
+    static final int ARMOUR_SLOTS = 4;
+    /** Armour and offhand: the tail of the inventory section. */
+    static final int EQUIPMENT_SLOTS = ARMOUR_SLOTS + 1;
+    /** Vanilla storage: hotbar and main inventory. */
+    static final int VANILLA_STORAGE_SLOTS = 36;
+    /** 36 storage slots + 4 armour slots + offhand: the vanilla (and minimum) inventory section. */
+    static final int INVENTORY_SLOTS = VANILLA_STORAGE_SLOTS + EQUIPMENT_SLOTS;
+    /** A vanilla ender chest page: the minimum stored ender section. */
     static final int ENDER_SLOTS = 27;
+    /** Largest storage part accepted from a fork (six rows). */
+    static final int MAX_STORAGE_SLOTS = 54;
+    /** Hard cap of the inventory section. */
+    static final int MAX_INVENTORY_SLOTS = MAX_STORAGE_SLOTS + EQUIPMENT_SLOTS;
+    /** A six-row ender chest: the largest chest inventory Paper can create. */
+    static final int MAX_ENDER_SLOTS = 54;
     /** Refuse absurd lengths from a corrupt row before allocating. */
     private static final int MAX_SECTION_BYTES = 16 * 1024 * 1024;
 
@@ -26,7 +46,29 @@ final class SnapshotCodec {
         java.util.List<T> decode(byte[] data) throws SnapshotFormatException;
     }
 
-    record Contents<T>(java.util.List<T> inventory, java.util.List<T> enderChest) {}
+    /**
+     * Decoded sections. {@code inventory} is storage, then 4 armour slots, then the offhand; use
+     * {@link #storage()}, {@link #armour()} and {@link #offhand()} instead of fixed indices.
+     */
+    record Contents<T>(java.util.List<T> inventory, java.util.List<T> enderChest) {
+        int storageSlots() {
+            return Math.max(0, inventory.size() - EQUIPMENT_SLOTS);
+        }
+
+        java.util.List<T> storage() {
+            return inventory.subList(0, storageSlots());
+        }
+
+        java.util.List<T> armour() {
+            int from = storageSlots();
+            return inventory.subList(from, Math.min(inventory.size(), from + ARMOUR_SLOTS));
+        }
+
+        java.util.List<T> offhand() {
+            int from = Math.min(inventory.size(), storageSlots() + ARMOUR_SLOTS);
+            return inventory.subList(from, inventory.size());
+        }
+    }
 
     static class SnapshotFormatException extends Exception {
         private static final long serialVersionUID = 1L;
@@ -61,8 +103,8 @@ final class SnapshotCodec {
                 java.io.DataOutputStream out = new java.io.DataOutputStream(bytes)) {
             out.writeInt(MAGIC);
             out.writeInt(FORMAT);
-            writeSection(out, contents.inventory(), INVENTORY_SLOTS, codec);
-            writeSection(out, contents.enderChest(), ENDER_SLOTS, codec);
+            writeSection(out, contents.inventory(), inventorySlots(contents.inventory()), codec);
+            writeSection(out, contents.enderChest(), enderSlots(contents.enderChest()), codec);
             out.flush();
             return bytes.toByteArray();
         } catch (java.io.IOException e) {
@@ -88,8 +130,15 @@ final class SnapshotCodec {
             if (format < 1) {
                 throw new SnapshotFormatException("unknown snapshot format " + format);
             }
-            java.util.List<T> inventory = readSection(in, INVENTORY_SLOTS, codec);
-            java.util.List<T> ender = readSection(in, ENDER_SLOTS, codec);
+            java.util.List<T> inventory;
+            java.util.List<T> ender;
+            if (format == LEGACY_FORMAT) {
+                inventory = readSection(in, INVENTORY_SLOTS, INVENTORY_SLOTS, codec);
+                ender = readSection(in, ENDER_SLOTS, ENDER_SLOTS, codec);
+            } else {
+                inventory = readSection(in, INVENTORY_SLOTS, MAX_INVENTORY_SLOTS, codec);
+                ender = readSection(in, ENDER_SLOTS, MAX_ENDER_SLOTS, codec);
+            }
             if (in.available() > 0) {
                 throw new SnapshotFormatException("unexpected trailing snapshot data");
             }
@@ -112,19 +161,43 @@ final class SnapshotCodec {
         out.write(encoded);
     }
 
-    private static <T> java.util.List<T> readSection(java.io.DataInputStream in, int expected, ItemCodec<T> codec)
-            throws java.io.IOException, SnapshotFormatException {
+    private static <T> java.util.List<T> readSection(java.io.DataInputStream in, int min, int max,
+            ItemCodec<T> codec) throws java.io.IOException, SnapshotFormatException {
         int slots = in.readInt();
         long length = Integer.toUnsignedLong(in.readInt());
-        if (slots != expected) {
-            throw new SnapshotFormatException("unexpected slot count " + slots + " (expected " + expected + ")");
+        if (slots < min || slots > max) {
+            throw new SnapshotFormatException(min == max
+                    ? "unexpected slot count " + slots + " (expected " + min + ")"
+                    : "unexpected slot count " + slots + " (expected " + min + "-" + max + ")");
         }
         if (length < 0 || length > MAX_SECTION_BYTES) {
             throw new SnapshotFormatException("invalid item section length " + length);
         }
         byte[] data = new byte[(int) length];
         in.readFully(data);
-        return fit(codec.decode(data), expected);
+        return fit(codec.decode(data), slots);
+    }
+
+    /** Stored size of an inventory section: at least the vanilla 41, at most {@link #MAX_INVENTORY_SLOTS}. */
+    static int inventorySlots(java.util.List<?> items) throws SnapshotFormatException {
+        return bounded(items, INVENTORY_SLOTS, MAX_INVENTORY_SLOTS, "inventory");
+    }
+
+    /** Stored size of an ender section: at least the vanilla 27, at most {@link #MAX_ENDER_SLOTS}. */
+    static int enderSlots(java.util.List<?> items) throws SnapshotFormatException {
+        return bounded(items, ENDER_SLOTS, MAX_ENDER_SLOTS, "ender chest");
+    }
+
+    private static int bounded(java.util.List<?> items, int min, int max, String section)
+            throws SnapshotFormatException {
+        if (items == null) {
+            throw new SnapshotFormatException("missing " + section + " section");
+        }
+        if (items.size() > max) {
+            throw new SnapshotFormatException(section + " section has " + items.size()
+                    + " slots (at most " + max + " are supported)");
+        }
+        return Math.max(min, items.size());
     }
 
     /** Exactly {@code slots} entries, padding missing slots with {@code null} and refusing extra ones. */

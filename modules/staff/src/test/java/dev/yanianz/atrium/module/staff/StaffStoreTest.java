@@ -26,7 +26,7 @@ class StaffStoreTest {
     private static StaffSnapshot snapshot(int storageByte) {
         return new StaffSnapshot(StaffSnapshot.CURRENT_FORMAT, "world", 1, 2, 3, 4, 5, "SURVIVAL", 7, 0.5f, 42,
                 true, false, new byte[] {(byte) storageByte}, new byte[] {2}, new byte[] {3}, new byte[] {4},
-                Boolean.TRUE);
+                Boolean.TRUE, 36, 4, 1);
     }
 
     @Test

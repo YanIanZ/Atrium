@@ -20,15 +20,6 @@ import org.bukkit.inventory.ItemStack;
  * GUI can neither duplicate nor lose items.
  */
 final class SnapshotPreview {
-    static final int MAIN_ROWS = 6;
-    static final int ENDER_ROWS = 4;
-    private static final int ENDER_BUTTON = SlotLayout.bottom(MAIN_ROWS, SlotLayout.BACK_COLUMN);
-    private static final int INFO_SLOT = SlotLayout.bottom(MAIN_ROWS, SlotLayout.PAGE_COLUMN);
-    private static final int MAIN_CLOSE = SlotLayout.bottom(MAIN_ROWS, SlotLayout.CLOSE_COLUMN);
-    private static final int BACK_BUTTON = SlotLayout.bottom(ENDER_ROWS, SlotLayout.BACK_COLUMN);
-    private static final int ENDER_INFO = SlotLayout.bottom(ENDER_ROWS, SlotLayout.PAGE_COLUMN);
-    private static final int ENDER_CLOSE = SlotLayout.bottom(ENDER_ROWS, SlotLayout.CLOSE_COLUMN);
-
     private final ModuleContext ctx;
 
     /** The decoded snapshot; the lists hold private copies that are only ever shown as clones. */
@@ -45,46 +36,81 @@ final class SnapshotPreview {
         }
         Snapshot snapshot = new Snapshot(meta, ItemStackSnapshots.copies(contents.inventory()),
                 ItemStackSnapshots.copies(contents.enderChest()));
-        ctx.menus().open(viewer, mainPage(snapshot));
+        ctx.menus().open(viewer, mainPage(snapshot, 0));
         if (ctx.menus().isViewing(viewer)) {
             ctx.messages().send(viewer, "inventories.preview-readonly");
         }
     }
 
-    private MenuProvider mainPage(Snapshot snapshot) {
+    /**
+     * The inventory section. It is sized from the stored section (41 slots on a vanilla server), so a larger
+     * storage from a fork is paged instead of cut off.
+     */
+    private MenuProvider mainPage(Snapshot snapshot, int page) {
         return viewer -> {
+            int slots = snapshot.inventory().size();
+            int rows = SectionPages.rows(slots);
             Menu.Builder menu = Menu.builder(ctx.messages().render(viewer, "inventories.preview-title",
                     Msg.number("id", snapshot.meta().id()), Msg.unparsed("player", snapshot.meta().playerName())),
-                    MAIN_ROWS);
-            show(menu, snapshot.inventory(), SnapshotCodec.INVENTORY_SLOTS);
-            menu.item(ENDER_BUTTON, button(viewer, Material.ENDER_CHEST, "inventories.preview-ender-button",
-                    "inventories.preview-ender-lore"), click -> click.replace(enderPage(snapshot)));
-            menu.item(INFO_SLOT, info(viewer, snapshot.meta()));
-            menu.item(MAIN_CLOSE, ItemBuilder.of(Material.BARRIER)
+                    rows);
+            show(menu, snapshot.inventory(), page);
+            menu.item(SlotLayout.bottom(rows, SlotLayout.BACK_COLUMN), button(viewer, Material.ENDER_CHEST,
+                    "inventories.preview-ender-button", "inventories.preview-ender-lore"),
+                    click -> click.replace(enderPage(snapshot, 0)));
+            navigation(menu, viewer, rows, slots, page, next -> mainPage(snapshot, next));
+            menu.item(SlotLayout.bottom(rows, SlotLayout.PAGE_COLUMN), info(viewer, snapshot.meta()));
+            menu.item(SlotLayout.bottom(rows, SlotLayout.CLOSE_COLUMN), ItemBuilder.of(Material.BARRIER)
                     .name(ctx.messages().render(viewer, "core.menu.close")).build(), MenuClick::close);
             return menu.build();
         };
     }
 
-    private MenuProvider enderPage(Snapshot snapshot) {
+    /** The ender section, sized from the stored chest: three rows fit one page, six rows take two. */
+    private MenuProvider enderPage(Snapshot snapshot, int page) {
         return viewer -> {
+            int slots = snapshot.ender().size();
+            int rows = SectionPages.rows(slots);
             Menu.Builder menu = Menu.builder(ctx.messages().render(viewer, "inventories.preview-ender-title",
                     Msg.number("id", snapshot.meta().id()), Msg.unparsed("player", snapshot.meta().playerName())),
-                    ENDER_ROWS);
-            show(menu, snapshot.ender(), SnapshotCodec.ENDER_SLOTS);
-            menu.item(BACK_BUTTON, button(viewer, Material.ARROW, "inventories.preview-back-button",
-                    "inventories.preview-back-lore"), click -> click.replace(mainPage(snapshot)));
-            menu.item(ENDER_INFO, info(viewer, snapshot.meta()));
-            menu.item(ENDER_CLOSE, ItemBuilder.of(Material.BARRIER)
+                    rows);
+            show(menu, snapshot.ender(), page);
+            menu.item(SlotLayout.bottom(rows, SlotLayout.BACK_COLUMN), button(viewer, Material.ARROW,
+                    "inventories.preview-back-button", "inventories.preview-back-lore"),
+                    click -> click.replace(mainPage(snapshot, 0)));
+            navigation(menu, viewer, rows, slots, page, next -> enderPage(snapshot, next));
+            menu.item(SlotLayout.bottom(rows, SlotLayout.PAGE_COLUMN), info(viewer, snapshot.meta()));
+            menu.item(SlotLayout.bottom(rows, SlotLayout.CLOSE_COLUMN), ItemBuilder.of(Material.BARRIER)
                     .name(ctx.messages().render(viewer, "core.menu.close")).build(), MenuClick::close);
             return menu.build();
         };
     }
 
-    /** Display-only copies; empty snapshot slots stay empty instead of showing the filler. */
-    private static void show(Menu.Builder menu, List<ItemStack> items, int slots) {
-        for (int slot = 0; slot < slots; slot++) {
-            ItemStack item = slot < items.size() ? items.get(slot) : null;
+    /** Previous/next buttons, only when the section needs more than one page. */
+    private void navigation(Menu.Builder menu, Player viewer, int rows, int slots, int page,
+            java.util.function.IntFunction<MenuProvider> pageProvider) {
+        int pages = SectionPages.pages(slots);
+        if (pages <= 1) {
+            return;
+        }
+        int current = SectionPages.clamp(page, slots);
+        if (current > 0) {
+            menu.item(SlotLayout.bottom(rows, SlotLayout.PREVIOUS_COLUMN), ItemBuilder.of(Material.ARROW)
+                    .name(ctx.messages().render(viewer, "core.menu.previous")).build(),
+                    click -> click.replace(pageProvider.apply(current - 1)));
+        }
+        if (current < pages - 1) {
+            menu.item(SlotLayout.bottom(rows, SlotLayout.NEXT_COLUMN), ItemBuilder.of(Material.ARROW)
+                    .name(ctx.messages().render(viewer, "core.menu.next")).build(),
+                    click -> click.replace(pageProvider.apply(current + 1)));
+        }
+    }
+
+    /** Display-only copies of one page; empty snapshot slots stay empty instead of showing the filler. */
+    private static void show(Menu.Builder menu, List<ItemStack> items, int page) {
+        int first = SectionPages.first(page, items.size());
+        int count = SectionPages.count(page, items.size());
+        for (int slot = 0; slot < count; slot++) {
+            ItemStack item = items.get(first + slot);
             if (item != null && !item.isEmpty()) {
                 menu.item(slot, item);
             } else {

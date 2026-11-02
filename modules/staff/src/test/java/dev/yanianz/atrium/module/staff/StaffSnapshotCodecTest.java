@@ -13,7 +13,8 @@ class StaffSnapshotCodecTest {
     private static StaffSnapshot sample() {
         return new StaffSnapshot(StaffSnapshot.CURRENT_FORMAT, "world_nether", 12.5, 64.0, -8.25, 90.5f, -12.0f,
                 "CREATIVE", 30, 0.75f, 1234, true, false,
-                new byte[] {1, 2, 3}, new byte[] {4, 5}, new byte[] {6}, new byte[] {7, 8, 9, 10}, Boolean.TRUE);
+                new byte[] {1, 2, 3}, new byte[] {4, 5}, new byte[] {6}, new byte[] {7, 8, 9, 10}, Boolean.TRUE,
+                36, 4, 1);
     }
 
     @Test
@@ -38,13 +39,51 @@ class StaffSnapshotCodecTest {
         assertArrayEquals(new byte[] {7, 8, 9, 10}, decoded.effects());
         assertTrue(decoded.sameItems(sample()));
         assertEquals(Boolean.TRUE, decoded.vanished());
+        assertEquals(36, decoded.storageSlots());
+        assertEquals(4, decoded.armorSlots());
+        assertEquals(1, decoded.offhandSlots());
+        assertTrue(decoded.slotsKnown());
+    }
+
+    @Test
+    void largerStorageFromAForkRoundTrips() {
+        StaffSnapshot snapshot = new StaffSnapshot(StaffSnapshot.CURRENT_FORMAT, "world", 0, 0, 0, 0, 0,
+                "SURVIVAL", 0, 0, 0, false, false, new byte[] {1}, new byte[0], new byte[0], new byte[0], null,
+                StaffSnapshot.MAX_STORAGE_SLOTS, 4, 1);
+        assertEquals(StaffSnapshot.MAX_STORAGE_SLOTS,
+                StaffSnapshotCodec.decode(StaffSnapshotCodec.encode(snapshot)).storageSlots());
+    }
+
+    @Test
+    void slotCountsOutsideTheBoundsAreRefusedBeforeStoring() {
+        int[][] bad = {{StaffSnapshot.MAX_STORAGE_SLOTS + 1, 4, 1}, {36, 5, 1}, {36, 4, 2},
+                {StaffSnapshot.UNKNOWN_SLOTS, 4, 1}};
+        for (int[] slots : bad) {
+            StaffSnapshot snapshot = new StaffSnapshot(StaffSnapshot.CURRENT_FORMAT, "world", 0, 0, 0, 0, 0,
+                    "SURVIVAL", 0, 0, 0, false, false, new byte[0], new byte[0], new byte[0], new byte[0], null,
+                    slots[0], slots[1], slots[2]);
+            assertThrows(IllegalArgumentException.class, () -> StaffSnapshotCodec.encode(snapshot));
+        }
+    }
+
+    @Test
+    void formatTwoRowsDecodeWithUnknownSlotCounts() {
+        StaffSnapshot old = new StaffSnapshot(2, "world", 0, 0, 0, 0, 0, "SURVIVAL", 0, 0, 0, false, false,
+                new byte[] {1}, new byte[] {2}, new byte[] {3}, new byte[0], Boolean.FALSE);
+        StaffSnapshot decoded = StaffSnapshotCodec.decode(StaffSnapshotCodec.encode(old));
+        assertEquals(2, decoded.format());
+        assertFalse(decoded.slotsKnown());
+        assertEquals(StaffSnapshot.UNKNOWN_SLOTS, decoded.storageSlots());
+        assertEquals(Boolean.FALSE, decoded.vanished());
+        assertArrayEquals(new byte[] {1}, decoded.storage());
     }
 
     @Test
     void vanishStateRoundTripsAllThreeValues() {
         for (Boolean vanished : new Boolean[] {Boolean.TRUE, Boolean.FALSE, null}) {
             StaffSnapshot snapshot = new StaffSnapshot(StaffSnapshot.CURRENT_FORMAT, "world", 0, 0, 0, 0, 0,
-                    "SURVIVAL", 0, 0, 0, false, false, new byte[0], new byte[0], new byte[0], new byte[0], vanished);
+                    "SURVIVAL", 0, 0, 0, false, false, new byte[0], new byte[0], new byte[0], new byte[0], vanished,
+                    36, 4, 1);
             assertEquals(vanished, StaffSnapshotCodec.decode(StaffSnapshotCodec.encode(snapshot)).vanished());
         }
     }
@@ -86,7 +125,7 @@ class StaffSnapshotCodecTest {
     @Test
     void rejectsAnUnknownFormat() {
         StaffSnapshot future = new StaffSnapshot(StaffSnapshot.CURRENT_FORMAT + 1, "world", 0, 0, 0, 0, 0,
-                "SURVIVAL", 0, 0, 0, false, false, new byte[0], new byte[0], new byte[0], new byte[0], null);
+                "SURVIVAL", 0, 0, 0, false, false, new byte[0], new byte[0], new byte[0], new byte[0], null, 36, 4, 1);
         byte[] encoded = StaffSnapshotCodec.encode(future);
         assertThrows(IllegalArgumentException.class, () -> StaffSnapshotCodec.decode(encoded));
     }

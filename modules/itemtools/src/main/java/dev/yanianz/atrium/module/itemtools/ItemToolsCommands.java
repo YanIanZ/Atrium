@@ -47,8 +47,6 @@ import org.bukkit.util.RayTraceResult;
 
 /** /itemcmdata, /hideflags, /glow, /condense, /dispose, /giveall, /getbook, /itemframe and /repaircost. */
 final class ItemToolsCommands implements Listener, TaskHandle {
-    private static final int MAIN_INVENTORY_SLOTS = 36;
-
     private record GiveAllConfirmation(Material material, int amount, long expires) { }
 
     private final ModuleContext ctx;
@@ -311,7 +309,7 @@ final class ItemToolsCommands implements Listener, TaskHandle {
         List<Integer> slots = new ArrayList<>();
         int available = 0;
         boolean plainOnly = config.get().condenseSkipCustomised;
-        for (int slot = 0; slot < MAIN_INVENTORY_SLOTS; slot++) {
+        for (int slot = 0, storage = storageSlots(player); slot < storage; slot++) {
             ItemStack stack = inventory.getItem(slot);
             if (stack == null || stack.isEmpty() || stack.getType() != recipe.from()) {
                 continue;
@@ -468,7 +466,7 @@ final class ItemToolsCommands implements Listener, TaskHandle {
                     ? meta : null;
             String author = book == null ? null : book.getAuthor();
             boolean own = author != null && author.equalsIgnoreCase(player.getName());
-            int blank = BookCopy.firstBlank(MAIN_INVENTORY_SLOTS, slot -> isBlankWritableBook(inventory.getItem(slot)));
+            int blank = BookCopy.firstBlank(storageSlots(player), slot -> isBlankWritableBook(inventory.getItem(slot)));
             switch (BookCopy.decide(book != null, own, player.hasPermission("atrium.getbook.others"), blank)) {
                 case NOT_BOOK -> replyNow(player, "getbook-not-book");
                 case DENIED -> replyNow(player, "getbook-denied");
@@ -656,5 +654,13 @@ final class ItemToolsCommands implements Listener, TaskHandle {
     @Override
     public boolean isCancelled() {
         return cancelled;
+    }
+
+    /**
+     * The storage part (hotbar + main inventory) of the live player inventory: 36 on a vanilla server. Armour
+     * and off hand follow it and are never touched by /condense or /getbook. Player's thread.
+     */
+    private static int storageSlots(Player player) {
+        return player.getInventory().getStorageContents().length;
     }
 }

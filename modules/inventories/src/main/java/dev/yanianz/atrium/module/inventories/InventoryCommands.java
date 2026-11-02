@@ -467,6 +467,9 @@ final class InventoryCommands implements Listener, TaskHandle {
 
     private enum ApplyOutcome { APPLIED, OVERFLOW, CHANGED }
 
+    /** What happened on the target's thread; {@code applied} carries the overflow counts of a load. */
+    private record LoadResult(ApplyOutcome outcome, ItemStackSnapshots.Applied applied) {}
+
     private void backupThenApply(CommandSender sender, Player target, PlayerRef ref, SnapshotStore.Stored snapshot,
             boolean merge, boolean silent) {
         backupThenApply(sender, target, ref, snapshot, merge, silent, 1);
@@ -519,11 +522,12 @@ final class InventoryCommands implements Listener, TaskHandle {
             ctx.scheduler().supplyOnEntity(target, () -> {
                 // Re-check on the target's thread: the backup must describe exactly what is about to be replaced.
                 if (!ItemStackSnapshots.unchanged(target, backup.prepared().captured(), false)) {
-                    return ApplyOutcome.CHANGED;
+                    return new LoadResult(ApplyOutcome.CHANGED, ItemStackSnapshots.Applied.REFUSED);
                 }
-                return ItemStackSnapshots.apply(target, backup.prepared().contents(), merge)
-                        ? ApplyOutcome.APPLIED : ApplyOutcome.OVERFLOW;
-            }).whenComplete((outcome, applyError) -> {
+                ItemStackSnapshots.Applied applied = ItemStackSnapshots.apply(target, backup.prepared().contents(),
+                        merge);
+                return new LoadResult(applied.applied() ? ApplyOutcome.APPLIED : ApplyOutcome.OVERFLOW, applied);
+            }).whenComplete((result, applyError) -> {
                 if (applyError != null) {
                     if (retired(applyError)) {
                         reply(sender, "target-left");
@@ -533,6 +537,7 @@ final class InventoryCommands implements Listener, TaskHandle {
                     }
                     return;
                 }
+                ApplyOutcome outcome = result.outcome();
                 if (outcome == ApplyOutcome.CHANGED) {
                     discardStaleBackup(ref, backup.id());
                     switch (BackupGuard.decide(false, attempt)) {
@@ -550,14 +555,29 @@ final class InventoryCommands implements Listener, TaskHandle {
                     return;
                 }
                 prune(ref.uuid());
+                ItemStackSnapshots.Applied applied = result.applied();
                 ctx.logger().info("Loaded snapshot #{} of {} ({}) with backup #{}", snapshot.meta().id(),
                         ref.uuid(), merge ? "merge" : "replace", backup.id());
+                if (applied.overflow() > 0) {
+                    ctx.logger().info("Snapshot #{} of {} had {} stack(s) beyond the live slot counts: moved into "
+                            + "free inventory space, {} dropped at the player's feet", snapshot.meta().id(),
+                            ref.uuid(), applied.overflow(), applied.dropped());
+                }
+                if (applied.dropped() > 0) {
+                    notifyTarget(target, "overflow-dropped-target", Msg.number("dropped", applied.dropped()));
+                }
                 if (silent) {
                     return;
                 }
                 reply(sender, "loaded", Msg.number("id", snapshot.meta().id()),
                         Msg.unparsed("player", ref.name()), Msg.number("backup", backup.id()),
                         Msg.unparsed("mode", merge ? "merge" : "replace"));
+                if (applied.overflow() > 0) {
+                    reply(sender, "load-overflow", Msg.unparsed("player", ref.name()),
+                            Msg.number("stacks", applied.overflow()),
+                            Msg.number("moved", applied.overflow() - applied.dropped()),
+                            Msg.number("dropped", applied.dropped()));
+                }
                 notifyTarget(target, "loaded-target", Msg.number("id", snapshot.meta().id()));
             });
         });

@@ -83,9 +83,113 @@ class SnapshotCodecTest {
 
     @Test
     void tooManySlotsAreRefusedInsteadOfTruncated() {
-        List<String> overflow = slots(SnapshotCodec.INVENTORY_SLOTS + 1, "x", 41);
+        List<String> inventory = slots(SnapshotCodec.MAX_INVENTORY_SLOTS + 1, "x", 0);
         assertThrows(SnapshotCodec.SnapshotFormatException.class,
-                () -> SnapshotCodec.encode(new SnapshotCodec.Contents<>(overflow, List.of()), CODEC));
+                () -> SnapshotCodec.encode(new SnapshotCodec.Contents<>(inventory, List.of()), CODEC));
+        List<String> ender = slots(SnapshotCodec.MAX_ENDER_SLOTS + 1, "x", 0);
+        assertThrows(SnapshotCodec.SnapshotFormatException.class,
+                () -> SnapshotCodec.encode(new SnapshotCodec.Contents<>(List.of(), ender), CODEC));
+    }
+
+    @Test
+    void sixRowEnderChestRoundTrips() throws Exception {
+        // The real failure: a fork with 54-slot ender chests made every quit snapshot fail.
+        List<String> ender = slots(54, "last", 53);
+        ender.set(0, "first");
+        ender.set(27, "row-four");
+        byte[] bytes = SnapshotCodec.encode(new SnapshotCodec.Contents<>(
+                slots(SnapshotCodec.INVENTORY_SLOTS, "offhand", 40), ender), CODEC);
+        SnapshotCodec.Contents<String> contents = SnapshotCodec.decode(bytes, CODEC);
+        assertEquals(54, contents.enderChest().size());
+        assertEquals(List.of("first", "row-four", "last"),
+                List.of(contents.enderChest().get(0), contents.enderChest().get(27), contents.enderChest().get(53)));
+        assertEquals(SnapshotCodec.INVENTORY_SLOTS, contents.inventory().size());
+        assertEquals(List.of("offhand"), contents.offhand());
+    }
+
+    @Test
+    void largerStorageKeepsArmourAndOffhandAtTheEnd() throws Exception {
+        List<String> inventory = slots(45 + SnapshotCodec.EQUIPMENT_SLOTS, null, -1);
+        inventory.set(44, "storage-tail");
+        inventory.set(45, "boots");
+        inventory.set(48, "helmet");
+        inventory.set(49, "shield");
+        SnapshotCodec.Contents<String> contents = SnapshotCodec.decode(
+                SnapshotCodec.encode(new SnapshotCodec.Contents<>(inventory, List.of()), CODEC), CODEC);
+        assertEquals(45, contents.storageSlots());
+        assertEquals("storage-tail", contents.storage().get(44));
+        assertEquals(java.util.Arrays.asList("boots", null, null, "helmet"), contents.armour());
+        assertEquals(List.of("shield"), contents.offhand());
+    }
+
+    @Test
+    void writesTheCurrentFormat() throws Exception {
+        byte[] raw = valid();
+        assertEquals(SnapshotCodec.FORMAT, java.nio.ByteBuffer.wrap(raw, 4, 4).getInt());
+        assertEquals(2, SnapshotCodec.FORMAT);
+    }
+
+    @Test
+    void legacyFormatOneIsStillDecoded() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(bytes)) {
+            out.writeInt(SnapshotCodec.MAGIC);
+            out.writeInt(SnapshotCodec.LEGACY_FORMAT);
+            byte[] inventory = CODEC.encode(slots(41, "helm", 39));
+            out.writeInt(41);
+            out.writeInt(inventory.length);
+            out.write(inventory);
+            byte[] ender = CODEC.encode(slots(27, "shulker", 26));
+            out.writeInt(27);
+            out.writeInt(ender.length);
+            out.write(ender);
+        }
+        SnapshotCodec.Contents<String> contents = SnapshotCodec.decode(bytes.toByteArray(), CODEC);
+        assertEquals(41, contents.inventory().size());
+        assertEquals(27, contents.enderChest().size());
+        assertEquals(36, contents.storageSlots());
+        assertEquals("helm", contents.armour().get(3));
+        assertEquals("shulker", contents.enderChest().get(26));
+    }
+
+    @Test
+    void legacyFormatOneWithOtherSizesIsRefused() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(bytes)) {
+            out.writeInt(SnapshotCodec.MAGIC);
+            out.writeInt(SnapshotCodec.LEGACY_FORMAT);
+            byte[] inventory = CODEC.encode(slots(41, null, -1));
+            out.writeInt(41);
+            out.writeInt(inventory.length);
+            out.write(inventory);
+            byte[] ender = CODEC.encode(slots(54, null, -1));
+            out.writeInt(54);
+            out.writeInt(ender.length);
+            out.write(ender);
+        }
+        assertThrows(SnapshotCodec.SnapshotFormatException.class,
+                () -> SnapshotCodec.decode(bytes.toByteArray(), CODEC));
+    }
+
+    @Test
+    void storedSlotCountsOutsideTheBoundsAreRefused() throws Exception {
+        for (int enderSlots : new int[] {26, 55, 1000}) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (DataOutputStream out = new DataOutputStream(bytes)) {
+                out.writeInt(SnapshotCodec.MAGIC);
+                out.writeInt(SnapshotCodec.FORMAT);
+                byte[] inventory = CODEC.encode(slots(41, null, -1));
+                out.writeInt(41);
+                out.writeInt(inventory.length);
+                out.write(inventory);
+                byte[] ender = CODEC.encode(List.of());
+                out.writeInt(enderSlots);
+                out.writeInt(ender.length);
+                out.write(ender);
+            }
+            assertThrows(SnapshotCodec.SnapshotFormatException.class,
+                    () -> SnapshotCodec.decode(bytes.toByteArray(), CODEC), "ender slots " + enderSlots);
+        }
     }
 
     @Test

@@ -21,6 +21,8 @@ final class StaffSnapshots {
      */
     static StaffSnapshot capture(Player player, @Nullable Boolean vanished) {
         var inventory = player.getInventory();
+        ItemStack[] storage = inventory.getStorageContents();
+        ItemStack[] armor = inventory.getArmorContents();
         return new StaffSnapshot(
                 StaffSnapshot.CURRENT_FORMAT,
                 player.getWorld().getName(),
@@ -35,11 +37,14 @@ final class StaffSnapshots {
                 player.getTotalExperience(),
                 player.getAllowFlight(),
                 player.isFlying(),
-                ItemStack.serializeItemsAsBytes(inventory.getStorageContents()),
-                ItemStack.serializeItemsAsBytes(inventory.getArmorContents()),
+                ItemStack.serializeItemsAsBytes(storage),
+                ItemStack.serializeItemsAsBytes(armor),
                 ItemStack.serializeItemsAsBytes(new ItemStack[] {inventory.getItemInOffHand()}),
                 PotionEffectCodec.encode(player.getActivePotionEffects()),
-                vanished);
+                vanished,
+                storage.length,
+                armor.length,
+                1);
     }
 
     /**

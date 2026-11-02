@@ -41,9 +41,6 @@ import org.bukkit.inventory.ItemStack;
  * {@link OfflineInventoryMenu} from the newest QUIT snapshot instead.
  */
 final class InventoryViewer implements Listener, TaskHandle {
-    /** First display slot after the live player slots (0-35 storage, 36-39 armor, 40 off hand). */
-    private static final int DECOR_FIRST = 41;
-    private static final int INFO_SLOT = 44;
     private final ModuleContext ctx;
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
     private volatile boolean cancelled;
@@ -52,14 +49,17 @@ final class InventoryViewer implements Listener, TaskHandle {
         final Player viewer;
         final Player target;
         final boolean ender;
+        /** Live slot count read on the target's thread when the view opened (41 or the ender chest size). */
+        final int liveSlots;
         final AtomicBoolean busy = new AtomicBoolean();
         volatile boolean closed;
         volatile TaskHandle refresh;
         Inventory display;
         ItemStack info; // themed label in the unused bottom-right slot of an inventory view
-        Session(Player viewer, Player target, boolean ender) {
-            this.viewer = viewer; this.target = target; this.ender = ender;
+        Session(Player viewer, Player target, boolean ender, int liveSlots) {
+            this.viewer = viewer; this.target = target; this.ender = ender; this.liveSlots = liveSlots;
         }
+        int shown() { return InventoryLayout.shownSlots(display.getSize(), liveSlots); }
         @Override public Inventory getInventory() { return display; }
         Inventory live() { return ender ? target.getEnderChest() : target.getInventory(); }
         String modifyPermission() { return ender ? "atrium.enderchest.others.modify" : "atrium.invsee.modify"; }
@@ -141,7 +141,7 @@ final class InventoryViewer implements Listener, TaskHandle {
             ctx.scheduler().entity(viewer, () -> {
                 if (cancelled || !viewer.isOnline()) return;
                 if (online != null) {
-                    openLive(viewer, online, ender);
+                    openLive(viewer, online, ref, ender);
                 } else {
                     openOffline(viewer, ref, ender);
                 }
@@ -150,15 +150,50 @@ final class InventoryViewer implements Listener, TaskHandle {
         return Cmds.OK;
     }
 
-    /** Must run on the viewer's thread. */
-    private void openLive(Player viewer, Player target, boolean ender) {
+    /**
+     * Must run on the viewer's thread. The live slot count is read on the target's own thread first, so the view
+     * matches the real inventory (a six-row ender chest gets a six-row view).
+     */
+    private void openLive(Player viewer, Player target, PlayerRef ref, boolean ender) {
         if (cancelled) return;
         if (ender && viewer.equals(target)) {
             viewer.openInventory(viewer.getEnderChest());
             return;
         }
-        var session = new Session(viewer, target, ender);
-        session.display = Bukkit.createInventory(session, ender ? 27 : 45,
+        ctx.scheduler().supplyOnEntity(target, () -> target.isOnline() ? liveSlots(target, ender) : -1)
+                .whenComplete((slots, error) -> {
+                    if (cancelled) return;
+                    if (error != null && !retired(error)) {
+                        ctx.logger().warn("Reading the inventory size of {} failed", target.getUniqueId(), error);
+                        message(viewer, "failed");
+                        return;
+                    }
+                    ctx.scheduler().entity(viewer, () -> {
+                        if (cancelled || !viewer.isOnline()) return;
+                        if (error != null || slots == null || slots < 0) {
+                            // The target left meanwhile: show their quit snapshot instead.
+                            openOffline(viewer, ref, ender);
+                            return;
+                        }
+                        showLive(viewer, target, ender, slots);
+                    }, null);
+                });
+    }
+
+    /** Live slots of the viewed inventory. Target's thread. */
+    private static int liveSlots(Player target, boolean ender) {
+        return ender ? target.getEnderChest().getSize() : target.getInventory().getContents().length;
+    }
+
+    private static boolean retired(Throwable error) {
+        return error instanceof dev.yanianz.atrium.core.scheduler.Scheduler.EntityRetiredException
+                || error.getCause() instanceof dev.yanianz.atrium.core.scheduler.Scheduler.EntityRetiredException;
+    }
+
+    /** Viewer's thread. */
+    private void showLive(Player viewer, Player target, boolean ender, int liveSlots) {
+        var session = new Session(viewer, target, ender, liveSlots);
+        session.display = Bukkit.createInventory(session, InventoryLayout.displaySize(ender, liveSlots),
                 ctx.messages().render(viewer, "player.inventory-title", Msg.unparsed("player", target.getName())));
         if (!ender) {
             session.info = ItemBuilder.of(Material.BOOK)
@@ -218,6 +253,8 @@ final class InventoryViewer implements Listener, TaskHandle {
         ctx.scheduler().supplyOnEntity(s.target, () -> {
             if (cancelled || s.closed || !s.target.isOnline()) return null;
             ItemStack[] contents = s.live().getContents();
+            // The live size changed under the view (a plugin resized it): close instead of showing wrong slots.
+            if (contents.length != s.liveSlots) return null;
             ItemStack[] copy = new ItemStack[contents.length];
             for (int i = 0; i < contents.length; i++) copy[i] = contents[i] == null ? null : contents[i].clone();
             return copy;
@@ -236,7 +273,8 @@ final class InventoryViewer implements Listener, TaskHandle {
                     close(s); return;
                 }
                 s.display.clear();
-                for (int i = 0; i < contents.length; i++) s.display.setItem(i, contents[i]);
+                int shown = Math.min(contents.length, s.shown());
+                for (int i = 0; i < shown; i++) s.display.setItem(i, contents[i]);
                 decorate(s);
                 s.refresh = ctx.scheduler().entityLater(s.viewer, () -> refresh(s), s::stop, 10);
                 if (s.closed || cancelled) s.refresh.cancel();
@@ -245,16 +283,19 @@ final class InventoryViewer implements Listener, TaskHandle {
     }
 
     /**
-     * Themes the display-only slots after the 41 live slots (storage, armor, off hand) of an inventory view.
-     * Clicks there are ignored by {@link #onClick}, and the whole display is a copy that is never written back.
+     * Themes the display-only slots after the live slots (storage, armor, off hand; 41 on a vanilla server) of an
+     * inventory view. Clicks there are ignored by {@link #onClick}, and the whole display is a copy that is never
+     * written back.
      */
     private void decorate(Session s) {
         if (s.ender || s.info == null) return;
+        int info = InventoryLayout.infoSlot(s.display.getSize(), s.liveSlots);
+        if (info < 0) return;
         ItemStack filler = ctx.menus().filler();
-        for (int slot = DECOR_FIRST; slot < INFO_SLOT; slot++) {
+        for (int slot = s.shown(); slot < info; slot++) {
             s.display.setItem(slot, filler.isEmpty() ? null : filler);
         }
-        s.display.setItem(INFO_SLOT, s.info.clone());
+        s.display.setItem(info, s.info.clone());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -267,7 +308,7 @@ final class InventoryViewer implements Listener, TaskHandle {
         if (event.getClick() != ClickType.LEFT || event.getClickedInventory() == null) return;
         boolean top = event.getClickedInventory() == s.display;
         int slot = event.getSlot();
-        if (slot < 0 || (top && slot >= (s.ender ? 27 : DECOR_FIRST))) return;
+        if (slot < 0 || (top && !InventoryLayout.editable(slot, s.display.getSize(), s.liveSlots))) return;
         if (!s.busy.compareAndSet(false, true)) return;
         // Defer out of InventoryClickEvent. Both inventories must be owned by this task's region.
         ctx.scheduler().entity(s.target, () -> {
@@ -280,6 +321,8 @@ final class InventoryViewer implements Listener, TaskHandle {
                         || !s.viewer.hasPermission(s.modifyPermission())
                         || s.viewer.getOpenInventory().getTopInventory() != s.display) return;
                 Inventory inventory = top ? s.live() : s.viewer.getInventory();
+                // The live inventory may have shrunk since the view opened: never address a missing slot.
+                if (slot >= inventory.getSize()) return;
                 ItemStack live = inventory.getItem(slot);
                 ItemStack cursor = s.viewer.getItemOnCursor();
                 // No asynchronous gap between these writes, and no source data from the display.

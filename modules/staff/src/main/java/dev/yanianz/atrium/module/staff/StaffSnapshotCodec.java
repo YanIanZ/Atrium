@@ -37,6 +37,11 @@ final class StaffSnapshotCodec {
                 out.writeInt(snapshot.totalExperience());
                 out.writeBoolean(snapshot.allowFlight());
                 out.writeBoolean(snapshot.flying());
+                if (snapshot.format() >= 3) {
+                    out.writeInt(checkSlots("storage", snapshot.storageSlots(), StaffSnapshot.MAX_STORAGE_SLOTS));
+                    out.writeInt(checkSlots("armour", snapshot.armorSlots(), StaffSnapshot.MAX_ARMOR_SLOTS));
+                    out.writeInt(checkSlots("off hand", snapshot.offhandSlots(), StaffSnapshot.MAX_OFFHAND_SLOTS));
+                }
                 writeBlob(out, snapshot.storage());
                 writeBlob(out, snapshot.armor());
                 writeBlob(out, snapshot.offhand());
@@ -76,6 +81,14 @@ final class StaffSnapshotCodec {
             int totalExperience = in.readInt();
             boolean allowFlight = in.readBoolean();
             boolean flying = in.readBoolean();
+            int storageSlots = StaffSnapshot.UNKNOWN_SLOTS;
+            int armorSlots = StaffSnapshot.UNKNOWN_SLOTS;
+            int offhandSlots = StaffSnapshot.UNKNOWN_SLOTS;
+            if (format >= 3) {
+                storageSlots = checkSlots("storage", in.readInt(), StaffSnapshot.MAX_STORAGE_SLOTS);
+                armorSlots = checkSlots("armour", in.readInt(), StaffSnapshot.MAX_ARMOR_SLOTS);
+                offhandSlots = checkSlots("off hand", in.readInt(), StaffSnapshot.MAX_OFFHAND_SLOTS);
+            }
             byte[] storage = readBlob(in);
             byte[] armor = readBlob(in);
             byte[] offhand = readBlob(in);
@@ -94,10 +107,20 @@ final class StaffSnapshotCodec {
                 throw new IllegalArgumentException("Staff snapshot has trailing data");
             }
             return new StaffSnapshot(format, world, x, y, z, yaw, pitch, gameMode, level, exp,
-                    totalExperience, allowFlight, flying, storage, armor, offhand, effects, vanished);
+                    totalExperience, allowFlight, flying, storage, armor, offhand, effects, vanished, storageSlots,
+                    armorSlots, offhandSlots);
         } catch (IOException e) {
             throw new IllegalArgumentException("Staff snapshot is corrupt", e);
         }
+    }
+
+    /** A recorded slot count must be known and within its section's bound. */
+    static int checkSlots(String section, int slots, int max) {
+        if (slots < 0 || slots > max) {
+            throw new IllegalArgumentException("Staff snapshot " + section + " has " + slots
+                    + " slots (supported: 0-" + max + ")");
+        }
+        return slots;
     }
 
     private static void writeBlob(DataOutputStream out, byte[] blob) throws IOException {

@@ -140,9 +140,9 @@ final class PendingEditApplier implements Listener, TaskHandle {
             cache.put(pending.target(), pending);
             return;
         }
-        boolean matches = pending.base() != null && BackupGuard.unchanged(pending.base().bytes(), now.bytes(),
-                List.of(pending.base().inventory(), pending.base().ender()),
-                List.of(now.inventory(), now.ender()), ItemStack::isEmpty);
+        // Section by section, so a base captured with other slot counts (an older format, a resized ender chest)
+        // still matches when the extra slots are empty.
+        boolean matches = pending.base() != null && ItemStackSnapshots.matches(pending.base(), now);
         PendingEditPolicy.Decision decision = PendingEditPolicy.decide(pending.base() != null, matches);
         if (decision == PendingEditPolicy.Decision.APPLY) {
             applyNow(player, pending, now);
@@ -166,8 +166,9 @@ final class PendingEditApplier implements Listener, TaskHandle {
                 prune(pending.target());
             }
         });
+        ItemStackSnapshots.Applied applied;
         try {
-            ItemStackSnapshots.apply(player, new SnapshotCodec.Contents<>(
+            applied = ItemStackSnapshots.apply(player, new SnapshotCodec.Contents<>(
                     pending.edit().inventory(), pending.edit().ender()), false);
         } catch (RuntimeException e) {
             ctx.logger().error("Applying pending offline edit #{} to {} failed", pending.id(), pending.target(), e);
@@ -176,6 +177,15 @@ final class PendingEditApplier implements Listener, TaskHandle {
         }
         resolve(pending, PendingEditStore.Status.APPLIED, "applied");
         ctx.messages().send(player, "inventories.pending-applied-target");
+        if (applied.overflow() > 0) {
+            ctx.logger().info("Pending offline edit #{} of {} had {} stack(s) beyond the live slot counts: moved into "
+                    + "free inventory space, {} dropped at the player's feet", pending.id(), pending.target(),
+                    applied.overflow(), applied.dropped());
+        }
+        if (applied.dropped() > 0) {
+            ctx.messages().send(player, "inventories.overflow-dropped-target",
+                    Msg.number("dropped", applied.dropped()));
+        }
         ctx.logger().info("Applied pending offline edit #{} to {} (base snapshot #{})", pending.id(),
                 pending.target(), pending.baseSnapshot());
     }

@@ -36,14 +36,6 @@ import org.bukkit.inventory.ItemStack;
  * edit and returned to them when the edit is rejected.
  */
 final class OfflineInventoryMenu {
-    private static final int MAIN_ROWS = 6;
-    private static final int ENDER_ROWS = 4;
-    private static final int MAIN_ENDER_BUTTON = SlotLayout.bottom(MAIN_ROWS, SlotLayout.BACK_COLUMN);
-    private static final int MAIN_INFO = SlotLayout.bottom(MAIN_ROWS, SlotLayout.PAGE_COLUMN);
-    private static final int MAIN_CLOSE = SlotLayout.bottom(MAIN_ROWS, SlotLayout.CLOSE_COLUMN);
-    private static final int ENDER_BACK = SlotLayout.bottom(ENDER_ROWS, SlotLayout.BACK_COLUMN);
-    private static final int ENDER_INFO = SlotLayout.bottom(ENDER_ROWS, SlotLayout.PAGE_COLUMN);
-    private static final int ENDER_CLOSE = SlotLayout.bottom(ENDER_ROWS, SlotLayout.CLOSE_COLUMN);
     private static final DateTimeFormatter DATE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT).withZone(ZoneId.systemDefault());
 
@@ -94,67 +86,94 @@ final class OfflineInventoryMenu {
         if (!viewer.isOnline() || service == null) {
             return;
         }
-        ctx.menus().open(viewer, startEnder || !allowInventory ? enderPage() : mainPage());
+        ctx.menus().open(viewer, startEnder || !allowInventory ? enderPage(0) : mainPage(0));
         if (ctx.menus().isViewing(viewer)) {
             ctx.messages().send(viewer, editable ? "player.offline-edit-help" : "player.offline-view-help",
                     Msg.unparsed("player", target.name()), Msg.unparsed("date", date()));
         }
     }
 
-    private MenuProvider mainPage() {
+    /**
+     * The inventory section, sized from the snapshot (41 slots on a vanilla server). A larger storage reported
+     * by a fork is paged instead of cut off.
+     */
+    private MenuProvider mainPage(int page) {
         return menuViewer -> {
+            int rows = InventoryLayout.rows(inventory.size());
             Menu.Builder menu = Menu.builder(ctx.messages().render(menuViewer, "player.offline-title",
-                    Msg.unparsed("player", target.name()), Msg.unparsed("date", date())), MAIN_ROWS);
-            items(menu, inventory, SnapshotSlots.INVENTORY);
-            menu.item(MAIN_ENDER_BUTTON, button(menuViewer, Material.ENDER_CHEST, "player.offline-ender-button",
-                    "player.offline-ender-lore"), click -> {
+                    Msg.unparsed("player", target.name()), Msg.unparsed("date", date())), rows);
+            items(menu, inventory, page);
+            menu.item(SlotLayout.bottom(rows, SlotLayout.BACK_COLUMN), button(menuViewer, Material.ENDER_CHEST,
+                    "player.offline-ender-button", "player.offline-ender-lore"), click -> {
                         if (allowInventory) {
-                            click.replace(enderPage());
+                            click.replace(enderPage(0));
                         } else {
                             click.error();
                         }
                     });
-            menu.item(MAIN_INFO, info(menuViewer));
-            menu.item(MAIN_CLOSE, ItemBuilder.of(Material.BARRIER)
+            navigation(menu, menuViewer, rows, inventory.size(), page, this::mainPage);
+            menu.item(SlotLayout.bottom(rows, SlotLayout.PAGE_COLUMN), info(menuViewer));
+            menu.item(SlotLayout.bottom(rows, SlotLayout.CLOSE_COLUMN), ItemBuilder.of(Material.BARRIER)
                     .name(ctx.messages().render(menuViewer, "core.menu.close")).build(), MenuClick::close);
             menu.onClose(this::onClose);
             return menu.build();
         };
     }
 
-    private MenuProvider enderPage() {
+    /**
+     * The ender section, sized from the snapshot: a three-row chest is one page, a six-row chest (54 slots, as on
+     * servers that enlarge ender chests) is two pages above the navigation row.
+     */
+    private MenuProvider enderPage(int page) {
         return menuViewer -> {
+            int rows = InventoryLayout.rows(ender.size());
             Menu.Builder menu = Menu.builder(ctx.messages().render(menuViewer, "player.offline-ender-title",
-                    Msg.unparsed("player", target.name()), Msg.unparsed("date", date())), ENDER_ROWS);
-            items(menu, ender, SnapshotSlots.ENDER);
+                    Msg.unparsed("player", target.name()), Msg.unparsed("date", date())), rows);
+            items(menu, ender, page);
             if (allowInventory) {
-                menu.item(ENDER_BACK, button(menuViewer, Material.ARROW, "player.offline-back-button",
-                        "player.offline-back-lore"), click -> click.replace(mainPage()));
+                menu.item(SlotLayout.bottom(rows, SlotLayout.BACK_COLUMN), button(menuViewer, Material.ARROW,
+                        "player.offline-back-button", "player.offline-back-lore"), click -> click.replace(mainPage(0)));
             }
-            menu.item(ENDER_INFO, info(menuViewer));
-            menu.item(ENDER_CLOSE, ItemBuilder.of(Material.BARRIER)
+            navigation(menu, menuViewer, rows, ender.size(), page, this::enderPage);
+            menu.item(SlotLayout.bottom(rows, SlotLayout.PAGE_COLUMN), info(menuViewer));
+            menu.item(SlotLayout.bottom(rows, SlotLayout.CLOSE_COLUMN), ItemBuilder.of(Material.BARRIER)
                     .name(ctx.messages().render(menuViewer, "core.menu.close")).build(), MenuClick::close);
             menu.onClose(this::onClose);
             return menu.build();
         };
     }
 
-    /** Snapshot slot counts, kept in one place for the menu and its bounds checks. */
-    private static final class SnapshotSlots {
-        static final int INVENTORY = InventorySnapshotService.INVENTORY_SLOTS;
-        static final int ENDER = InventorySnapshotService.ENDER_SLOTS;
-
-        private SnapshotSlots() {}
+    /** Previous/next buttons, only when the section needs more than one page. */
+    private void navigation(Menu.Builder menu, Player menuViewer, int rows, int slots, int page,
+            java.util.function.IntFunction<MenuProvider> pageProvider) {
+        int pages = InventoryLayout.pages(slots);
+        if (pages <= 1) {
+            return;
+        }
+        int current = InventoryLayout.clampPage(page, slots);
+        if (current > 0) {
+            menu.item(SlotLayout.bottom(rows, SlotLayout.PREVIOUS_COLUMN), ItemBuilder.of(Material.ARROW)
+                    .name(ctx.messages().render(menuViewer, "core.menu.previous")).build(),
+                    click -> click.replace(pageProvider.apply(current - 1)));
+        }
+        if (current < pages - 1) {
+            menu.item(SlotLayout.bottom(rows, SlotLayout.NEXT_COLUMN), ItemBuilder.of(Material.ARROW)
+                    .name(ctx.messages().render(menuViewer, "core.menu.next")).build(),
+                    click -> click.replace(pageProvider.apply(current + 1)));
+        }
     }
 
-    private void items(Menu.Builder menu, List<ItemStack> slots, int count) {
+    /** One page of a section; menu slot {@code n} shows section slot {@code first + n}. */
+    private void items(Menu.Builder menu, List<ItemStack> slots, int page) {
+        int first = InventoryLayout.first(page, slots.size());
+        int count = InventoryLayout.count(page, slots.size());
         for (int slot = 0; slot < count; slot++) {
-            ItemStack item = slot < slots.size() ? slots.get(slot) : null;
+            int index = first + slot;
+            ItemStack item = slots.get(index);
             ItemStack icon = item == null || item.isEmpty() ? ItemStack.empty() : item.clone();
             if (!editable) {
                 menu.item(slot, icon);
             } else {
-                int index = slot;
                 menu.item(slot, icon, click -> slotClick(click, slots, index));
             }
         }

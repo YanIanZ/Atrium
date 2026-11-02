@@ -180,7 +180,7 @@ final class StaffManager {
             inventory.setArmorContents(new ItemStack[inventory.getArmorContents().length]);
             inventory.setItemInOffHand(null);
         } catch (RuntimeException e) {
-            applyItems(player, snapshot, ExtraItemsMode.KEEP);
+            dropLeftovers(player, applyItems(player, snapshot, ExtraItemsMode.KEEP));
             throw e;
         }
         return snapshot;
@@ -456,13 +456,24 @@ final class StaffManager {
                 tools.scrub(item, 0);
             }
         }
-        InventoryMerge.Plan<ItemStack> plan = InventoryMerge.plan(normalize(StaffSnapshots.storage(snapshot)),
-                current, tools::isStaffItem, mode);
         var inventory = player.getInventory();
-        inventory.setStorageContents(fit(plan.target(), inventory.getStorageContents().length));
-        inventory.setArmorContents(fit(normalize(StaffSnapshots.armor(snapshot)),
-                inventory.getArmorContents().length));
-        ItemStack[] offhand = StaffSnapshots.offhand(snapshot);
+        // Restore into the live sizes: saved items past a smaller live section go into free storage slots, then
+        // to the leftovers that are dropped at the player's feet. Nothing saved is ever cut off.
+        int storageSize = inventory.getStorageContents().length;
+        int armorSize = inventory.getArmorContents().length;
+        ItemStack[] armor = normalize(StaffSnapshots.armor(snapshot));
+        ItemStack[] offhand = normalize(StaffSnapshots.offhand(snapshot));
+        List<ItemStack> extras = new ArrayList<>();
+        for (int slot = armorSize; slot < armor.length; slot++) {
+            extras.add(armor[slot]);
+        }
+        for (int slot = 1; slot < offhand.length; slot++) {
+            extras.add(offhand[slot]);
+        }
+        InventoryMerge.Plan<ItemStack> plan = InventoryMerge.plan(normalize(StaffSnapshots.storage(snapshot)),
+                storageSize, extras, current, tools::isStaffItem, mode);
+        inventory.setStorageContents(plan.target());
+        inventory.setArmorContents(fit(armor, armorSize));
         inventory.setItemInOffHand(offhand.length > 0 ? offhand[0] : null);
         return plan.leftovers();
     }

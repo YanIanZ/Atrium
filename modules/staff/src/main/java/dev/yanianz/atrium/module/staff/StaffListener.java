@@ -49,9 +49,6 @@ import org.jspecify.annotations.Nullable;
  * inventory) is deleted on first use instead of becoming a real item.
  */
 final class StaffListener implements Listener {
-    /** Size of the storage part (hotbar + main) of a player inventory; 36-39 armour, 40 off hand. */
-    private static final int STORAGE_SLOTS = 36;
-
     private final ModuleContext ctx;
     private final ConfigHandle<StaffConfig> config;
     private final StaffManager manager;
@@ -282,7 +279,7 @@ final class StaffListener implements Listener {
         }
         Inventory clicked = event.getClickedInventory();
         boolean ownStorage = clicked != null && clicked.equals(player.getInventory())
-                && event.getSlot() >= 0 && event.getSlot() < STORAGE_SLOTS;
+                && event.getSlot() >= 0 && event.getSlot() < storageSlots(player);
         boolean otherViewOpen = event.getView().getTopInventory().getType() != InventoryType.CRAFTING;
         if (!ToolClickPolicy.allowed(category(event), ownStorage, otherViewOpen,
                 kind(cursor), kind(current), kind(swapped))) {
@@ -439,5 +436,10 @@ final class StaffListener implements Listener {
             case DROP_ALL_CURSOR, DROP_ONE_CURSOR, DROP_ALL_SLOT, DROP_ONE_SLOT -> ToolClickPolicy.Category.DROP;
             default -> ToolClickPolicy.Category.OTHER;
         };
+    }
+
+    /** The storage part (hotbar + main) of the live inventory: 36 on a vanilla server, armour and off hand follow. */
+    private static int storageSlots(Player player) {
+        return player.getInventory().getStorageContents().length;
     }
 }

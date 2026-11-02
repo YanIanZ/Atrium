@@ -16,6 +16,8 @@ confirm-remove-all: "<prefix><warning>Jalankan perintah yang sama lagi dalam <hi
 confirm-clear-ender: "<prefix><warning>Jalankan perintah yang sama lagi dalam <highlight><seconds></highlight> detik untuk mencadangkan lalu mengosongkan ender chest <highlight><player></highlight>."
 loaded: "<prefix><success>Snapshot <highlight>#<id></highlight> dimuat ke <highlight><player></highlight> (<mode>). Cadangan: <highlight>#<backup></highlight>."
 loaded-target: "<prefix><warning>Administrator memulihkan snapshot inventaris <highlight>#<id></highlight> kepadamu."
+load-overflow: "<prefix><warning><highlight><stacks></highlight> tumpuk item dari snapshot itu tidak muat di jumlah slot <highlight><player></highlight> saat ini (misalnya ender chest yang lebih besar): <highlight><moved></highlight> dipindah ke ruang kosong inventaris, <highlight><dropped></highlight> dijatuhkan di kakinya."
+overflow-dropped-target: "<prefix><warning><highlight><dropped></highlight> tumpuk item yang dipulihkan tidak muat di inventarismu dan dijatuhkan di kakimu."
 backup-failed: "<prefix><error>Snapshot cadangan gagal disimpan, jadi tidak ada yang diubah. Periksa log server."
 merge-overflow: "<prefix><error>Item dari snapshot itu tidak muat di inventaris <highlight><player></highlight>. Tidak ada yang diubah; gunakan mode replace."
 removed: "<prefix><success>Snapshot <highlight>#<id></highlight> milik <highlight><player></highlight> dihapus."

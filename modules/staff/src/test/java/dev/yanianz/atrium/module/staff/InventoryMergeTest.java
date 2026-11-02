@@ -55,4 +55,29 @@ class InventoryMergeTest {
         assertArrayEquals(new String[] {null}, plan.target());
         assertTrue(plan.leftovers().isEmpty());
     }
+
+    @Test
+    void largerSavedStorageSpillsIntoEmptySlotsBeforeDropping() {
+        // Saved with 4 storage slots, restored where only 3 exist.
+        InventoryMerge.Plan<String> plan = InventoryMerge.plan(new String[] {"a", null, "c", "d"}, 3, List.of(),
+                new String[0], InventoryMergeTest::isTool, ExtraItemsMode.CLEAR);
+        assertArrayEquals(new String[] {"a", "d", "c"}, plan.target());
+        assertTrue(plan.leftovers().isEmpty());
+    }
+
+    @Test
+    void savedOverflowWinsOverNewItemsAndTheRestIsDropped() {
+        InventoryMerge.Plan<String> plan = InventoryMerge.plan(new String[] {"a", null, "c"}, 2,
+                List.of("armour-extra"), new String[] {"new"}, InventoryMergeTest::isTool, ExtraItemsMode.KEEP);
+        assertArrayEquals(new String[] {"a", "c"}, plan.target());
+        assertEquals(List.of("armour-extra", "new"), plan.leftovers());
+    }
+
+    @Test
+    void smallerSavedStorageIsPaddedToTheLiveSize() {
+        InventoryMerge.Plan<String> plan = InventoryMerge.plan(new String[] {"a"}, 3, List.of(),
+                new String[] {"new", TOOL}, InventoryMergeTest::isTool, ExtraItemsMode.KEEP);
+        assertArrayEquals(new String[] {"a", "new", null}, plan.target());
+        assertTrue(plan.leftovers().isEmpty());
+    }
 }

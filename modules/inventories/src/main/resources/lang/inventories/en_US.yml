@@ -16,6 +16,8 @@ confirm-remove-all: "<prefix><warning>Run the same command again within <highlig
 confirm-clear-ender: "<prefix><warning>Run the same command again within <highlight><seconds></highlight> seconds to back up and clear the ender chest of <highlight><player></highlight>."
 loaded: "<prefix><success>Loaded snapshot <highlight>#<id></highlight> into <highlight><player></highlight> (<mode>). Backup: <highlight>#<backup></highlight>."
 loaded-target: "<prefix><warning>An administrator restored inventory snapshot <highlight>#<id></highlight> to you."
+load-overflow: "<prefix><warning><highlight><stacks></highlight> stack(s) of that snapshot did not fit the current slot counts of <highlight><player></highlight> (for example a larger ender chest): <highlight><moved></highlight> moved into free inventory space, <highlight><dropped></highlight> dropped at their feet."
+overflow-dropped-target: "<prefix><warning><highlight><dropped></highlight> restored stack(s) did not fit your inventory and were dropped at your feet."
 backup-failed: "<prefix><error>The backup snapshot could not be saved, so nothing was changed. See the server log."
 merge-overflow: "<prefix><error>The items of that snapshot do not fit into the inventory of <highlight><player></highlight>. Nothing was changed; use the replace mode instead."
 removed: "<prefix><success>Deleted snapshot <highlight>#<id></highlight> of <highlight><player></highlight>."
