@@ -17,6 +17,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.permissions.PermissionDefault;
+import org.jspecify.annotations.Nullable;
 
 /** {@code /staffmode}, {@code /sudo}, {@code /commandspy} and {@code /spectate}. */
 final class StaffCommands {
@@ -26,13 +27,18 @@ final class StaffCommands {
     private final StaffManager manager;
     private final SpectateManager spectate;
     private final StaffStore store;
+    private final Patrol patrol;
+    private final SpeedMeter speedMeter;
 
-    StaffCommands(ModuleContext ctx, StaffManager manager, SpectateManager spectate, StaffStore store) {
+    StaffCommands(ModuleContext ctx, StaffManager manager, SpectateManager spectate, StaffStore store,
+            Patrol patrol, SpeedMeter speedMeter) {
         this.ctx = ctx;
         this.cmds = ctx.commands();
         this.manager = manager;
         this.spectate = spectate;
         this.store = store;
+        this.patrol = patrol;
+        this.speedMeter = speedMeter;
     }
 
     void register() {
@@ -69,6 +75,18 @@ final class StaffCommands {
                 .executes(this::stopSpectating)
                 .then(Commands.argument("player", ArgumentTypes.player()).executes(this::spectate))
                 .build(), "Spectate a player, or return to your previous location with /spectate"));
+        ctx.command(CommandSpec.of(Cmds.literal("patrol", Patrol.PERM_USE)
+                .executes(c -> patrol(c, null))
+                .then(Commands.argument("player", ArgumentTypes.player()).requires(Cmds.permission(Patrol.PERM_OTHERS))
+                        .executes(c -> patrol(c, cmds.argPlayer(c, "player"))))
+                .build(), "Visit the player who was patrolled least recently", "patrols"));
+        ctx.command(CommandSpec.of(Cmds.literal("speedmeter", "atrium.speedmeter")
+                .executes(this::speedToggle)
+                .then(Cmds.literal("off").executes(this::speedOff))
+                .then(Commands.argument("player", ArgumentTypes.player())
+                        .requires(Cmds.permission("atrium.speedmeter.others"))
+                        .executes(this::speedOf))
+                .build(), "Show your speed in the action bar, or a player's current speed"));
     }
 
     private int staffMode(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
@@ -206,6 +224,45 @@ final class StaffCommands {
         return Cmds.OK;
     }
 
+    // ---- patrol and speed ----
+
+    private int patrol(CommandContext<CommandSourceStack> c, @Nullable Player target)
+            throws CommandSyntaxException {
+        Player staff = cmds.player(c.getSource());
+        patrol.patrol(staff, target);
+        return Cmds.OK;
+    }
+
+    private int speedToggle(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        boolean enabled = speedMeter.toggle(player);
+        ctx.messages().send(player, enabled ? "staff.speed-on" : "staff.speed-off");
+        return Cmds.OK;
+    }
+
+    private int speedOff(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        speedMeter.stop(player);
+        ctx.messages().send(player, "staff.speed-off");
+        return Cmds.OK;
+    }
+
+    private int speedOf(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Player target = cmds.argPlayer(c, "player");
+        String name = target.getName();
+        speedMeter.measure(target).whenComplete((kmh, error) -> {
+            if (error != null) {
+                ctx.logger().warn("Reading the speed of {} failed", name, error);
+                reply(sender, "staff.speed-unknown", Msg.unparsed("player", name));
+                return;
+            }
+            reply(sender, "staff.speed-report", Msg.unparsed("player", name),
+                    Msg.unparsed("speed", dev.yanianz.atrium.module.staff.SpeedSamples.format(kmh)));
+        });
+        return Cmds.OK;
+    }
+
     private SuggestionProvider<CommandSourceStack> commandNames() {
         return (context, builder) -> {
             String remaining = builder.getRemainingLowerCase();
@@ -248,5 +305,10 @@ final class StaffCommands {
         ctx.permission("atrium.commandspy", PermissionDefault.OP, "See the commands other players run");
         ctx.permission("atrium.commandspy.exempt", PermissionDefault.FALSE, "Hide your commands from command spy");
         ctx.permission("atrium.spectate", PermissionDefault.OP, "Spectate players and return afterwards");
+        ctx.permission(Patrol.PERM_USE, PermissionDefault.OP, "Patrol the server with /patrol");
+        ctx.permission(Patrol.PERM_OTHERS, PermissionDefault.OP, "Patrol to a named player");
+        ctx.permission(Patrol.PERM_BYPASS, PermissionDefault.FALSE, "Never be chosen as a patrol target");
+        ctx.permission("atrium.speedmeter", PermissionDefault.TRUE, "Show your own speed with /speedmeter");
+        ctx.permission("atrium.speedmeter.others", PermissionDefault.OP, "Read another player's speed with /speedmeter <player>");
     }
 }

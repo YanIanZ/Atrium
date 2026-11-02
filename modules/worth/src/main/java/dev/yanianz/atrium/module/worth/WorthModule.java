@@ -67,7 +67,15 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
     private volatile PriceMaterials materials = PriceMaterials.empty();
     private volatile PriceTable prices = PriceTable.empty();
     private volatile ItemFactsReader reader = new ItemFactsReader(java.util.List.of());
+    private volatile Generation pendingGeneration;
     private final Object fileLock = new Object();
+
+    /** A computed generation plan waiting for {@code /generateworth confirm}. */
+    record Generation(List<PriceEntry> entries, int added, int updated, long createdAt) {
+        Generation {
+            entries = List.copyOf(entries);
+        }
+    }
 
     @Override
     public String id() {
@@ -112,6 +120,8 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
         ctx.permission("atrium.setworth", PermissionDefault.OP, "Set the price of the held item");
         ctx.permission("atrium.worth.engine", PermissionDefault.OP, "Show or switch the price engine");
         ctx.permission("atrium.worth.import", PermissionDefault.OP, "Import sell prices from another plugin");
+        ctx.permission("atrium.worth.generate", PermissionDefault.OP,
+                "Derive missing prices from recipes with /generateworth");
         ctx.permission("atrium.sell.limit.unlimited", PermissionDefault.FALSE, "No daily sell limit");
         new WorthCommands(ctx, this, sell, gui, store, engines, imports).register();
 
@@ -150,6 +160,26 @@ public final class WorthModule implements AtriumModule, Listener, WorthService {
 
     PriceImportService imports() {
         return imports;
+    }
+
+    /** Stores a plan until {@code /generateworth confirm}, replacing any earlier one. */
+    void pendingGeneration(@Nullable Generation generation) {
+        this.pendingGeneration = generation;
+    }
+
+    /** The stored plan when it is still fresh, otherwise {@code null} (an expired plan is dropped). */
+    @Nullable Generation takePendingGeneration() {
+        Generation current = pendingGeneration;
+        if (current == null) {
+            return null;
+        }
+        long maxAge = Math.max(1, Math.min(600, config.get().generateConfirmSeconds)) * 1000L;
+        if (System.currentTimeMillis() - current.createdAt() > maxAge) {
+            pendingGeneration = null;
+            return null;
+        }
+        pendingGeneration = null;
+        return current;
     }
 
     /** Active-engine price of an item of this stack. Call on the thread that owns the item. */

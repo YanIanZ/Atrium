@@ -13,6 +13,7 @@ public final class StaffModule implements AtriumModule {
     private ModuleContext ctx;
     private StaffManager manager;
     private SpectateManager spectate;
+    private SpeedMeter speed;
 
     @Override
     public String id() {
@@ -21,7 +22,7 @@ public final class StaffModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "Staff mode, sudo, command spy and spectate";
+        return "Staff mode, sudo, command spy, spectate, patrol and the speed meter";
     }
 
     @Override
@@ -42,7 +43,9 @@ public final class StaffModule implements AtriumModule {
         this.manager = new StaffManager(ctx, config, store, tools);
         this.spectate = new SpectateManager(ctx, store);
         ctx.listen(new StaffListener(ctx, config, manager, tools, store, spectate));
-        new StaffCommands(ctx, manager, spectate, store).register();
+        Patrol patrol = new Patrol(ctx, config::get);
+        this.speed = new SpeedMeter(ctx, config::get);
+        new StaffCommands(ctx, manager, spectate, store, patrol, speed).register();
         StaffCommands.registerPermissions(ctx);
 
         // Module (re)load while players are online: sessions left by the previous instance (disable only
@@ -57,6 +60,9 @@ public final class StaffModule implements AtriumModule {
 
     @Override
     public void disable() {
+        if (speed != null) {
+            speed.shutdown();
+        }
         if (spectate != null) {
             spectate.disable();
         }

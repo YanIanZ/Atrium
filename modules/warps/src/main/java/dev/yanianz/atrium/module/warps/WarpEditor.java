@@ -64,6 +64,18 @@ final class WarpEditor {
         } else {
             module.reply(sender, "warps.edit-permission", Msg.unparsed("permission", warp.permission()));
         }
+        double cost = module.config().cost(warp.key());
+        if (cost > 0) {
+            module.reply(sender, "warps.edit-cost", Msg.unparsed("cost", number(cost)));
+        } else {
+            module.reply(sender, "warps.edit-cost-free");
+        }
+        long cooldown = module.config().cooldownSeconds(warp.key());
+        module.reply(sender, "warps.edit-cooldown", Msg.number("seconds", cooldown));
+        int extra = module.extraLocations(warp.key()).size();
+        module.reply(sender, "warps.edit-locations", Msg.number("extra", extra),
+                Msg.number("total", extra + 1), Msg.unparsed("mode",
+                        module.config().randomMode == null ? "NON_REPEATING" : module.config().randomMode));
         WarpsConfig.Icon icon = module.config().icon(warp.key());
         if (icon == null) {
             module.reply(sender, "warps.edit-icon-default", Msg.unparsed("icon", module.config().defaultIcon));
@@ -198,6 +210,143 @@ final class WarpEditor {
         Player self = cmds.player(c.getSource());
         Warp warp = require(c, WarpEditPolicy.Action.ICON);
         return module.applyIcon(self, warp);
+    }
+
+    // ---- cost, cooldown and random locations ----
+
+    int costUsage(CommandContext<CommandSourceStack> c) {
+        module.reply(c.getSource().getSender(), "warps.usage-editwarpcost");
+        return Cmds.OK;
+    }
+
+    int cost(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Warp warp = require(c, WarpEditPolicy.Action.SETTINGS);
+        double amount = number(StringArgumentType.getString(c, "amount"), 1_000_000_000d,
+                () -> cmds.fail(c.getSource(), "warps.invalid-cost"));
+        module.saveCost(warp, amount).whenComplete((saved, error) -> {
+            if (error != null) {
+                ctx.logger().error("Saving the cost of warp {} failed", warp.name(), error);
+                module.reply(sender, "warps.save-failed");
+                return;
+            }
+            module.reply(sender, "warps.edit-cost-set", Msg.unparsed("warp", warp.name()),
+                    Msg.unparsed("cost", number(amount)));
+        });
+        return Cmds.OK;
+    }
+
+    int cooldownUsage(CommandContext<CommandSourceStack> c) {
+        module.reply(c.getSource().getSender(), "warps.usage-editwarpcooldown");
+        return Cmds.OK;
+    }
+
+    int cooldown(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Warp warp = require(c, WarpEditPolicy.Action.SETTINGS);
+        long seconds = (long) number(StringArgumentType.getString(c, "seconds"), 604_800d,
+                () -> cmds.fail(c.getSource(), "warps.invalid-cooldown"));
+        module.saveCooldown(warp, seconds).whenComplete((saved, error) -> {
+            if (error != null) {
+                ctx.logger().error("Saving the cooldown of warp {} failed", warp.name(), error);
+                module.reply(sender, "warps.save-failed");
+                return;
+            }
+            module.reply(sender, "warps.edit-cooldown-set", Msg.unparsed("warp", warp.name()),
+                    Msg.number("seconds", seconds));
+        });
+        return Cmds.OK;
+    }
+
+    int addLocation(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player self = cmds.player(c.getSource());
+        Warp warp = require(c, WarpEditPolicy.Action.LOCATIONS);
+        StoredLocation location = StoredLocation.of(self.getLocation());
+        module.addExtraLocation(warp, location).whenComplete((count, error) -> {
+            if (error != null) {
+                ctx.logger().error("Adding a random location to warp {} failed", warp.name(), error);
+                module.reply(self, "warps.save-failed");
+                return;
+            }
+            if (count < 0) {
+                module.reply(self, "warps.locations-full", Msg.number("max", SqlWarpLocations.MAX_LOCATIONS));
+                return;
+            }
+            module.reply(self, "warps.locations-added", Msg.unparsed("warp", warp.name()),
+                    Msg.number("count", count), Msg.number("total", count + 1),
+                    Msg.unparsed("world", location.world()), Msg.number("x", location.blockX()),
+                    Msg.number("y", location.blockY()), Msg.number("z", location.blockZ()));
+        });
+        return Cmds.OK;
+    }
+
+    int locations(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Warp warp = require(c);
+        StoredLocation primary = warp.location();
+        List<StoredLocation> extra = module.extraLocations(warp.key());
+        module.reply(sender, "warps.locations-header", Msg.unparsed("warp", warp.name()),
+                Msg.number("total", extra.size() + 1), Msg.unparsed("mode",
+                module.config().randomMode == null ? "NON_REPEATING" : module.config().randomMode));
+        module.reply(sender, "warps.locations-primary", Msg.number("index", 1),
+                Msg.unparsed("world", primary.world()), Msg.number("x", primary.blockX()),
+                Msg.number("y", primary.blockY()), Msg.number("z", primary.blockZ()));
+        int index = 2;
+        for (StoredLocation location : extra) {
+            module.reply(sender, "warps.locations-entry", Msg.number("index", index++),
+                    Msg.unparsed("world", location.world()), Msg.number("x", location.blockX()),
+                    Msg.number("y", location.blockY()), Msg.number("z", location.blockZ()));
+        }
+        return Cmds.OK;
+    }
+
+    int clearLocationsConfirm(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Warp warp = require(c, WarpEditPolicy.Action.LOCATIONS);
+        Component confirm = ctx.messages().render(sender, "warps.locations-clear-button")
+                .clickEvent(ClickEvent.runCommand("/editwarp " + warp.name() + " clearlocations confirm"))
+                .hoverEvent(HoverEvent.showText(ctx.messages().render(sender, "warps.locations-clear-hover")));
+        module.reply(sender, "warps.locations-clear-confirm", Msg.unparsed("warp", warp.name()),
+                Msg.component("confirm", confirm));
+        return Cmds.OK;
+    }
+
+    int clearLocations(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Warp warp = require(c, WarpEditPolicy.Action.LOCATIONS);
+        module.clearExtraLocations(warp).whenComplete((removed, error) -> {
+            if (error != null) {
+                ctx.logger().error("Removing the extra locations of warp {} failed", warp.name(), error);
+                module.reply(sender, "warps.save-failed");
+                return;
+            }
+            module.reply(sender, "warps.locations-cleared", Msg.unparsed("warp", warp.name()),
+                    Msg.number("count", removed == null ? 0 : removed));
+        });
+        return Cmds.OK;
+    }
+
+    /**
+     * Parses a non-negative decimal that must not exceed {@code max}. The failure is created lazily so the
+     * command can report its own message key.
+     */
+    private static double number(String raw, double max, java.util.function.Supplier<CommandSyntaxException> fail)
+            throws CommandSyntaxException {
+        double value;
+        try {
+            value = Double.parseDouble(raw);
+        } catch (NumberFormatException e) {
+            throw fail.get();
+        }
+        if (!Double.isFinite(value) || value < 0 || value > max) {
+            throw fail.get();
+        }
+        return value;
+    }
+
+    /** Plain text for a configured amount (no trailing ",0"). */
+    private static String number(double value) {
+        return java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 
     int deleteConfirm(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {

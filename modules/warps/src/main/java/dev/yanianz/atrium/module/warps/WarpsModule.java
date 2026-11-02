@@ -4,6 +4,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
+import dev.yanianz.atrium.api.economy.EconomyService;
 import dev.yanianz.atrium.api.teleport.ExtendedTeleportService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
 import dev.yanianz.atrium.api.teleport.TeleportOptions;
@@ -24,6 +25,7 @@ import dev.yanianz.atrium.core.permission.Permissions;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -38,6 +40,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.JoinConfiguration;
@@ -66,6 +69,9 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
     static final String PERM_CREATE = "atrium.warps.create";
     /** Numeric limit prefix: atrium.warps.limit.<n>, atrium.warps.limit.unlimited. */
     static final String LIMIT_PREFIX = "atrium.warps.limit";
+    /** Bypasses per-warp costs and cooldowns. */
+    static final String PERM_FREE = "atrium.warps.free";
+    static final String PERM_WARPGROUPS = "atrium.warpgroups";
 
     private ModuleContext ctx;
     private Cmds cmds;
@@ -74,6 +80,10 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
     private WarpManager manager;
     private ExtendedTeleportService teleport;
     private WarpMenu menu;
+    private SqlWarpLocations locationStore;
+    private WarpDecks decks;
+    /** Extra random locations per warp key, loaded once at enable and updated after every change. */
+    private volatile Map<String, List<StoredLocation>> extraLocations = Map.of();
     private final Object iconLock = new Object();
 
     @Override
@@ -83,7 +93,8 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
 
     @Override
     public String description() {
-        return "Warps: /warp /warps /setwarp /delwarp /renamewarp /setwarpicon with a chest menu and per-warp permissions.";
+        return "Warps: /warp /warps /warpgroups /setwarp /delwarp /renamewarp /setwarpicon with a chest menu, "
+                + "per-warp permissions, costs, cooldowns and random-location decks.";
     }
 
     @Override
@@ -101,7 +112,15 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
         ctx.migrate(SqlWarpStorage.MIGRATIONS);
         this.manager = new WarpManager(new SqlWarpStorage(ctx.database()), event -> event.callEvent(), event -> event.callEvent());
         manager.load().get(30, TimeUnit.SECONDS);
-        this.menu = new WarpMenu(ctx, this, config, teleport);
+        this.locationStore = new SqlWarpLocations(ctx.database());
+        this.extraLocations = locationStore.loadAll().get(30, TimeUnit.SECONDS);
+        this.decks = new WarpDecks(config::get);
+        ctx.listen(decks);
+        this.menu = new WarpMenu(ctx, this, config);
+        String randomProblem = config.get().randomModeProblem();
+        if (randomProblem != null) {
+            ctx.logger().warn("modules/warps.yml {}", randomProblem);
+        }
 
         ctx.permission(PERM_WARP, PermissionDefault.TRUE, "Use /warp and /warps");
         ctx.permission(PERM_ALL, PermissionDefault.OP, "Use every warp when per-warp permissions are required");
@@ -113,6 +132,8 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
         ctx.permission(PERM_CREATE, PermissionDefault.TRUE,
                 "Create, move, rename and delete your own warps, up to your atrium.warps.limit");
         ctx.permission(LIMIT_PREFIX + ".unlimited", PermissionDefault.OP, "Own unlimited warps");
+        ctx.permission(PERM_FREE, PermissionDefault.FALSE, "Bypass warp costs and cooldowns");
+        ctx.permission(PERM_WARPGROUPS, PermissionDefault.TRUE, "List the warp groups and their warps");
 
         ctx.command(CommandSpec.of(Cmds.literal("warp", PERM_WARP)
                 .executes(c -> listText(c, null))
@@ -126,6 +147,11 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                 .then(Commands.argument("category", StringArgumentType.word()).suggests(categories())
                         .executes(c -> show(c, StringArgumentType.getString(c, "category"))))
                 .build(), "Open the warp menu (or list warps in chat), optionally for one category"));
+        ctx.command(CommandSpec.of(Cmds.literal("warpgroups", PERM_WARPGROUPS)
+                .executes(this::warpGroups)
+                .then(Commands.argument("group", StringArgumentType.word()).suggests(categories())
+                        .executes(c -> listText(c, StringArgumentType.getString(c, "group"))))
+                .build(), "List the warp groups (categories) with their warp counts", "warpgroup"));
         ctx.command(CommandSpec.of(Cmds.literal("setwarp")
                 .requires(c -> c.getSender().hasPermission(PERM_SETWARP) || c.getSender().hasPermission(PERM_CREATE))
                 .executes(c -> usage(c, "warps.usage-setwarp"))
@@ -168,6 +194,18 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                                         .suggests(Cmds.suggest(() -> List.of("none")))
                                         .executes(editor::permission)))
                         .then(Cmds.literal("icon").executes(editor::icon))
+                        .then(Cmds.literal("cost").executes(editor::costUsage)
+                                .then(Commands.argument("amount", StringArgumentType.word())
+                                        .suggests(Cmds.suggest(() -> List.of("0", "10", "100", "500")))
+                                        .executes(editor::cost)))
+                        .then(Cmds.literal("cooldown").executes(editor::cooldownUsage)
+                                .then(Commands.argument("seconds", StringArgumentType.word())
+                                        .suggests(Cmds.suggest(() -> List.of("0", "10", "30", "60", "300")))
+                                        .executes(editor::cooldown)))
+                        .then(Cmds.literal("addlocation").executes(editor::addLocation))
+                        .then(Cmds.literal("locations").executes(editor::locations))
+                        .then(Cmds.literal("clearlocations").executes(editor::clearLocationsConfirm)
+                                .then(Cmds.literal("confirm").executes(editor::clearLocations)))
                         .then(Cmds.literal("delete")
                                 .executes(editor::deleteConfirm)
                                 .then(Cmds.literal("confirm").executes(editor::delete))))
@@ -350,28 +388,177 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
         Warp warp = manager.get(name).filter(w -> canUse(sender, w))
                 // Unknown and forbidden warps get the same answer, so hidden warps stay hidden.
                 .orElseThrow(() -> cmds.fail(c.getSource(), "warps.not-found", Msg.unparsed("warp", name)));
-        Optional<Location> location = warp.location().toLocation();
-        // A warp in a world that is not loaded may be in an AWF world that loads on demand (WorldResolver).
-        var storedTeleports = ctx.services().get(dev.yanianz.atrium.api.teleport.StoredTeleportService.class);
-        if (location.isEmpty() && storedTeleports.isEmpty()) {
-            throw cmds.fail(c.getSource(), "warps.world-not-loaded", Msg.unparsed("world", warp.location().world()));
-        }
-        TeleportOptions options = self || config.get().warmupWhenSendingOthers ? TeleportOptions.DEFAULT : TeleportOptions.IMMEDIATE;
-        java.util.concurrent.CompletableFuture<TeleportResult> move = location.isPresent()
-                ? teleport.teleport(target, location.get(), TeleportCause.WARP, options)
-                : storedTeleports.get().teleport(target, warp.location(), TeleportCause.WARP, options)
-                        .thenApply(dev.yanianz.atrium.api.teleport.StoredTeleportService.StoredTeleportResult::result);
-        move.thenAccept(result -> {
-            if (result != TeleportResult.SUCCESS) {
+        useWarp(target, warp, self ? null : sender);
+        return Cmds.OK;
+    }
+
+    /**
+     * Teleports {@code target} to {@code warp} and applies its cost and cooldown. Runs on the player's thread.
+     *
+     * <p>The order is fixed: cooldown first (a waiting player loses no money), then the charge, then the
+     * teleport. A teleport that does not succeed refunds the charge and releases the cooldown, so a failed
+     * move never costs anything. {@code actor} is {@code null} when the player warps themselves and the
+     * sending staff member otherwise.
+     */
+    void useWarp(Player target, Warp warp, @Nullable CommandSender actor) {
+        boolean self = actor == null || actor.equals(target);
+        WarpsConfig cfg = config.get();
+        int cooldownSeconds = (int) Math.min(Integer.MAX_VALUE, cfg.cooldownSeconds(warp.key()));
+        boolean bypass = target.hasPermission(PERM_FREE);
+        if (cooldownSeconds > 0 && !bypass) {
+            Duration left = ctx.cooldowns().tryAcquire(ctx.users().user(target), "warps:" + warp.key(),
+                    Duration.ofSeconds(cooldownSeconds));
+            if (!left.isZero()) {
+                messages.send(target, "warps.cooldown", Msg.unparsed("warp", warp.name()),
+                        Msg.unparsed("time", duration(left)));
                 return;
             }
-            messages.send(target, "warps.teleported", Msg.unparsed("warp", warp.name()));
-            if (!self) {
-                reply(sender, "warps.teleported-other", Msg.unparsed("warp", warp.name()),
-                        Msg.unparsed("player", target.getName()));
+        }
+        double configuredCost = cfg.cost(warp.key());
+        boolean charge = configuredCost > 0 && !bypass && (self || cfg.chargeWhenSendingOthers);
+        if (!charge) {
+            startTeleport(target, warp, actor, self, 0);
+            return;
+        }
+        EconomyService economy = ctx.services().get(EconomyService.class).orElse(null);
+        if (economy == null) {
+            ctx.logger().warn("Warp {} has a cost but the economy module is not enabled; the warp is refused",
+                    warp.name());
+            messages.send(target, "warps.economy-missing");
+            releaseCooldown(target, warp);
+            return;
+        }
+        BigDecimal amount = BigDecimal.valueOf(configuredCost);
+        economy.withdraw(target.getUniqueId(), amount, "warp " + warp.name())
+                .whenComplete((result, error) -> {
+                    boolean paid = error == null && result != null && result.success();
+                    if (paid && !onPlayerThread(target, () ->
+                            startTeleport(target, warp, actor, self, configuredCost))) {
+                        // The player left while the charge was in flight: give the money back, the move is lost.
+                        refund(target, warp, configuredCost);
+                        return;
+                    }
+                    if (paid) {
+                        return;
+                    }
+                    if (!onPlayerThread(target, () -> {
+                        if (error != null) {
+                            ctx.logger().error("Charging {} for warp {} failed", target.getName(), warp.name(), error);
+                            messages.send(target, "warps.cost-failed");
+                        } else {
+                            messages.send(target, "warps.cost-insufficient",
+                                    Msg.unparsed("warp", warp.name()),
+                                    Msg.unparsed("cost", economy.format(amount)),
+                                    Msg.unparsed("balance", economy.format(result.balance())));
+                        }
+                        releaseCooldown(target, warp);
+                    })) {
+                        // Nothing to tell an offline player; no money was taken.
+                    }
+                });
+    }
+
+    /** Performs the move once it is paid for (or free) and refunds on failure. Player thread. */
+    private void startTeleport(Player target, Warp warp, @Nullable CommandSender actor, boolean self, double paid) {
+        StoredLocation chosen = pickLocation(target, warp);
+        Optional<Location> location = chosen.toLocation();
+        var storedTeleports = ctx.services().get(dev.yanianz.atrium.api.teleport.StoredTeleportService.class);
+        if (location.isEmpty() && storedTeleports.isEmpty()) {
+            refund(target, warp, paid);
+            messages.send(target, "warps.world-not-loaded", Msg.unparsed("world", chosen.world()));
+            return;
+        }
+        TeleportOptions options = self || config.get().warmupWhenSendingOthers
+                ? TeleportOptions.DEFAULT : TeleportOptions.IMMEDIATE;
+        CompletableFuture<TeleportResult> move = location.isPresent()
+                ? teleport.teleport(target, location.get(), TeleportCause.WARP, options)
+                : storedTeleports.get().teleport(target, chosen, TeleportCause.WARP, options)
+                        .thenApply(dev.yanianz.atrium.api.teleport.StoredTeleportService.StoredTeleportResult::result);
+        move.whenComplete((result, error) -> {
+            if (error != null || result != TeleportResult.SUCCESS) {
+                if (error != null) {
+                    ctx.logger().warn("Teleporting {} to warp {} failed", target.getName(), warp.name(), error);
+                }
+                // The refund is a balance write and works even when the player already left.
+                refund(target, warp, paid);
+                onPlayerThread(target, () -> releaseCooldown(target, warp));
+                return;
             }
+            onPlayerThread(target, () -> {
+                messages.send(target, "warps.teleported", Msg.unparsed("warp", warp.name()));
+                if (!self && actor != null) {
+                    reply(actor, "warps.teleported-other", Msg.unparsed("warp", warp.name()),
+                            Msg.unparsed("player", target.getName()));
+                }
+            });
         });
-        return Cmds.OK;
+    }
+
+    /** The warp's own location plus its extra locations, in a stable order. */
+    private List<StoredLocation> pool(Warp warp) {
+        List<StoredLocation> extra = extraLocations.getOrDefault(warp.key(), List.of());
+        if (extra.isEmpty()) {
+            return List.of(warp.location());
+        }
+        List<StoredLocation> pool = new ArrayList<>(extra.size() + 1);
+        pool.add(warp.location());
+        pool.addAll(extra);
+        return List.copyOf(pool);
+    }
+
+    private StoredLocation pickLocation(Player player, Warp warp) {
+        List<StoredLocation> pool = pool(warp);
+        return pool.get(decks.choose(player, warp.key(), pool.size()));
+    }
+
+    private void refund(Player target, Warp warp, double paid) {
+        if (paid <= 0) {
+            return;
+        }
+        EconomyService economy = ctx.services().get(EconomyService.class).orElse(null);
+        if (economy == null) {
+            return;
+        }
+        BigDecimal amount = BigDecimal.valueOf(paid);
+        economy.deposit(target.getUniqueId(), amount, "warp refund " + warp.name())
+                .whenComplete((result, error) -> {
+                    if (error != null || result == null || !result.success()) {
+                        ctx.logger().error("Refunding {} of warp {} to {} failed; refund manually", amount,
+                                warp.name(), target.getName(), error);
+                    }
+                });
+    }
+
+    private void releaseCooldown(Player target, Warp warp) {
+        if (!target.isOnline()) {
+            return;
+        }
+        ctx.cooldowns().clear(ctx.users().user(target), "warps:" + warp.key());
+    }
+
+    /**
+     * Runs {@code task} on the player's own thread. Returns {@code false} when the player already left (or the
+     * schedule failed), so the caller can refund instead of losing the money.
+     */
+    private boolean onPlayerThread(Player player, Runnable task) {
+        if (!player.isOnline()) {
+            return false;
+        }
+        try {
+            ctx.scheduler().entity(player, task, null);
+            return true;
+        } catch (RuntimeException error) {
+            ctx.logger().debug("Could not schedule a warp result for {}", player.getName(), error);
+            return false;
+        }
+    }
+
+    /** A short "3m 12s" style duration for messages. */
+    static String duration(Duration duration) {
+        long seconds = Math.max(0, duration.toSeconds());
+        long minutes = seconds / 60;
+        long rest = seconds % 60;
+        return minutes > 0 ? minutes + "m " + rest + "s" : rest + "s";
     }
 
     // ---- /warps ----
@@ -422,6 +609,34 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                     Msg.number("count", warps.size()),
                     Msg.component("warps", Component.join(JoinConfiguration.separator(separator), entries))));
         });
+        return Cmds.OK;
+    }
+
+    /** Lists every warp group the sender may use, with a clickable count; empty groups are left out. */
+    private int warpGroups(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        Map<String, Integer> counts = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (Warp warp : manager.all()) {
+            if (canUse(sender, warp)) {
+                counts.merge(warp.category(), 1, Integer::sum);
+            }
+        }
+        messages.send(sender, "warps.groups-header", Msg.number("groups", counts.size()),
+                Msg.number("warps", counts.values().stream().mapToInt(Integer::intValue).sum()));
+        if (counts.isEmpty()) {
+            messages.send(sender, "warps.groups-empty");
+            return Cmds.OK;
+        }
+        Component separator = messages.render(sender, "warps.list-separator");
+        List<Component> entries = new ArrayList<>();
+        counts.forEach((group, count) -> entries.add(messages.render(sender, "warps.groups-entry",
+                        Msg.unparsed("group", group), Msg.number("count", count))
+                // Group names are validated ([A-Za-z0-9_-]), so they are safe inside a command.
+                .clickEvent(ClickEvent.runCommand("/warps " + group))
+                .hoverEvent(HoverEvent.showText(messages.render(sender, "warps.groups-hover",
+                        Msg.unparsed("group", group), Msg.number("count", count))))));
+        sender.sendMessage(messages.render(sender, "warps.groups-list",
+                Msg.component("groups", Component.join(JoinConfiguration.separator(separator), entries))));
         return Cmds.OK;
     }
 
@@ -541,6 +756,7 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                 case LIMIT_REACHED -> "warps.limit-reached";
             };
             if (outcome == WarpManager.Outcome.RENAMED && newName != null) {
+                moveExtraLocations(name, newName);
                 updateIcons(icons -> {
                     WarpsConfig.Icon icon = icons.remove(Warp.key(name));
                     if (icon != null) {
@@ -551,6 +767,7 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                     return false;
                 });
             } else if (outcome == WarpManager.Outcome.DELETED) {
+                forgetExtraLocations(name);
                 updateIcons(icons -> icons.remove(Warp.key(name))).exceptionally(iconError -> {
                     ctx.logger().warn("Removing the icon of deleted warp {} failed", name, iconError);
                     return false;
@@ -572,34 +789,125 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
         }
     }
 
+    // ---- random locations and per-warp settings ----
+
+    /** Extra random locations of a warp, in the order they were added. */
+    List<StoredLocation> extraLocations(String warpKey) {
+        return extraLocations.getOrDefault(warpKey, List.of());
+    }
+
+    /** Size of the location deck: the warp's own location plus every extra one. */
+    int poolSize(Warp warp) {
+        return 1 + extraLocations(warp.key()).size();
+    }
+
+    /** Appends a location; completes with the new pool size, or -1 when the warp is already full. */
+    CompletableFuture<Integer> addExtraLocation(Warp warp, StoredLocation location) {
+        return locationStore.add(warp.key(), location).thenApply(count -> {
+            if (count <= 0) {
+                return -1;
+            }
+            Map<String, List<StoredLocation>> next = new LinkedHashMap<>(extraLocations);
+            List<StoredLocation> list = new ArrayList<>(next.getOrDefault(warp.key(), List.of()));
+            list.add(location);
+            next.put(warp.key(), List.copyOf(list));
+            extraLocations = Map.copyOf(next);
+            return list.size();
+        });
+    }
+
+    /** Removes every extra location; completes with the number of removed rows. */
+    CompletableFuture<Integer> clearExtraLocations(Warp warp) {
+        return locationStore.clear(warp.key()).thenApply(removed -> {
+            Map<String, List<StoredLocation>> next = new LinkedHashMap<>(extraLocations);
+            next.remove(warp.key());
+            extraLocations = Map.copyOf(next);
+            return removed;
+        });
+    }
+
+    private void moveExtraLocations(String from, String to) {
+        String oldKey = Warp.key(from);
+        String newKey = Warp.key(to);
+        locationStore.rename(oldKey, newKey).whenComplete((moved, error) -> {
+            if (error != null) {
+                ctx.logger().warn("Moving the extra locations of warp {} to {} failed", from, to, error);
+                return;
+            }
+            Map<String, List<StoredLocation>> next = new LinkedHashMap<>(extraLocations);
+            List<StoredLocation> list = next.remove(oldKey);
+            if (list != null) {
+                next.put(newKey, list);
+            }
+            extraLocations = Map.copyOf(next);
+        });
+    }
+
+    private void forgetExtraLocations(String name) {
+        String key = Warp.key(name);
+        locationStore.clear(key).whenComplete((removed, error) -> {
+            if (error != null) {
+                ctx.logger().warn("Removing the extra locations of warp {} failed", name, error);
+                return;
+            }
+            Map<String, List<StoredLocation>> next = new LinkedHashMap<>(extraLocations);
+            next.remove(key);
+            extraLocations = Map.copyOf(next);
+        });
+    }
+
+    CompletableFuture<Boolean> saveCost(Warp warp, double cost) {
+        return updateConfig(current -> {
+            Map<String, Double> costs = current.costs == null ? new LinkedHashMap<>() : new LinkedHashMap<>(current.costs);
+            // An explicit 0 is kept: it makes this warp free even when a default cost is configured.
+            costs.put(warp.key(), Math.max(0, cost));
+            current.costs = costs;
+        });
+    }
+
+    CompletableFuture<Boolean> saveCooldown(Warp warp, long seconds) {
+        return updateConfig(current -> {
+            Map<String, Long> cooldowns = current.cooldowns == null ? new LinkedHashMap<>()
+                    : new LinkedHashMap<>(current.cooldowns);
+            cooldowns.put(warp.key(), Math.max(0, seconds));
+            current.cooldowns = cooldowns;
+        });
+    }
+
     /**
-     * Applies {@code change} to the icons of warps.yml, writes the file on the I/O executor and reloads
-     * the config. Nothing changes in memory when the write fails. All icon writes share one lock, so two
+     * Applies {@code change} to a fresh copy of warps.yml, writes the file on the I/O executor and reloads the
+     * config. Nothing changes in memory when the write fails. All config writes share one lock, so two
      * commands cannot lose each other's change.
      */
-    CompletableFuture<Boolean> updateIcons(Consumer<Map<String, WarpsConfig.Icon>> change) {
+    CompletableFuture<Boolean> updateConfig(Consumer<WarpsConfig> change) {
         return ctx.scheduler().supplyIo(() -> {
             synchronized (iconLock) {
-                WarpsConfig current = config.get();
-                Map<String, WarpsConfig.Icon> previous = current.icons;
-                Map<String, WarpsConfig.Icon> next = new LinkedHashMap<>(previous == null ? Map.of() : previous);
-                change.accept(next);
-                if (next.equals(previous)) {
-                    return Boolean.TRUE;
-                }
-                current.icons = next;
+                YamlConfigurationLoader loader = ConfigService.loader(config.path());
                 try {
-                    YamlConfigurationLoader loader = ConfigService.loader(config.path());
                     CommentedConfigurationNode node = loader.load();
-                    node.set(WarpsConfig.class, current);
+                    WarpsConfig next = node.empty() ? new WarpsConfig() : node.get(WarpsConfig.class);
+                    if (next == null) {
+                        next = new WarpsConfig();
+                    }
+                    change.accept(next);
+                    node.set(WarpsConfig.class, next);
                     loader.save(node);
                     config.reload();
                     return Boolean.TRUE;
                 } catch (Exception e) {
-                    current.icons = previous;
-                    throw new java.util.concurrent.CompletionException("Saving the warp icons failed", e);
+                    throw new java.util.concurrent.CompletionException("Saving warps.yml failed", e);
                 }
             }
+        });
+    }
+
+    /** Applies {@code change} to the icon map (see {@link #updateConfig}). */
+    CompletableFuture<Boolean> updateIcons(Consumer<Map<String, WarpsConfig.Icon>> change) {
+        return updateConfig(current -> {
+            Map<String, WarpsConfig.Icon> icons = current.icons == null ? new LinkedHashMap<>()
+                    : new LinkedHashMap<>(current.icons);
+            change.accept(icons);
+            current.icons = icons;
         });
     }
 }

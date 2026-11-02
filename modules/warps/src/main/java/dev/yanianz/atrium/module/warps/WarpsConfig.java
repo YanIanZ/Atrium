@@ -40,6 +40,77 @@ public class WarpsConfig {
             + "for no limit.")
     public int defaultPlayerWarpLimit = 2;
 
+    @Comment("Teleport cost of a warp that has no entry under 'costs', in server currency. 0 is free.\n"
+            + "The teleporting player pays; a failed teleport is refunded. Holders of atrium.warps.free never pay.")
+    public double defaultCost = 0;
+
+    @Comment("Per-warp teleport cost, overriding default-cost. Keys are warp names (case-insensitive).\n"
+            + "A value of 0 makes that warp free.")
+    public Map<String, Double> costs = new LinkedHashMap<>();
+
+    @Comment("Cooldown of a warp that has no entry under 'cooldowns', in seconds. 0 disables the cooldown.\n"
+            + "Cooldowns are per player and persist across restarts; atrium.warps.free bypasses them.")
+    public long defaultCooldownSeconds = 0;
+
+    @Comment("Per-warp cooldown in seconds, overriding default-cooldown-seconds (case-insensitive warp names).")
+    public Map<String, Long> cooldowns = new LinkedHashMap<>();
+
+    @Comment("Charge the player who is sent to a warp when a staff member uses /warp <name> <player>.\n"
+            + "When false, sending another player is free for them (the sender is never charged).")
+    public boolean chargeWhenSendingOthers = false;
+
+    @Comment("How the random-location deck of a warp behaves when extra locations were added with\n"
+            + "/editwarp <warp> addlocation: NON_REPEATING hands out every location once before shuffling\n"
+            + "again, REPEATING picks a random location every time (a location can repeat twice in a row).")
+    public String randomMode = "NON_REPEATING";
+
+    /** Why {@link #randomMode} is invalid, or {@code null} when it is usable. */
+    public String randomModeProblem() {
+        String mode = randomMode == null ? "" : randomMode.strip().toUpperCase(Locale.ROOT);
+        return mode.equals("NON_REPEATING") || mode.equals("REPEATING") ? null
+                : "random-mode must be NON_REPEATING or REPEATING";
+    }
+
+    public boolean repeatingRandomLocations() {
+        return randomMode != null && randomMode.strip().equalsIgnoreCase("REPEATING");
+    }
+
+    /**
+     * The configured cost of {@code warpKey}, or {@link #defaultCost} when none was set. An explicit entry of
+     * 0 makes the warp free even when a default cost is configured.
+     */
+    public double cost(String warpKey) {
+        Double exact = lookup(costs, warpKey);
+        if (exact != null) {
+            return Double.isFinite(exact) && exact > 0 ? exact : 0;
+        }
+        return Math.max(0, defaultCost);
+    }
+
+    /** The cooldown of {@code warpKey} in seconds; an explicit entry of 0 disables it. */
+    public long cooldownSeconds(String warpKey) {
+        Long exact = lookup(cooldowns, warpKey);
+        return exact != null ? Math.max(0, exact) : Math.max(0, defaultCooldownSeconds);
+    }
+
+    /** Case-insensitive lookup of one map entry; a blank/absent key returns {@code null}. */
+    static <T> T lookup(Map<String, T> map, String key) {
+        if (map == null || key == null) {
+            return null;
+        }
+        T exact = map.get(key);
+        if (exact != null) {
+            return exact;
+        }
+        String wanted = key.toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, T> entry : map.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().toLowerCase(Locale.ROOT).equals(wanted)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
     /** The configured icon of {@code warpKey}, or null to use {@link #defaultIcon}. */
     public Icon icon(String warpKey) {
         if (icons == null) {

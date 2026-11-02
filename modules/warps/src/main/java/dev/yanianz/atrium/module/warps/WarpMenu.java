@@ -1,9 +1,5 @@
 package dev.yanianz.atrium.module.warps;
 
-import dev.yanianz.atrium.api.teleport.ExtendedTeleportService;
-import dev.yanianz.atrium.api.teleport.TeleportOptions;
-import dev.yanianz.atrium.api.teleport.TeleportService.TeleportCause;
-import dev.yanianz.atrium.api.teleport.TeleportService.TeleportResult;
 import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.menu.Button;
 import dev.yanianz.atrium.core.menu.ItemBuilder;
@@ -20,7 +16,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import net.kyori.adventure.text.Component;
-import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -32,24 +27,24 @@ import org.jspecify.annotations.Nullable;
  * cancels all clicks and drags. A click never trusts the item shown when the menu was drawn: the warp is looked
  * up again and the permission is checked again, so a warp removed or hidden in the meantime cannot be used
  * through an old menu. Page flips re-read the warp list.
+ *
+ * <p>A click goes through the same {@link WarpsModule#useWarp} path as {@code /warp}, so cost, cooldown,
+ * random-location decks and the warmup rules cannot differ between the command and the menu.
  */
 final class WarpMenu {
     private final ModuleContext ctx;
     private final WarpsModule module;
     private final Messages messages;
     private final ConfigHandle<WarpsConfig> config;
-    private final ExtendedTeleportService teleport;
 
     /** A header row (category) or a warp row of the flattened page list. */
     private record Row(String category, int categoryCount, @Nullable Warp warp) {}
 
-    WarpMenu(ModuleContext ctx, WarpsModule module, ConfigHandle<WarpsConfig> config,
-            ExtendedTeleportService teleport) {
+    WarpMenu(ModuleContext ctx, WarpsModule module, ConfigHandle<WarpsConfig> config) {
         this.ctx = ctx;
         this.module = module;
         this.messages = ctx.messages();
         this.config = config;
-        this.teleport = teleport;
     }
 
     void open(Player viewer, @Nullable String category) {
@@ -132,17 +127,34 @@ final class WarpMenu {
             }
         }
         var location = warp.location();
+        List<Component> lore = new ArrayList<>(List.of(
+                messages.render(viewer, "warps.gui-item-location", Msg.unparsed("world", location.world()),
+                        Msg.number("x", location.blockX()), Msg.number("y", location.blockY()),
+                        Msg.number("z", location.blockZ())),
+                messages.render(viewer, "warps.gui-item-category", Msg.unparsed("category", warp.category()))));
+        double cost = cfg.cost(warp.key());
+        if (cost > 0) {
+            lore.add(messages.render(viewer, "warps.gui-item-cost", Msg.unparsed("cost", number(cost))));
+        }
+        long cooldown = cfg.cooldownSeconds(warp.key());
+        if (cooldown > 0) {
+            lore.add(messages.render(viewer, "warps.gui-item-cooldown", Msg.number("seconds", cooldown)));
+        }
+        int locations = module.poolSize(warp);
+        if (locations > 1) {
+            lore.add(messages.render(viewer, "warps.gui-item-locations", Msg.number("count", locations)));
+        }
+        lore.add(Component.empty());
+        lore.add(messages.render(viewer, "warps.gui-item-click"));
         return ItemBuilder.from(item)
                 .name(messages.render(viewer, "warps.gui-item-name", Msg.unparsed("warp", warp.name())))
-                .lore(List.of(
-                        messages.render(viewer, "warps.gui-item-location", Msg.unparsed("world", location.world()),
-                                Msg.number("x", location.blockX()), Msg.number("y", location.blockY()),
-                                Msg.number("z", location.blockZ())),
-                        messages.render(viewer, "warps.gui-item-category", Msg.unparsed("category", warp.category())),
-                        Component.empty(),
-                        messages.render(viewer, "warps.gui-item-click")))
+                .lore(lore)
                 .hideDetails()
                 .build();
+    }
+
+    private static String number(double value) {
+        return java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 
     private static Material material(@Nullable String name) {
@@ -167,24 +179,7 @@ final class WarpMenu {
             click.refresh();
             return;
         }
-        Warp warp = found.get();
-        Optional<Location> target = warp.location().toLocation();
-        var storedTeleports = ctx.services().get(dev.yanianz.atrium.api.teleport.StoredTeleportService.class);
-        if (target.isEmpty() && storedTeleports.isEmpty()) {
-            click.error();
-            messages.send(viewer, "warps.world-not-loaded", Msg.unparsed("world", warp.location().world()));
-            return;
-        }
         click.close();
-        // A world that is not loaded may be an AWF world that loads on demand (WorldResolver).
-        java.util.concurrent.CompletableFuture<TeleportResult> move = target.isPresent()
-                ? teleport.teleport(viewer, target.get(), TeleportCause.WARP, TeleportOptions.DEFAULT)
-                : storedTeleports.get().teleport(viewer, warp.location(), TeleportCause.WARP, TeleportOptions.DEFAULT)
-                        .thenApply(dev.yanianz.atrium.api.teleport.StoredTeleportService.StoredTeleportResult::result);
-        move.thenAccept(result -> {
-            if (result == TeleportResult.SUCCESS) {
-                module.reply(viewer, "warps.teleported", Msg.unparsed("warp", warp.name()));
-            }
-        });
+        module.useWarp(viewer, found.get(), null);
     }
 }

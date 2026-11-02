@@ -26,6 +26,8 @@ public final class InventoriesModule implements AtriumModule {
     private PendingEditApplier applier;
     private PendingReturnStore returnStore;
     private PendingReturnApplier returnApplier;
+    private VaultStore vaultStore;
+    private VaultMenu vaultMenu;
 
     @Override
     public String id() {
@@ -34,7 +36,7 @@ public final class InventoriesModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "Saved inventory snapshots: capture, preview, load, remove, clear the ender chest or everything";
+        return "Saved inventory snapshots and personal vaults (/pv): capture, preview, load, remove, clear";
     }
 
     @Override
@@ -44,10 +46,13 @@ public final class InventoriesModule implements AtriumModule {
         List<dev.yanianz.atrium.core.storage.Migration> migrations = new ArrayList<>(SnapshotStore.MIGRATIONS);
         migrations.addAll(PendingEditStore.MIGRATIONS);
         migrations.addAll(PendingReturnStore.MIGRATIONS);
+        migrations.addAll(VaultStore.MIGRATIONS);
         ctx.migrate(migrations);
         this.store = new SnapshotStore(ctx.database());
         this.pendingStore = new PendingEditStore(ctx.database());
         this.returnStore = new PendingReturnStore(ctx.database());
+        this.vaultStore = new VaultStore(ctx.database());
+        this.vaultMenu = new VaultMenu(ctx, vaultStore, returnStore, config::get);
         this.preview = new SnapshotPreview(ctx);
         this.capture = new SnapshotCapture(ctx, config, store);
         ctx.listen(capture);
@@ -64,6 +69,11 @@ public final class InventoriesModule implements AtriumModule {
         applier.preload();
         new InventoryCommands(ctx, config, store, preview).register();
         new ClearAllCommand(ctx, config, store).register();
+        new VaultCommands(ctx, vaultStore, vaultMenu, config::get).register();
+        ctx.permission(VaultCommands.PERM_USE, PermissionDefault.TRUE, "Open your own personal vaults with /pv");
+        ctx.permission(VaultCommands.VAULT_LIMIT + ".unlimited", PermissionDefault.OP, "Own unlimited vaults");
+        ctx.permission(VaultCommands.SIZE_LIMIT + ".unlimited", PermissionDefault.OP,
+                "Use full-size (six-row) vaults");
         // Age retention is applied now and periodically; no per-tick work when nobody uses the module.
         ctx.track(ctx.scheduler().asyncTimer(this::purgeExpired, PURGE_INTERVAL, PURGE_INTERVAL));
         purgeExpired();
@@ -96,6 +106,9 @@ public final class InventoriesModule implements AtriumModule {
 
     @Override
     public void disable() {
+        if (vaultMenu != null) {
+            vaultMenu.shutdown();
+        }
         if (capture != null) {
             capture.shutdown();
         }

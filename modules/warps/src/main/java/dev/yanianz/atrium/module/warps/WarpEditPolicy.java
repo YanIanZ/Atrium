@@ -13,6 +13,8 @@ final class WarpEditPolicy {
         CATEGORY(WarpsModule.PERM_SETWARP),
         PERMISSION(WarpsModule.PERM_SETWARP),
         ICON(WarpsModule.PERM_SETWARP),
+        SETTINGS(WarpsModule.PERM_SETWARP),
+        LOCATIONS(WarpsModule.PERM_SETWARP),
         DELETE(WarpsModule.PERM_DELWARP);
 
         private final String adminPermission;

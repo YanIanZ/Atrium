@@ -165,7 +165,9 @@ public final class ChatBubblesModule implements AtriumModule, Listener {
         }
         TextColor color = BubbleColors.text(cfg.textColor);
         Component component = Component.text(String.join("\n", lines)).color(color);
-        renderer.show(player, component, cfg);
+        BubbleGroups.Style style = BubbleGroups.style(cfg,
+                BubbleGroups.select(cfg, player::hasPermission));
+        renderer.show(player, component, cfg, style);
     }
 
     /** Vanished and shadow-muted players never get a visible bubble. */

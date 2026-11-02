@@ -7,7 +7,7 @@ import org.bukkit.entity.Player;
 /** One bubble backend. Implementations are selected once at enable/reload and torn down on disable. */
 interface BubbleRenderer {
     /** Shows a bubble for the speaker. Called on the speaker's own region thread. */
-    void show(Player speaker, Component text, ChatBubblesConfig cfg);
+    void show(Player speaker, Component text, ChatBubblesConfig cfg, BubbleGroups.Style style);
 
     /** Ends the speaker's bubble, if any. Safe from any thread. */
     void remove(UUID speaker);

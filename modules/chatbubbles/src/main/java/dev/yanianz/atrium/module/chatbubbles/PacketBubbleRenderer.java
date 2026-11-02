@@ -134,7 +134,7 @@ final class PacketBubbleRenderer implements BubbleRenderer {
     }
 
     @Override
-    public void show(Player speaker, Component text, ChatBubblesConfig cfg) {
+    public void show(Player speaker, Component text, ChatBubblesConfig cfg, BubbleGroups.Style style) {
         if (!running) {
             return;
         }
@@ -144,9 +144,9 @@ final class PacketBubbleRenderer implements BubbleRenderer {
         UUID entityUuid = UUID.nameUUIDFromBytes(
                 ("atrium-chatbubble:" + entityId).getBytes(StandardCharsets.UTF_8));
         double translationY = BubbleAnchor.translationY(speaker.getEyeHeight(), cfg.effectiveHeightAboveEyes());
-        long duration = Math.clamp(cfg.durationSeconds, 1, 60);
+        long duration = style.showSeconds();
         Bubble bubble = new Bubble(speaker.getUniqueId(), speaker.getEntityId(), entityId, entityUuid,
-                metadata(text, cfg, translationY), System.currentTimeMillis() + duration * 1000L);
+                metadata(text, cfg, translationY, style.scale()), System.currentTimeMillis() + duration * 1000L);
         bubbles.put(bubble.speaker, bubble);
         bySpeakerEntity.put(bubble.speakerEntityId, bubble);
         refreshViewers(speaker, bubble, cfg);
@@ -168,7 +168,7 @@ final class PacketBubbleRenderer implements BubbleRenderer {
         return id;
     }
 
-    private List<EntityData<?>> metadata(Component text, ChatBubblesConfig cfg, double translationY) {
+    private List<EntityData<?>> metadata(Component text, ChatBubblesConfig cfg, double translationY, float scale) {
         int flags = 0;
         if (cfg.shadowed) {
             flags |= FLAG_SHADOW;
@@ -180,6 +180,8 @@ final class PacketBubbleRenderer implements BubbleRenderer {
         return List.of(
                 new EntityData<>(metaIds.translation(), EntityDataTypes.VECTOR3F,
                         new Vector3f(0f, (float) translationY, 0f)),
+                new EntityData<>(metaIds.scale(), EntityDataTypes.VECTOR3F,
+                        new Vector3f(scale, scale, scale)),
                 new EntityData<>(metaIds.billboard(), EntityDataTypes.BYTE, (byte) BILLBOARD_CENTER),
                 new EntityData<>(metaIds.viewRange(), EntityDataTypes.FLOAT, viewRange),
                 new EntityData<>(metaIds.text(), EntityDataTypes.ADV_COMPONENT, text),

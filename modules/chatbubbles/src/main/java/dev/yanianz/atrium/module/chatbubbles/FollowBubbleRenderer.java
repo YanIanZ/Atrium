@@ -13,6 +13,9 @@ import org.bukkit.Location;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
+import org.bukkit.util.Transformation;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 /**
  * Server-side fallback: a short-lived {@link TextDisplay} that is moved on the player's thread every tick.
@@ -39,7 +42,7 @@ final class FollowBubbleRenderer implements BubbleRenderer {
     }
 
     @Override
-    public void show(Player player, Component text, ChatBubblesConfig cfg) {
+    public void show(Player player, Component text, ChatBubblesConfig cfg, BubbleGroups.Style style) {
         if (!running) {
             return;
         }
@@ -47,7 +50,7 @@ final class FollowBubbleRenderer implements BubbleRenderer {
         TextDisplay display;
         try {
             display = player.getWorld().spawn(anchor(player, cfg), TextDisplay.class,
-                    entity -> configure(entity, text, cfg));
+                    entity -> configure(entity, text, cfg, style));
         } catch (RuntimeException error) {
             ctx.logger().warn("Could not create a chat bubble for {}", player.getName(), error);
             return;
@@ -61,7 +64,7 @@ final class FollowBubbleRenderer implements BubbleRenderer {
             previous.task.cancel();
             removeLater(previous.display);
         }
-        long ticks = 20L * Math.clamp(cfg.durationSeconds, 1, 60);
+        long ticks = 20L * style.showSeconds();
         long deadline = player.getWorld().getGameTime() + ticks;
         try {
             // Runs on the player's thread; removes the bubble when it expires or leaves the player's region.
@@ -74,7 +77,7 @@ final class FollowBubbleRenderer implements BubbleRenderer {
         }
     }
 
-    private void configure(TextDisplay display, Component text, ChatBubblesConfig cfg) {
+    private void configure(TextDisplay display, Component text, ChatBubblesConfig cfg, BubbleGroups.Style style) {
         display.setPersistent(false);
         display.setVisibleByDefault(true);
         display.text(text);
@@ -87,6 +90,11 @@ final class FollowBubbleRenderer implements BubbleRenderer {
         display.setBackgroundColor(Color.fromARGB(BubbleColors.backgroundArgb(cfg.backgroundColor)));
         // Bukkit expects a multiplier of the default 64-block view range, not block counts.
         display.setViewRange((float) Math.clamp(cfg.viewRange / 64d, 0.1d, 4d));
+        float scale = style.scale();
+        if (scale != 1.0f) {
+            display.setTransformation(new Transformation(new Vector3f(),
+                    new Quaternionf(), new Vector3f(scale, scale, scale), new Quaternionf()));
+        }
         display.setTeleportDuration((int) PERIOD);
     }
 

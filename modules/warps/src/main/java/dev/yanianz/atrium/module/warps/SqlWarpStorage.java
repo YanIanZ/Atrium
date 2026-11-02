@@ -17,7 +17,11 @@ final class SqlWarpStorage implements WarpStorage {
                     + "category VARCHAR(32) NOT NULL, world VARCHAR(128) NOT NULL, x DOUBLE NOT NULL, y DOUBLE NOT NULL, "
                     + "z DOUBLE NOT NULL, yaw FLOAT NOT NULL, pitch FLOAT NOT NULL, creator CHAR(36), created BIGINT NOT NULL)"),
             Migration.of(2, "warps custom permission",
-                    "ALTER TABLE {prefix}warps_warps ADD COLUMN permission VARCHAR(128)"));
+                    "ALTER TABLE {prefix}warps_warps ADD COLUMN permission VARCHAR(128)"),
+            Migration.of(3, "warps extra random locations",
+                    "CREATE TABLE {prefix}warps_locations (warp_lower VARCHAR(32) NOT NULL, slot INT NOT NULL, "
+                            + "world VARCHAR(128) NOT NULL, x DOUBLE NOT NULL, y DOUBLE NOT NULL, z DOUBLE NOT NULL, "
+                            + "yaw FLOAT NOT NULL, pitch FLOAT NOT NULL, PRIMARY KEY (warp_lower, slot))"));
 
     private static final String COLUMNS =
             "name_lower, name, category, world, x, y, z, yaw, pitch, creator, created, permission";

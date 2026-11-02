@@ -15,4 +15,9 @@ record BubbleMetaIds(int translation, int billboard, int viewRange, int text, in
                 ? new BubbleMetaIds(11, 15, 17, 23, 24, 25, 26, 27)
                 : new BubbleMetaIds(10, 14, 16, 22, 23, 24, 25, 26);
     }
+
+    /** Display scale follows translation directly (translation, scale, left rotation, ...). */
+    int scale() {
+        return translation + 1;
+    }
 }

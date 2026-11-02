@@ -1,5 +1,7 @@
 package dev.yanianz.atrium.module.chatbubbles;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.spongepowered.configurate.objectmapping.ConfigSerializable;
 import org.spongepowered.configurate.objectmapping.meta.Comment;
 
@@ -68,4 +70,33 @@ public class ChatBubblesConfig {
 
     @Comment("Maximum distance at which viewers receive the display (1-128 blocks).")
     public float viewRange = 48f;
+
+    @Comment("""
+            Per-group bubble settings, matched by permission. A player gets the group with the highest
+            priority whose permission they hold. Empty means duration-seconds and the default size for
+            everyone. Example:
+            groups:
+              vip:
+                permission: group.vip
+                priority: 10
+                show-time-seconds: 8
+                scale: 1.2
+            """)
+    public Map<String, BubbleGroup> groups = new LinkedHashMap<>();
+
+    /** One permission-based bubble group. A negative number means "use the flat setting". */
+    @ConfigSerializable
+    public static class BubbleGroup {
+        @Comment("Permission node that grants this group. Blank makes it match everyone.")
+        public String permission = "";
+
+        @Comment("Highest priority wins when a player matches several groups.")
+        public int priority = 0;
+
+        @Comment("How long this group's bubbles stay visible, in seconds, 1-60 (-1 uses duration-seconds).")
+        public int showTimeSeconds = -1;
+
+        @Comment("Text scale of this group's bubbles, 0.1-4.0 (-1 keeps the default size).")
+        public double scale = -1d;
+    }
 }

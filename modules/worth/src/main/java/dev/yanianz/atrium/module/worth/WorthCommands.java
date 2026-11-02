@@ -12,6 +12,7 @@ import dev.yanianz.atrium.core.module.ModuleContext;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
@@ -85,6 +86,18 @@ final class WorthCommands {
 
         ctx.command(CommandSpec.of(Cmds.literal("selllog", "atrium.selllog")
                 .executes(this::sellLog).build(), "Show your ten most recent sales"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("generateworth", "atrium.worth.generate")
+                .executes(c -> generate(c, false, false))
+                .then(Cmds.literal("dry-run")
+                        .executes(c -> generate(c, false, false))
+                        .then(Cmds.literal("--overwrite").executes(c -> generate(c, false, true))))
+                .then(Cmds.literal("run")
+                        .executes(c -> generate(c, true, false))
+                        .then(Cmds.literal("--overwrite").executes(c -> generate(c, true, true))))
+                .then(Cmds.literal("--overwrite").executes(c -> generate(c, false, true)))
+                .then(Cmds.literal("confirm").executes(this::confirmGenerate))
+                .build(), "Derive missing prices from recipes and base prices (dry run unless confirmed)"));
     }
 
     private int usage(CommandContext<CommandSourceStack> c, String key) {
@@ -357,6 +370,124 @@ final class WorthCommands {
                                 Msg.unparsed("engine", engines.activeKind().id));
                     }
                 }));
+        return Cmds.OK;
+    }
+
+    // ---- recipe-derived prices ----
+
+    /** What one /generateworth pass computed; {@code unresolved} counts result materials still without a price. */
+    private record GeneratedPlan(List<PriceEntry> entries, int added, int updated, int passes, int unresolved,
+            int recipes) {}
+
+    private int generate(CommandContext<CommandSourceStack> c, boolean run, boolean overwrite) {
+        CommandSender sender = c.getSource().getSender();
+        ctx.messages().send(sender, "worth.generate-started", Msg.unparsed("mode",
+                run ? (overwrite ? "run --overwrite" : "run") : (overwrite ? "dry-run --overwrite" : "dry-run")));
+        // The recipe registry is server state; the computation itself is pure and belongs on the I/O pool.
+        ctx.scheduler().supplyGlobal(() -> RecipeSnapshot.collect(ctx.plugin().getServer()))
+                .thenCompose(recipes -> ctx.scheduler().supplyIo(() -> plan(recipes, overwrite)))
+                .whenComplete((plan, failure) -> onSenderThread(sender, () -> {
+                    if (failure != null) {
+                        ctx.logger().error("Deriving prices from recipes failed", failure);
+                        ctx.messages().send(sender, "worth.generate-failed", Msg.unparsed("reason",
+                                failure.getMessage() == null ? failure.getClass().getSimpleName()
+                                        : failure.getMessage()));
+                        return;
+                    }
+                    reportPlan(sender, plan, run);
+                }));
+        return Cmds.OK;
+    }
+
+    private GeneratedPlan plan(List<WorthGenerator.Recipe> recipes, boolean overwrite) {
+        WorthConfig config = module.config();
+        PriceTable table = module.prices();
+        java.util.Map<String, BigDecimal> base = new java.util.HashMap<>();
+        java.util.Map<String, BigDecimal> plain = new java.util.HashMap<>();
+        java.util.Set<String> existing = new java.util.HashSet<>();
+        java.util.Set<String> protectedMaterials = new java.util.HashSet<>();
+        for (PriceEntry entry : table.entries()) {
+            existing.add(entry.material());
+            if (entry.isPlain() && entry.id().equals(entry.material()) && entry.price().signum() > 0) {
+                base.putIfAbsent(entry.material(), entry.price());
+                plain.putIfAbsent(entry.material(), entry.price());
+            }
+            if (!entry.isPlain()) {
+                // A custom-variant entry is never replaced by a plain generated price.
+                protectedMaterials.add(entry.material());
+            }
+        }
+        if (!overwrite) {
+            // Without --overwrite every material an administrator priced stays exactly as it is.
+            protectedMaterials.addAll(existing);
+        }
+        WorthGenerator.Options options = new WorthGenerator.Options(config.generatePriceIncreasePercent,
+                config.generateMaxPasses, Math.clamp(config.priceScale, 0, 10));
+        WorthGenerator.Plan generated = WorthGenerator.generate(base, protectedMaterials, recipes, options);
+        List<PriceEntry> entries = new ArrayList<>();
+        int added = 0;
+        int updated = 0;
+        for (var entry : generated.prices().entrySet()) {
+            BigDecimal before = plain.get(entry.getKey());
+            if (before != null && before.compareTo(entry.getValue()) == 0) {
+                continue;
+            }
+            entries.add(PriceEntry.plain(entry.getKey(), entry.getValue()));
+            if (existing.contains(entry.getKey())) {
+                updated++;
+            } else {
+                added++;
+            }
+        }
+        return new GeneratedPlan(List.copyOf(entries), added, updated, generated.passes(),
+                generated.considered(), recipes.size());
+    }
+
+    private void reportPlan(CommandSender sender, GeneratedPlan plan, boolean run) {
+        ctx.messages().send(sender, "worth.generate-plan", Msg.number("recipes", plan.recipes()),
+                Msg.number("passes", plan.passes()), Msg.number("added", plan.added()),
+                Msg.number("updated", plan.updated()), Msg.number("unresolved", plan.unresolved()));
+        if (plan.entries().isEmpty()) {
+            module.pendingGeneration(null);
+            ctx.messages().send(sender, "worth.generate-empty");
+            return;
+        }
+        plan.entries().stream().limit(10).forEach(entry -> ctx.messages().send(sender, "worth.generate-entry",
+                Msg.unparsed("material", entry.material()), Msg.unparsed("price", sell.format(entry.price()))));
+        if (plan.entries().size() > 10) {
+            ctx.messages().send(sender, "worth.generate-more", Msg.number("count", plan.entries().size() - 10));
+        }
+        if (!run) {
+            ctx.messages().send(sender, "worth.generate-dry-run");
+            return;
+        }
+        module.pendingGeneration(new WorthModule.Generation(plan.entries(), plan.added(), plan.updated(),
+                System.currentTimeMillis()));
+        ctx.messages().send(sender, "worth.generate-confirm",
+                Msg.number("count", plan.entries().size()),
+                Msg.number("seconds", Math.clamp(module.config().generateConfirmSeconds, 1, 600)));
+    }
+
+    private int confirmGenerate(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        WorthModule.Generation pending = module.takePendingGeneration();
+        if (pending == null) {
+            ctx.messages().send(sender, "worth.generate-nothing");
+            return Cmds.OK;
+        }
+        ctx.scheduler().supplyIo(() -> {
+            module.saveEntries(pending.entries());
+            return null;
+        }).whenComplete((ignored, failure) -> onSenderThread(sender, () -> {
+            if (failure != null) {
+                ctx.logger().error("Saving {} generated prices failed", pending.entries().size(), failure);
+                ctx.messages().send(sender, "worth.generate-failed", Msg.unparsed("reason",
+                        failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
+                return;
+            }
+            ctx.messages().send(sender, "worth.generate-saved", Msg.number("count", pending.entries().size()),
+                    Msg.number("added", pending.added()), Msg.number("updated", pending.updated()));
+        }));
         return Cmds.OK;
     }
 

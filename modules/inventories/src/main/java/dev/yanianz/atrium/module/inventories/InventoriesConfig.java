@@ -30,6 +30,16 @@ public class InventoriesConfig {
     @Comment("Maximum length of a snapshot label (1-64 characters).")
     public int maxLabelLength = 48;
 
+    @Comment("Enable personal vaults (/pv). Each vault is a private chest stored on the server, not in the player\n"
+            + "inventory. The number of vaults comes from atrium.pv.<n> and the rows from atrium.pv.size.<rows>.")
+    public boolean vaultsEnabled = true;
+
+    @Comment("Vaults a player has without a numeric atrium.pv.<n> permission (0-54).")
+    public int defaultVaultCount = 1;
+
+    @Comment("Rows of a vault without a numeric atrium.pv.size.<rows> permission (1-6).")
+    public int defaultVaultRows = 6;
+
     static int pageSize(InventoriesConfig config) {
         return Math.clamp(config.listPageSize, 1, 20);
     }

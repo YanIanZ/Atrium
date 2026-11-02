@@ -38,4 +38,15 @@ public class StaffConfig {
     public List<String> blockedCommands = new ArrayList<>(List.of(
             "hat", "ah", "auction", "auctionhouse", "sell", "sellhand", "sellall", "trade", "market", "shop",
             "pv", "playervault", "vault", "backpack", "bp", "condense", "compact", "stack"));
+
+    @Comment("Skip vanished players when /patrol chooses its next target, so a round only visits players\n"
+            + "everyone can see.")
+    public boolean patrolSkipVanished = true;
+
+    @Comment("Skip AFK players when /patrol chooses its next target.")
+    public boolean patrolSkipAfk = true;
+
+    @Comment("How often the /speed action bar refreshes, in ticks (1-20). Sampling itself runs every tick;\n"
+            + "a lower number updates the display more often.")
+    public int speedMeterIntervalTicks = 5;
 }

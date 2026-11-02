@@ -48,4 +48,14 @@ public class WorthConfig {
 
     @Comment("Rows of the /sellgui chest, 1-6.")
     public int sellGuiRows = 6;
+
+    @Comment("Markup /generateworth adds to the ingredient cost of a recipe, in percent. 0 = exact cost.")
+    public double generatePriceIncreasePercent = 10;
+
+    @Comment("How many dependency passes /generateworth runs (1-10). Recipes that need an unpriced item\n"
+            + "beyond this many steps stay unpriced.")
+    public int generateMaxPasses = 5;
+
+    @Comment("Seconds in which /generateworth confirm must follow /generateworth run (1-600).")
+    public int generateConfirmSeconds = 120;
 }
