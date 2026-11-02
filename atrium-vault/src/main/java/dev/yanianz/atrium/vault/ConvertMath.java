@@ -1,6 +1,7 @@
 package dev.yanianz.atrium.vault;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /** Delta arithmetic for {@code /vault-convert}: how to move a target balance onto a source balance. */
 public final class ConvertMath {
@@ -42,5 +43,24 @@ public final class ConvertMath {
         double tolerance = fractionalDigits >= 0 ? 0.5 * Math.pow(10, -fractionalDigits)
                 : 1e-9 * Math.max(1, Math.abs(expected));
         return Math.abs(expected - actual) <= tolerance + Math.ulp(expected);
+    }
+
+    /** What to do with the target account in an exact (BigDecimal) conversion; {@code amount} is non-negative. */
+    public record ExactPlan(Action action, BigDecimal amount, BigDecimal expected) {
+    }
+
+    /**
+     * Exact counterpart of {@link #plan(double, double, int)} for conversions that involve a Vault v2 economy.
+     * {@code expected} is the source balance as the target can hold it: rounded HALF_EVEN to the target's
+     * {@code fractionalDigits} when that is {@code >= 0}, else unchanged. The delta is computed in exact decimal.
+     */
+    public static ExactPlan plan(BigDecimal source, BigDecimal target, int fractionalDigits) {
+        if (source == null || target == null) return new ExactPlan(Action.INVALID, BigDecimal.ZERO, source);
+        BigDecimal expected = fractionalDigits >= 0 && source.scale() > fractionalDigits
+                ? source.setScale(fractionalDigits, RoundingMode.HALF_EVEN) : source;
+        BigDecimal delta = expected.subtract(target);
+        int sign = delta.signum();
+        if (sign == 0) return new ExactPlan(Action.NONE, BigDecimal.ZERO, expected);
+        return new ExactPlan(sign > 0 ? Action.DEPOSIT : Action.WITHDRAW, delta.abs(), expected);
     }
 }

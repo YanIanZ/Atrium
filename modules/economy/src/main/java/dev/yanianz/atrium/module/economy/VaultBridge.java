@@ -63,7 +63,7 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
      * True on the global tick thread or on a region tick thread. Foreign plugin pools (for example a
      * scoreboard plugin's own thread) are not tick threads and may still wait briefly.
      */
-    private static boolean onTickThread() {
+    static boolean onTickThread() {
         // Folia implements isPrimaryThread as TickThread.isTickThread, which covers region and global
         // tick threads; isGlobalTickThread keeps that true on builds that only implement the global part.
         if (Bukkit.isPrimaryThread() || Bukkit.isGlobalTickThread()) return true;

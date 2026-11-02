@@ -17,7 +17,7 @@ Its scope is comparable to CMI; it is a separate, independent implementation (se
   write is never reported as success.
 - **One theme.** Every message uses theme tags (`<primary>`, `<muted>`, `<success>`, ...) that you restyle in one
   place. Every GUI uses the same menu toolkit.
-- **Modular.** 59 modules, each of which can be switched off in `modules.yml`. A disabled module registers no
+- **Modular.** 61 modules, each of which can be switched off in `modules.yml`. A disabled module registers no
   commands, listeners, tasks or permissions.
 - **Bilingual out of the box.** English (`en_US`) and Indonesian (`id_ID`) texts are included; add a folder for
   any other locale. Players see their client language when a translation exists.
@@ -99,7 +99,7 @@ implementation or turns off cleanly.
 
 | Plugin | Used for |
 |---|---|
-| Vault | Economy provider (Atrium registers itself) and chat metadata fallback |
+| Vault / VaultUnlocked | Economy provider for the v1 and v2 APIs (Atrium registers itself) and chat metadata fallback |
 | LuckPerms | Prefixes, suffixes and groups for chat, tab list and ranks |
 | PlaceholderAPI | `%atrium_*%` placeholders, and placeholders in admin-written templates |
 | DecentHolograms / FancyHolograms | Alternative hologram engines (`modules/holograms.yml` → `engine`) |
@@ -108,6 +108,7 @@ implementation or turns off cleanly.
 | BlueMap / squaremap / dynmap | Warp, spawn and portal markers; vanished players are hidden |
 | PacketEvents | Sidebar scoreboards on Folia |
 | TAB (by NEZNAMY) | Alternative tab list and sidebar engine: Atrium renders, TAB displays (`modules/tablist.yml` → `engine`, `modules/scoreboard.yml` → `backend`; `/tablist engine`, `/sidebar engine`) |
+| Multiverse-Core 5 / Advanced Slime Paper | World providers of `/wtp`, `/worlds`, `/worldinfo`: list and load known-but-unloaded worlds, Multiverse aliases, spawns and access permissions, slime worlds from the configured loader (`modules/worlds.yml`); SourbyCraft AWF and profile worlds through the `sourbycraft` module |
 | Floodgate (Geyser) | Dialogs shown as native Bedrock forms |
 | Velocity / BungeeCord | `/server`, `/glist`, cross-server chat, staff chat, helpop and punishment sync over HMAC-authenticated plugin messages |
 
@@ -115,7 +116,7 @@ implementation or turns off cleanly.
 
 | Area | Modules |
 |---|---|
-| Core gameplay | `player`, `playerplus`, `teleport`, `homes`, `warps`, `rtp`, `portals`, `elytra`, `seating` |
+| Core gameplay | `player`, `playerplus`, `teleport`, `homes`, `warps`, `rtp`, `portals`, `elytra`, `seating`, `worlds` |
 | Economy | `economy` (with Vault provider), `worth` (sell GUI), `kits`, `commandrules` (costs, cooldowns, warmups) |
 | Social | `chat`, `mail`, `nick`, `messaging`, `chatbubbles`, `deathmessages`, `signs`, `skins`, `afk`, `seen`, `extras` |
 | Staff | `staff` (staff mode, `/sudo`, `/commandspy`, `/spectate`), `moderation`, `vanish`, `inspect`, `inventories`, `search`, `performance`, `mobs`, `worldtools`, `worldrules`, `itemtools`, `recipes` |
@@ -126,28 +127,50 @@ implementation or turns off cleanly.
 ## Atrium Vault (Vault replacement)
 
 `atrium-vault/` builds a Folia-supporting drop-in replacement for the [Vault](https://github.com/MilkBowl/Vault)
-plugin, released as `Vault-<version>.jar`. Remove the old `Vault.jar` and put this one into `plugins/`. It is
-optional: Atrium also works with the original Vault or without Vault.
+plugin and for [VaultUnlocked](https://github.com/TheNewEconomy/VaultUnlocked) (the modern Vault fork with the v2 API),
+released as `Vault-<version>.jar`. Remove the old `Vault.jar` (or VaultUnlocked) and put this one into `plugins/`. It is
+optional: Atrium also works with the original Vault, with VaultUnlocked or without Vault.
 
-- **Detected as Vault.** `plugin.yml` declares `name: Vault`, `main: net.milkbowl.vault.Vault`, `load: STARTUP` and
-  `folia-supported: true`; the version has the form `1.7.3-atrium.N`. The VaultAPI 1.7.1 classes
-  (`net.milkbowl.vault.economy`, `.permission`, `.chat`) are bundled unmodified and unrelocated, so plugins compiled
-  against Vault link exactly as before.
-- **GuardedEconomy** (priority Highest) forwards to the best other economy provider (Atrium, EssentialsX, ...) and
-  rejects NaN, infinite or negative amounts, amounts above `guard.max-amount` and null names. Provider exceptions
-  become `FAILURE` responses and are logged (rate-limited). Without a provider it reports `isEnabled() == false`.
-  An optional asynchronous audit log records every withdraw and deposit with the calling plugin in
-  `plugins/Vault/audit/`. Set `guard.enabled: false` for plain Vault behaviour.
-- **SuperPerms fallback** permission provider (priority Lowest, no groups). LuckPerms, Atrium and other modern
+- **Detected as Vault and as VaultUnlocked.** `plugin.yml` declares `name: Vault`, `main: net.milkbowl.vault.Vault`,
+  `provides: [VaultUnlocked]`, `load: STARTUP` and `folia-supported: true`. Both APIs are bundled unmodified and
+  unrelocated, so plugins compiled against either link exactly as before:
+  - VaultAPI 1.7.1 (`net.milkbowl.vault.economy`, `.permission`, `.chat`) — the legacy **v1** API;
+  - VaultUnlockedAPI 2.20 (`net.milkbowl.vault2.*`: `economy.Economy`, `permission.PermissionUnlocked`,
+    `chat.ChatUnlocked`, ...) — the **v2** API with `BigDecimal` amounts, UUID accounts, currencies and worlds.
+- **Version `2.20.0-atrium.N`.** VaultUnlocked itself is also called `Vault` and reports `2.20.x`; plugins that support
+  both APIs pick v2 when the `Vault` version does not start with `1` (iConomyUnlocked does exactly this), and v1
+  plugins compare 2.20 as newer than 1.7. A `1.7.x` version would make such plugins fall back to v1.
+- **GuardedEconomy** (v1) and **GuardedEconomyV2** (v2), both priority Highest, forward to the best other provider of
+  their API. v1: rejects NaN, infinite or negative amounts, amounts above `guard.max-amount` and null names. v2: rejects
+  null, negative, too precise (`guard.max-scale` decimal places, trailing zeros ignored; `guard.max-precision`
+  digits) and too large (`guard.max-amount`) amounts and null arguments. Provider exceptions (v2 also
+  `AbstractMethodError` from providers built against an older v2 API) become `FAILURE`/`NOT_IMPLEMENTED` responses and
+  are logged (rate-limited); calls that block a tick thread are reported with the calling plugin. Without a provider
+  a guard reports `isEnabled() == false`. The guards never delegate to themselves or to each other. An optional
+  asynchronous audit log records every v1 withdraw/deposit and v2 withdraw/deposit/set/transfer (exact amounts, the
+  calling plugin and the v2 `pluginName`) in `plugins/Vault/audit/`. Set `guard.enabled: false` for plain Vault
+  behaviour. The v2 guard does not expose a provider's `async()` API: async users fall back to the guarded calls.
+- **v1/v2 bridges** (`bridge.enabled`). If only a v1 economy is registered (EssentialsX, ...), it is also registered
+  as a v2 provider (UUID → `OfflinePlayer`; balances rounded HALF_EVEN to the provider's `fractionalDigits`; an
+  amount is passed only if it has no more decimals than the provider supports and is an exact double, else the call
+  fails and nothing moves). If only a v2 economy is registered, it is also registered as a v1 provider (double
+  amounts rounded HALF_EVEN to the provider's digits; the calling plugin is passed as `pluginName`; names resolved
+  without blocking; no banks). When both APIs have a native provider no bridge is registered. Bridges use priority
+  Lowest and appear as `BRIDGED: ...` in `/vault-info`.
+- **SuperPerms fallback** permission provider (v1, priority Lowest, no groups). LuckPerms, Atrium and other modern
   plugins register their own providers.
-- `/vault-info` lists every Economy, Permission and Chat provider, the active one and the guard status.
-  `/vault-convert <from> <to>` dry-runs a balance copy between two economy plugins; add `confirm` to apply it. The
-  source economy is only read. Permission: `vault.admin` (default: op).
+- `/vault-info` lists every v1 and v2 Economy, Permission and Chat provider, the active one, the bridge state and both
+  guards. `/vault-convert <from>[:v1|:v2] <to>[:v1|:v2]` dry-runs a balance copy between two economy plugins (without
+  a suffix the plugin's v1 provider is used, else its v2 one); add `confirm` to apply it. v1 to v1 works as before;
+  anything with a v2 side is computed in exact decimal (exact end to end between two v2 providers). The source
+  economy is only read. Permission: `vault.admin` (default: op).
 
-**License notice.** The bundled VaultAPI classes are copyright MilkBowl and contributors and licensed under the
-GNU LGPL v3.0; the license, the GPL v3.0 text it incorporates and a notice are included in the jar's `META-INF/`.
-Source: <https://github.com/MilkBowl/VaultAPI>. Everything else in the jar (`net.milkbowl.vault.Vault` and
-`dev.yanianz.atrium.vault.*`) is original Atrium code, not derived from Vault. See [NOTICE](NOTICE).
+**License notice.** The bundled VaultAPI classes are copyright MilkBowl and contributors, the bundled
+VaultUnlockedAPI classes copyright The New Economy and the Vault contributors; both are licensed under the GNU LGPL
+v3.0. The licenses, the GPL v3.0 text they incorporate and a notice for each are included in the jar's `META-INF/`.
+Sources: <https://github.com/MilkBowl/VaultAPI>, <https://github.com/TheNewEconomy/VaultUnlockedAPI>. Everything else
+in the jar (`net.milkbowl.vault.Vault` and `dev.yanianz.atrium.vault.*`) is original Atrium code, not derived from Vault
+or VaultUnlocked. See [NOTICE](NOTICE).
 
 ## Releases
 

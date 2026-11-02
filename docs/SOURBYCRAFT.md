@@ -24,7 +24,8 @@ live in isolated classes, so the official server never loads a missing type.
 | Feature | SourbyCraft service | Atrium side |
 |---|---|---|
 | MultiProfile | `AuroraProfiles` (enabled) | one `ProfileStateAdapter` `atrium:profile`, `ActiveProfileService`, `/atrium profile`, `%atrium_profile%` `%atrium_profile_type%` `%atrium_profile_role%` |
-| AWF worlds | `AuroraWorlds` | `WorldResolver` (load on demand) used by `StoredTeleportService` (homes, warps, /back) |
+| AWF worlds | `AuroraWorlds` | `WorldResolver` (load on demand) used by `StoredTeleportService` (homes, warps, /back); AWF provider of the `worlds` module (`/wtp`, `/worlds`) |
+| Profile worlds | `AuroraProfiles` (enabled) | `ProfileWorldService`, `/wtp profile` |
 | Async unload | `WorldUnloadAsyncEvent` | re-fired as Atrium `WorldUnloadingEvent` |
 | Region metrics | `SourbyMetrics` | `RegionMetricsService`, one extra `/lag` line |
 
@@ -70,6 +71,12 @@ purse. Keying Atrium by profile as well would manage the same money twice. Notes
   loaded through `AuroraWorlds.load`, shared per world, `worlds-load-timeout-seconds`, `worlds-on-demand-deny`).
   Failures give a message per `WorldResolver.Status`: `NOT_FOUND`, `NOT_ALLOWED`, `BUSY`
   (`WorldOperationBusyException`), `TIMEOUT`, `FAILED`. Without SourbyCraft only loaded worlds resolve.
+- With the `worlds` module running (default), AWF is one provider of its world provider chain (`WorldProviderRegistry`,
+  id `awf`); the chain is then the `WorldResolver`, and AWF loads still use the settings above. Without it the
+  module publishes the AWF resolver itself, as before.
+- `/wtp profile [player]` (worlds module): teleports to the PRIMARY world of the active profile
+  (`AuroraProfiles.getActiveProfile` + `getProfileWorlds`, official API only, published as `ProfileWorldService`
+  while MultiProfile is enabled), loaded through the AWF provider, at AWF's stored spawn when set.
 - Unload: the teleport module cancels warmups into a world on Bukkit `WorldUnloadEvent` and on `WorldUnloadingEvent`
   (fired from SourbyCraft's `WorldUnloadAsyncEvent`). No other module listened to `WorldUnloadEvent` before this
   change; stored locations (homes, warps, /back, spawns) keep their world name and resolve again later.

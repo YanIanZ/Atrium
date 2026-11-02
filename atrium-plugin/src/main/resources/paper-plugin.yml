@@ -89,3 +89,17 @@ dependencies:
       load: BEFORE
       required: false
       join-classpath: true
+    # World providers of the worlds module (/wtp): Multiverse-Core 5 (Paper), Advanced Slime Paper's plugin
+    # (its mysql/mongodb/api slime loaders) and its legacy name.
+    Multiverse-Core:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    ASPaperPlugin:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    SlimeWorldManager:
+      load: BEFORE
+      required: false
+      join-classpath: true

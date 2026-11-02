@@ -57,6 +57,7 @@ public final class EconomyModule implements AtriumModule, Listener {
     /** Leaderboard snapshot per group storage key. */
     private volatile Map<String, List<EconomyStore.Entry>> leaders = Map.of();
     private AutoCloseable vault;
+    private AutoCloseable vault2;
     private record PendingPayment(Key from, Key target, BigDecimal amount, long expires) {}
     /** Trailing command words with the world-group selector removed; {@code key} is null when none was given. */
     private record Selected(String rest, String key) {}
@@ -111,9 +112,24 @@ public final class EconomyModule implements AtriumModule, Listener {
         }
         if (ctx.plugin().getServer().getPluginManager().isPluginEnabled("Vault")) {
             vault = VaultBridge.register(ctx, store, config);
+            // Native Vault v2 (VaultUnlocked) provider next to the v1 one, when the v2 API is present.
+            if (vaultUnlockedPresent()) vault2 = VaultUnlockedBridge.register(ctx, store, config);
+        }
+    }
+    /** True when the Vault v2 API (Atrium Vault 2.20+ or VaultUnlocked) can be linked; never loads our v2 class first. */
+    private static boolean vaultUnlockedPresent() {
+        try {
+            Class.forName("net.milkbowl.vault2.economy.Economy", false, EconomyModule.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
         }
     }
     @Override public void disable() {
+        if (vault2 != null) {
+            try { vault2.close(); } catch (Exception e) { ctx.logger().warn("Cannot unregister Vault v2 economy", e); }
+            vault2 = null;
+        }
         if (vault != null) {
             try { vault.close(); } catch (Exception e) { ctx.logger().warn("Cannot unregister Vault economy", e); }
         }

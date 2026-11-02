@@ -21,6 +21,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicesManager;
 
 /**
  * {@code /vault-info} and {@code /vault-convert}. Folia-safe: replies go through the sender's entity scheduler (players)
@@ -32,17 +33,26 @@ public final class VaultCommands implements TabExecutor {
     private record Pending(String from, String to, long expiresAt) {
     }
 
+    /** A native economy provider, v1 or v2, as named on the command line ({@code Plugin:v1} / {@code Plugin:v2}). */
+    private record Endpoint(String label, Object provider, EconomyConverter.Book book) {
+    }
+
     private final Plugin plugin;
-    private final String apiVersion;
+    private final VaultInfo.Versions versions;
     private final Supplier<GuardedEconomy> guard;
+    private final Supplier<GuardedEconomyV2> guardV2;
+    private final Supplier<BridgeManager> bridges;
     private final Supplier<AuditLog> audit;
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicBoolean converting = new AtomicBoolean();
 
-    public VaultCommands(Plugin plugin, String apiVersion, Supplier<GuardedEconomy> guard, Supplier<AuditLog> audit) {
+    public VaultCommands(Plugin plugin, VaultInfo.Versions versions, Supplier<GuardedEconomy> guard,
+                         Supplier<GuardedEconomyV2> guardV2, Supplier<BridgeManager> bridges, Supplier<AuditLog> audit) {
         this.plugin = plugin;
-        this.apiVersion = apiVersion;
+        this.versions = versions;
         this.guard = guard;
+        this.guardV2 = guardV2;
+        this.bridges = bridges;
         this.audit = audit;
     }
 
@@ -50,7 +60,7 @@ public final class VaultCommands implements TabExecutor {
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         switch (command.getName().toLowerCase(Locale.ROOT)) {
             case "vault-info" -> {
-                for (String line : VaultInfo.lines(plugin, apiVersion, guard.get(), audit.get())) {
+                for (String line : VaultInfo.lines(plugin, versions, guard.get(), guardV2.get(), bridges.get(), audit.get())) {
                     sender.sendMessage(Component.text(line, line.startsWith(" ") ? NamedTextColor.GRAY : NamedTextColor.GOLD));
                 }
                 return true;
@@ -67,23 +77,24 @@ public final class VaultCommands implements TabExecutor {
 
     private void convert(CommandSender sender, String[] args) {
         if (args.length < 2 || args.length > 3 || (args.length == 3 && !args[2].equalsIgnoreCase("confirm"))) {
-            reply(sender, "Usage: /vault-convert <from> <to> [confirm]  (plugin names, see /vault-info)", NamedTextColor.RED);
+            reply(sender, "Usage: /vault-convert <from>[:v1|:v2] <to>[:v1|:v2] [confirm]  (plugin names, see /vault-info)",
+                    NamedTextColor.RED);
             return;
         }
-        RegisteredServiceProvider<Economy> from = economyOf(args[0]);
-        RegisteredServiceProvider<Economy> to = economyOf(args[1]);
+        Endpoint from = endpoint(args[0]);
+        Endpoint to = endpoint(args[1]);
         if (from == null || to == null) {
-            reply(sender, "No economy registered by plugin '" + (from == null ? args[0] : args[1]) + "'. Available: "
+            reply(sender, "No native economy registered by '" + (from == null ? args[0] : args[1]) + "'. Available: "
                     + String.join(", ", economyPlugins()), NamedTextColor.RED);
             return;
         }
-        if (from.getProvider() == to.getProvider()) {
+        if (from.provider() == to.provider()) {
             reply(sender, "Source and target are the same economy.", NamedTextColor.RED);
             return;
         }
         String key = senderKey(sender);
-        String fromName = from.getPlugin().getName();
-        String toName = to.getPlugin().getName();
+        String fromName = from.label();
+        String toName = to.label();
         boolean apply = args.length == 3;
         if (apply) {
             Pending dryRun = pending.get(key);
@@ -100,12 +111,13 @@ public final class VaultCommands implements TabExecutor {
         }
         reply(sender, (apply ? "Converting" : "Dry run: comparing") + " balances " + fromName + " -> " + toName
                 + " for all known players (async)...", NamedTextColor.YELLOW);
-        Economy source = from.getProvider();
-        Economy target = to.getProvider();
         plugin.getServer().getAsyncScheduler().runNow(plugin, task -> {
             try {
                 List<OfflinePlayer> players = Arrays.asList(plugin.getServer().getOfflinePlayers());
-                EconomyConverter.Report report = EconomyConverter.convert(source, target, players, apply);
+                // v1 -> v1 keeps the original double path; anything involving v2 runs in exact decimal.
+                EconomyConverter.Report report = from.provider() instanceof Economy source && to.provider() instanceof Economy target
+                        ? EconomyConverter.convert(source, target, players, apply)
+                        : EconomyConverter.convert(from.book(), to.book(), players, apply);
                 if (apply) pending.remove(key);
                 else pending.put(key, new Pending(fromName, toName, System.currentTimeMillis() + CONFIRM_WINDOW_MILLIS));
                 String summary = (apply ? "Converted " : "Dry run ") + fromName + " -> " + toName + ": players="
@@ -134,20 +146,52 @@ public final class VaultCommands implements TabExecutor {
         });
     }
 
-    private RegisteredServiceProvider<Economy> economyOf(String pluginName) {
-        for (RegisteredServiceProvider<Economy> registration
-                : VaultInfo.registrations(plugin.getServer().getServicesManager(), Economy.class)) {
-            if (registration.getProvider() instanceof GuardedEconomy) continue;
-            if (registration.getPlugin().getName().equalsIgnoreCase(pluginName)) return registration;
+    /**
+     * Resolves {@code Plugin}, {@code Plugin:v1} or {@code Plugin:v2} to a native provider (never a guard or a bridge).
+     * Without a suffix the plugin's v1 provider is preferred, then its v2 provider.
+     */
+    private Endpoint endpoint(String argument) {
+        String name = argument;
+        String api = null;
+        int colon = argument.lastIndexOf(':');
+        if (colon > 0) {
+            String suffix = argument.substring(colon + 1).toLowerCase(Locale.ROOT);
+            if (suffix.equals("v1") || suffix.equals("v2")) {
+                api = suffix;
+                name = argument.substring(0, colon);
+            }
+        }
+        ServicesManager services = plugin.getServer().getServicesManager();
+        if (!"v2".equals(api)) {
+            for (RegisteredServiceProvider<Economy> registration : VaultInfo.registrations(services, Economy.class)) {
+                if (!BridgeManager.isNative(registration.getProvider())) continue;
+                if (!registration.getPlugin().getName().equalsIgnoreCase(name)) continue;
+                String label = registration.getPlugin().getName() + ":v1";
+                return new Endpoint(label, registration.getProvider(), EconomyConverter.v1(registration.getProvider(), label));
+            }
+            if ("v1".equals(api)) return null;
+        }
+        for (RegisteredServiceProvider<net.milkbowl.vault2.economy.Economy> registration
+                : VaultInfo.registrations(services, net.milkbowl.vault2.economy.Economy.class)) {
+            if (!BridgeManager.isNative(registration.getProvider())) continue;
+            if (!registration.getPlugin().getName().equalsIgnoreCase(name)) continue;
+            String label = registration.getPlugin().getName() + ":v2";
+            return new Endpoint(label, registration.getProvider(),
+                    EconomyConverter.v2(registration.getProvider(), label, plugin.getName()));
         }
         return null;
     }
 
+    /** Native economies as {@code Plugin:v1} / {@code Plugin:v2}. */
     private List<String> economyPlugins() {
+        ServicesManager services = plugin.getServer().getServicesManager();
         List<String> names = new ArrayList<>();
-        for (RegisteredServiceProvider<Economy> registration
-                : VaultInfo.registrations(plugin.getServer().getServicesManager(), Economy.class)) {
-            if (!(registration.getProvider() instanceof GuardedEconomy)) names.add(registration.getPlugin().getName());
+        for (RegisteredServiceProvider<Economy> registration : VaultInfo.registrations(services, Economy.class)) {
+            if (BridgeManager.isNative(registration.getProvider())) names.add(registration.getPlugin().getName() + ":v1");
+        }
+        for (RegisteredServiceProvider<net.milkbowl.vault2.economy.Economy> registration
+                : VaultInfo.registrations(services, net.milkbowl.vault2.economy.Economy.class)) {
+            if (BridgeManager.isNative(registration.getProvider())) names.add(registration.getPlugin().getName() + ":v2");
         }
         return names;
     }

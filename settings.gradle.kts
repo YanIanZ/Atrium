@@ -50,8 +50,20 @@ dependencyResolutionManagement {
         maven("https://repo.codemc.io/repository/maven-releases/") {
             content { includeGroupAndSubgroups("com.github.retrooper") }
         }
+        // VaultUnlockedAPI (the Vault v2 API, LGPL-3.0): bundled by atrium-vault, compile-only for modules/economy.
+        maven("https://repo.codemc.io/repository/creatorfromhell/") {
+            content { includeModule("net.milkbowl.vault", "VaultUnlockedAPI") }
+        }
         maven("https://repo.mikeprimm.com/") {
             content { includeGroupByRegex("us\\.dynmap.*") }
+        }
+        // Multiverse-Core 5 API (compile-only, modules/worlds).
+        maven("https://repo.onarandombox.com/multiverse-releases") {
+            content { includeGroupAndSubgroups("org.mvplugins") }
+        }
+        // InfernalSuite Advanced Slime Paper API and loaders (compile-only, modules/worlds).
+        maven("https://repo.infernalsuite.com/repository/maven-releases/") {
+            content { includeGroupAndSubgroups("com.infernalsuite") }
         }
     }
 }

@@ -1,8 +1,9 @@
 # Atrium Vault configuration. Restart the server after changing it.
 
 guard:
-  # Register GuardedEconomy at the highest priority. Plugins asking Vault for an economy then get a wrapper that
-  # validates every call and forwards it to the best real economy provider (Atrium, EssentialsX, ...).
+  # Register GuardedEconomy (Vault v1) and GuardedEconomyV2 (Vault v2) at the highest priority. Plugins asking Vault
+  # for an economy then get a wrapper that validates every call and forwards it to the best real economy provider of
+  # that API (Atrium, EssentialsX, ...).
   # false: plugins talk to the economy provider directly, exactly like original Vault.
   enabled: true
   # Largest amount accepted for a single withdraw/deposit. NaN, infinite and negative amounts are always rejected.
@@ -13,9 +14,21 @@ guard:
   # this many milliseconds, naming the calling plugin. Vault is a blocking API; this finds the plugin to fix.
   # 0 disables the report.
   slow-call-warn-millis: 50
+  # Vault v2 (VaultUnlocked) amounts are exact decimals. Most decimal places a v2 amount may carry (trailing zeros do
+  # not count) and most significant digits; amounts outside these limits are rejected before reaching the provider.
+  # max-amount above applies to v2 writes too.
+  max-scale: 10
+  max-precision: 38
+
+bridge:
+  # Plugins compiled against Vault v1 (net.milkbowl.vault) and v2 (net.milkbowl.vault2, VaultUnlocked) look for
+  # different services. When only one API has a real economy provider, expose it under the other API too:
+  # a v1-only economy (EssentialsX, ...) becomes a v2 provider and a v2-only economy becomes a v1 provider.
+  # No bridge is registered when both APIs have a native provider. Bridged providers are marked in /vault-info.
+  enabled: true
 
 audit:
-  # Log every withdraw/deposit going through the guard to plugins/Vault/audit/audit.log (tab-separated:
+  # Log every withdraw/deposit (v2: also set/transfer, with exact amounts) going through the guard to plugins/Vault/audit/audit.log (tab-separated:
   # time, operation, account, world, amount, result, balance, caller plugin, message). Asynchronous and bounded:
   # when the queue is full, entries are dropped and counted, the calling plugin never waits.
   enabled: true

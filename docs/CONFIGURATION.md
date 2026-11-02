@@ -92,7 +92,37 @@ same name, for example `modules/customtext/` (text pages such as `motd.yml` and 
 `modules/recipes/`. Module-specific documentation:
 
 - SourbyCraft integration: [SOURBYCRAFT.md](SOURBYCRAFT.md)
+- World teleport: [`modules/worlds.yml`](#modulesworldsyml) below
 - Commands and permissions of every module: [COMMANDS.md](COMMANDS.md), [PERMISSIONS.md](PERMISSIONS.md)
+
+### `modules/worlds.yml`
+
+World teleport across world managers (`/wtp <world> [player]`, alias `/worldtp`; `/worlds [page]`, `/worlds load`,
+`/worlds unload`; `/worldinfo [world]`; `/wtp profile [player]` on SourbyCraft MultiProfile). Providers: `bukkit`
+(loaded worlds), `multiverse` (Multiverse-Core 5.2+, Paper), `slime` (Advanced Slime Paper) and `awf` (SourbyCraft,
+added by the `sourbycraft` module). The provider chain is also the `WorldResolver` of homes, warps and /back.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `provider-order` | `[multiverse, awf, slime, bukkit]` | The first provider that knows a name or alias owns the world (loads it, gives its spawn). Missing ids go last. |
+| `load-on-demand` | `true` | Load known but unloaded worlds for `/wtp`, homes, warps and /back. |
+| `load-timeout-seconds` | `60` | Give up waiting for a load (5-300). |
+| `require-world-permission` | `false` | Also need `atrium.wtp.world.<world>` (lower case) or `atrium.wtp.world.*`. An explicitly denied world node always blocks. |
+| `mvtp-alias` | `true` | Register `/mvtp` as an alias of `/wtp` only when Multiverse-Core is not installed (restart). |
+| `page-size` | `10` | Worlds per `/worlds` page. |
+| `unload-confirm-seconds` | `30` | Validity of a `/worlds unload <world>` confirmation. |
+| `multiverse.enabled` | `true` | Use Multiverse-Core 5 when installed (restart). |
+| `multiverse.respect-access-permissions` | `true` | When Multiverse enforces access, the travelling player needs `multiverse.access.<world>`. |
+| `slime.enabled` | `true` | Use Advanced Slime Paper when its API is present (restart). |
+| `slime.loader` | `file` | `file` (directory `slime.file-path`, default `slime_worlds`), or `mysql`, `mongodb`, `api` (settings under `slime.mysql`, `slime.mongodb`, `slime.api`; these need the ASPaperPlugin). |
+| `slime.read-only` | `false` | Load slime worlds read-only (never saved back). |
+| `slime.list-refresh-seconds` | `60` | How often the loader's world list is re-read (it is I/O, so it is cached). |
+
+Safety: world names are limited to letters, digits and `_ - . +` (no leading dot, no `..`), and the file loader
+also checks the resolved path stays in its directory. Unknown worlds are refused. `/worlds unload` (OP) works only
+for loaded Multiverse and slime worlds without players, never the main world, and needs `/worlds unload <world>
+confirm` within the confirmation time. Loading never runs on a region thread: Multiverse and ASP's `loadWorld` run
+on the global thread, slime worlds are read on a virtual thread first.
 
 ## Lang files
 

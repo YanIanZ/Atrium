@@ -8,6 +8,35 @@ version; patch releases with no notable change are not listed separately.
 
 ## [Unreleased]
 
+### Atrium Vault 2.20.0-atrium.3
+- Vault v2 support: bundles VaultUnlockedAPI 2.20 (`net.milkbowl.vault2.*`, LGPL-3.0) unmodified next to VaultAPI
+  1.7.1, declares `provides: [VaultUnlocked]` and reports version `2.20.0-atrium.3` (was `1.7.3-atrium.2`) so plugins
+  that check for VaultUnlocked by version pick the v2 API. v1 binary compatibility is unchanged.
+- `GuardedEconomyV2`: validates BigDecimal amounts (null, negative, scale, precision, maximum) and null arguments,
+  turns provider exceptions into failure responses, audits v2 writes with exact amounts and reports slow tick-thread
+  calls. New options `guard.max-scale`, `guard.max-precision`.
+- v1/v2 bridges (`bridge.enabled`): a v1-only economy is exposed as a v2 provider and a v2-only economy as a v1
+  provider; never both, never when both APIs have a native provider; marked `BRIDGED` in `/vault-info`.
+- `/vault-info` shows v1 and v2 providers, the bridge and both guards; `/vault-convert` accepts `Plugin:v1` /
+  `Plugin:v2` and converts in exact decimal when a v2 side is involved.
+
+### Economy
+- Native Vault v2 (VaultUnlocked) economy provider next to the v1 one: exact BigDecimal, UUID accounts, one currency
+  (`default`), world groups through the v2 world parameter, non-blocking cached reads, bounded writes, atomic `set` and
+  `transfer`, and the calling plugin's name in the ledger reason (`vault2:<operation>:<plugin>`).
+
+### Added
+- `worlds` module: `/wtp <world> [player]` (alias `/worldtp`, and `/mvtp` when Multiverse-Core is not installed),
+  `/worlds [page]` (clickable, with provider, state and players), `/worlds load`, `/worlds unload <world>` with
+  confirmation, `/worldinfo [world]`. Teleports go through the teleport service (warmup, safety, /back) to the
+  provider's spawn, loading the world first with a progress message. Permissions `atrium.wtp`, `atrium.wtp.others`,
+  `atrium.wtp.world.<world>` and the `require-world-permission` option.
+- World provider chain in the API (`WorldProvider`, `WorldProviderRegistry`, `KnownWorld`) behind the existing
+  `WorldResolver`: Bukkit, Multiverse-Core 5 (unloaded worlds, aliases, spawns, access permissions), Advanced Slime
+  Paper (worlds from the configured loader, loaded asynchronously) and SourbyCraft AWF; order configurable.
+- SourbyCraft: AWF joins the world provider chain; `ProfileWorldService` and `/wtp profile [player]` teleport to the
+  active profile's primary world (official API only).
+
 ## [1.0.0] - 2026-11-03
 
 Initial feature set.

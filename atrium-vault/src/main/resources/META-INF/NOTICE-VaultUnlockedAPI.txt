@@ -1,0 +1,17 @@
+Atrium Vault bundles, unmodified and without relocation, the compiled classes of
+
+    VaultUnlockedAPI 2.20 (net.milkbowl.vault:VaultUnlockedAPI:2.20, https://repo.codemc.io/repository/creatorfromhell/)
+    Copyright (C) The New Economy, Daniel "creatorfromhell" Vidmar, MilkBowl and the Vault contributors
+    https://github.com/TheNewEconomy/VaultUnlockedAPI
+
+namely the package net.milkbowl.vault2 and its subpackages (economy, permission, chat, helper, minecraft). The copies
+of the v1 classes that the VaultUnlockedAPI artifact also contains are NOT taken from it; the v1 classes in this jar
+come from VaultAPI 1.7.1 (see NOTICE-VaultAPI.txt), whose public signatures are identical.
+VaultUnlockedAPI is licensed under the GNU Lesser General Public License, version 3 (see
+LICENSE-VaultUnlockedAPI-LGPL-3.0.txt, which incorporates the GNU General Public License, version 3:
+LICENSE-GPL-3.0.txt). Its corresponding source is available at https://github.com/TheNewEconomy/VaultUnlockedAPI
+and as VaultUnlockedAPI-2.20-sources.jar in the repository above. You may replace these classes with a modified version
+of the library: they are loaded as ordinary classes from this jar under their original names.
+
+All other classes in this jar (net.milkbowl.vault.Vault and everything under dev.yanianz.atrium.vault) are original
+Atrium code, not derived from Vault or VaultUnlocked, and are not covered by these licenses.

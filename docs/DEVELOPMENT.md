@@ -20,7 +20,7 @@ modern design. All paths below are relative to the repository root.
 | `modules/<name>/` | One feature module per directory, auto-included by `settings.gradle.kts` and bundled by `atrium-plugin` |
 | `modules/player/` | **Reference module**. Copy its structure. |
 | `atrium-plugin/` | Assembles the final jar and `paper-plugin.yml`. Change it only when a change requires it. |
-| `atrium-vault/` | Atrium Vault, the separate drop-in Vault plugin (bundles the LGPL VaultAPI classes unmodified) |
+| `atrium-vault/` | Atrium Vault, the separate drop-in Vault/VaultUnlocked plugin (bundles the LGPL VaultAPI v1 and VaultUnlockedAPI v2 classes unmodified) |
 | `compat/sourbyapi-26.2/` | Compile-only SourbyCraft API baseline, downloaded and hash-checked at build time |
 | `buildSrc/` | Shared Gradle conventions (`atrium.module`, `atrium.java-conventions`) |
 | `scripts/` | `new-server.sh` (isolated test server), `smoke.sh` (boot a server, run console commands) |

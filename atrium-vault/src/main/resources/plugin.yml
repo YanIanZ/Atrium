@@ -1,21 +1,23 @@
-# Atrium Vault: drop-in replacement for Vault. The name and main class are what other plugins look for.
+# Atrium Vault: drop-in replacement for Vault and VaultUnlocked. The name and main class are what other plugins look
+# for; VaultUnlocked itself is also named "Vault". provides: lets plugins that name VaultUnlocked in depend/softdepend load.
 name: Vault
+provides: [VaultUnlocked]
 version: '${version}'
 main: net.milkbowl.vault.Vault
 api-version: '26.1'
 load: STARTUP
 folia-supported: true
-description: Atrium Vault - Folia-ready, guarded drop-in replacement for Vault (ships VaultAPI ${vaultApiVersion}, LGPL-3.0).
+description: Atrium Vault - Folia-ready, guarded drop-in replacement for Vault and VaultUnlocked (ships VaultAPI ${vaultApiVersion} and VaultUnlockedAPI ${vaultUnlockedApiVersion}, LGPL-3.0).
 authors: [yanianz]
 website: https://github.com/yanianz
 commands:
   vault-info:
-    description: Shows the Vault version, every registered Economy/Permission/Chat provider and the guard status.
+    description: Shows the Vault version, every registered v1/v2 Economy/Permission/Chat provider, the bridges and the guard status.
     usage: /<command>
     permission: vault.admin
   vault-convert:
-    description: Copies balances between two registered economy providers (dry run first, then confirm).
-    usage: /<command> <from> <to> [confirm]
+    description: Copies balances between two registered economy providers, v1 or v2 (dry run first, then confirm).
+    usage: /<command> <from>[:v1|:v2] <to>[:v1|:v2] [confirm]
     permission: vault.admin
 permissions:
   vault.admin:

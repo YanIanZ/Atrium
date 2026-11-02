@@ -247,8 +247,14 @@ public final class AuditLog implements AuditSink, AutoCloseable {
     /** One tab-separated line: time, operation, account, world, amount, result, balance, caller, message. */
     static String render(AuditEntry e) {
         return Instant.ofEpochMilli(e.epochMillis()) + "\t" + clean(e.operation()) + '\t' + account(e.account()) + '\t'
-                + clean(e.world()) + '\t' + e.amount() + '\t' + clean(e.result()) + '\t' + e.balance() + '\t'
+                + clean(e.world()) + '\t' + number(e.amount()) + '\t' + clean(e.result()) + '\t' + number(e.balance()) + '\t'
                 + clean(e.caller()) + '\t' + clean(e.message());
+    }
+
+    /** Exact decimals are written in plain notation (no exponent); doubles keep Java's usual rendering. */
+    private static String number(Number value) {
+        if (value == null) return "-";
+        return value instanceof java.math.BigDecimal decimal ? decimal.toPlainString() : value.toString();
     }
 
     /** File size accounting is in bytes, not Java chars: a multi-byte character would undercount the rotation. */

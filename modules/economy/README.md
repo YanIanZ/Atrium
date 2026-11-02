@@ -126,6 +126,29 @@ boundary already returned for a failed or timed-out read, so keep bulk conversio
 other exact reads on EconomyService futures. Vault's external double interface also limits
 precision; Atrium's internal API stays exact.
 
+## Vault v2 (VaultUnlocked) provider
+
+When the Vault v2 API (`net.milkbowl.vault2`, shipped by Atrium Vault 2.20+ or VaultUnlocked) is on the class path,
+the module also registers a native v2 economy provider (`VaultUnlockedBridge`, priority Normal) next to the v1 one,
+and unregisters it on module disable.
+
+- Amounts are exact `BigDecimal`s: null or negative amounts and amounts with more decimal places than `scale` are
+  refused (FAILURE), never rounded. Accounts are UUIDs; only player accounts exist (`createAccount(..., false)`,
+  shared accounts, rename and delete return `false`).
+- Currency: one, id `default`; the configured `currency-singular`/`currency-plural` names are accepted as aliases
+  (case-insensitive). Another currency fails writes and reads as `0`. `hasMultiCurrencySupport()` is `false`.
+- World groups: the v2 `world` parameter selects the group of that world (exact world names, then globs) exactly like
+  the v1 world overloads; a name that maps to no world but is a configured group name (or the default group's name)
+  selects that group, so v2 callers can address `survival` directly. Overloads without a world use the context group
+  (current group of an online player, otherwise the default group). With groups disabled everything is one balance.
+  `transfer` keeps both sides in one group (the world's group, or the payer's context group).
+- Reads follow the same non-blocking policy as v1 (`VaultReads`): online balances from the cache; a tick thread never
+  waits. Writes wait at most `vault-timeout-millis`; a timeout is a FAILURE with an unknown outcome (do not retry
+  blindly). `set` and `transfer` are single ledger transactions.
+- The v2 `pluginName` is recorded in the ledger reason as `vault2:<operation>:<plugin>` (letters, digits, `_-.`,
+  at most 64 characters). v1 writes keep `vault:deposit` / `vault:withdraw`.
+- `getUUIDNameMap()` lists online accounts only (no storage scan on the caller's thread); `async()` is empty.
+
 ## Validation
 
 Normal verification:

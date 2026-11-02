@@ -11,4 +11,5 @@ available at https://github.com/MilkBowl/VaultAPI (tag 1.7.1). You may replace t
 of the library: they are loaded as ordinary classes from this jar under their original names.
 
 All other classes in this jar (net.milkbowl.vault.Vault and everything under dev.yanianz.atrium.vault) are original
-Atrium code, not derived from Vault, and are not covered by the VaultAPI license.
+Atrium code, not derived from Vault, and are not covered by the VaultAPI license. The net.milkbowl.vault2 classes are
+VaultUnlockedAPI (see NOTICE-VaultUnlockedAPI.txt).

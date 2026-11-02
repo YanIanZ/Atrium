@@ -13,13 +13,14 @@ import java.util.Set;
  * First-class support for SourbyCraft (region-threaded Paper fork): AWF MultiProfile (profile-scoped Atrium
  * data through one {@code ProfileStateAdapter}, active profile for placeholders and {@code /atrium profile},
  * economy mode check), Aurora World Fabric (worlds loaded on demand for homes, warps and /back; async unload
- * notification) and SourbyCraft's region metrics in /lag.
+ * notification; AWF joins the {@code worlds} module's provider chain when that module runs), the worlds of the
+ * active profile for {@code /wtp profile}, and SourbyCraft's region metrics in /lag.
  *
  * <p>Isolation: this class references no SourbyCraft type. The hook classes ({@code ProfileHook},
- * {@code WorldHook}, {@code UnloadHook}, {@code MetricsHook} and what they use) are loaded only after their
- * API classes were found, and each of them checks that its service is registered. On plain Paper/Folia the
- * module logs once and stays idle. Atrium needs no Aurora Compatibility Bridge: it is region-aware
- * ({@code folia-supported: true}).
+ * {@code WorldHook}, {@code ProfileWorldHook}, {@code UnloadHook}, {@code MetricsHook} and what they use) are
+ * loaded only after their API classes were found, and each of them checks that its service is registered. On
+ * plain Paper/Folia the module logs once and stays idle. Atrium needs no Aurora Compatibility Bridge: it is
+ * region-aware ({@code folia-supported: true}).
  */
 public final class SourbyCraftModule implements AtriumModule {
     static final String PROFILES_API = "dev.iyanz.sourbycraft.api.profile.AuroraProfiles";
@@ -35,6 +36,7 @@ public final class SourbyCraftModule implements AtriumModule {
             new AwfWorldResolver.Settings(true, Duration.ofSeconds(30), Set.of());
     private volatile String economyMode = "not checked yet";
     private AutoCloseable profileHook;
+    private AutoCloseable worldHook;
     private final List<String> active = new ArrayList<>();
 
     @Override
@@ -49,8 +51,9 @@ public final class SourbyCraftModule implements AtriumModule {
 
     @Override
     public Set<String> softDependencies() {
-        // Providers of profile-scoped data and the services consumed here enable first when present.
-        return Set.of("homes", "kits", "teleport", "economy");
+        // Providers of profile-scoped data and the services consumed here enable first when present. The worlds
+        // module enables first so that AWF can join its world provider chain.
+        return Set.of("homes", "kits", "teleport", "economy", "worlds");
     }
 
     @Override
@@ -75,8 +78,14 @@ public final class SourbyCraftModule implements AtriumModule {
                 active.add("multiprofile");
             }
         }
-        if (worldsApi && WorldHook.start(this)) {
-            active.add("awf-worlds");
+        if (worldsApi) {
+            worldHook = WorldHook.start(this);
+            if (worldHook != null) {
+                active.add("awf-worlds");
+            }
+        }
+        if (profilesApi && ProfileWorldHook.start(this)) {
+            active.add("profile-worlds");
         }
         if (unloadApi && cfg.worldUnloadNotify) {
             UnloadHook.start(this);
@@ -106,6 +115,15 @@ public final class SourbyCraftModule implements AtriumModule {
                 hook.close();
             } catch (Exception e) {
                 ctx.logger().warn("Stopping the SourbyCraft profile integration failed", e);
+            }
+        }
+        AutoCloseable worlds = worldHook;
+        worldHook = null;
+        if (worlds != null) {
+            try {
+                worlds.close();
+            } catch (Exception e) {
+                ctx.logger().warn("Removing AWF from the world provider chain failed", e);
             }
         }
         active.clear();

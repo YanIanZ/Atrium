@@ -115,6 +115,24 @@ final class WorldGroups {
         return resolved.computeIfAbsent(lower, this::resolve);
     }
 
+    /**
+     * Group key for the world parameter of the Vault v2 (VaultUnlocked) API: the group of that world, as for Vault v1.
+     * A name that is not mapped to any group (no exact name, no glob) but is the name of a configured group selects
+     * that group, so a v2 caller can address a group directly, e.g. {@code "survival"}. Everything else is the
+     * default group. With groups disabled always the default group.
+     */
+    String keyOfWorldOrGroup(String name) {
+        if (!enabled || name == null) return DEFAULT_KEY;
+        String lower = name.trim().toLowerCase(Locale.ROOT);
+        String key = exact.get(lower);
+        if (key != null) return key;
+        for (Map.Entry<Pattern, String> glob : globs) {
+            if (glob.getKey().matcher(lower).matches()) return glob.getValue();
+        }
+        String group = keyOf(name);
+        return group != null ? group : DEFAULT_KEY;
+    }
+
     private String resolve(String lower) {
         String key = exact.get(lower);
         if (key != null) return key;
