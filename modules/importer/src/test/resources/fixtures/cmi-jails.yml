@@ -1,0 +1,12 @@
+town:
+  Loc: world:-10.0:60.0:-10.0:10.0:80.0:10.0
+  safeLoc: world;0.5;64.0;20.5;0.0;0.0
+  cells:
+    '1':
+      location: world;0.5;61.0;0.5;90.0;0.0
+    '2':
+      location: world;5.5;61.0;0.5;90.0;0.0
+old jail:
+  Loc: world_nether:0:0:0:4:4:4
+empty:
+  Note: nothing here

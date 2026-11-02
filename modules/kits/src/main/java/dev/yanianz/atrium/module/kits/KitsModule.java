@@ -108,6 +108,7 @@ public final class KitsModule implements AtriumModule, Listener {
         ctx.permission("atrium.kit.bypass.maxuses", PermissionDefault.OP, "Ignore per-kit maximum uses");
         for (Kit kit : kits.kits()) registerPermission(kit);
         registerCommands();
+        ctx.service(dev.yanianz.atrium.api.kits.KitAdminService.class, new KitAdmin(kits, kit -> ctx.scheduler().global(() -> registerPermission(kit))));
         ctx.logger().info("Loaded {} kits", kits.kits().size());
     }
 

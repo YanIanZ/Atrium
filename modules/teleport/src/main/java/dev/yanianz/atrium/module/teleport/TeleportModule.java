@@ -64,6 +64,10 @@ public final class TeleportModule implements AtriumModule {
         ctx.service(ExtendedTeleportService.class, service);
         // Stored destinations in worlds that are not loaded (AWF/profile worlds) go through WorldResolver.
         ctx.service(dev.yanianz.atrium.api.teleport.StoredTeleportService.class, new StoredTeleports(ctx, service));
+        // Import tools: spawn points and /back entries (the importer module).
+        TeleportAdmin admin = new TeleportAdmin(ctx, service, store, config);
+        ctx.service(dev.yanianz.atrium.api.teleport.SpawnAdminService.class, admin);
+        ctx.service(dev.yanianz.atrium.api.teleport.BackHistoryAdminService.class, admin);
     }
 
     private static void registerPermissions(ModuleContext ctx, TeleportConfig config) {

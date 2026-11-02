@@ -64,22 +64,33 @@ The full key reference is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 The reference generated from the default configuration is in [docs/COMMANDS.md](docs/COMMANDS.md) and
 [docs/PERMISSIONS.md](docs/PERMISSIONS.md).
 
-## Migrating from CMI or EssentialsX
+## Migrating from CMI, EssentialsX or another economy plugin
 
-Run the importer from the console:
+Run the importer from the console, with the old plugin's data folder still in `plugins/`:
 
 ```text
-/atrium-backup                         # snapshot the SQLite database first
-/atrium-import cmi dry-run             # or: /atrium-import essentials dry-run
-/atrium-import cmi run                 # import
-/atrium-import status                  # progress of a running import
+/atrium-backup                                # snapshot the SQLite database first
+/atrium-import sources                        # what was found and what each source can import
+/atrium-import cmi dry-run                    # or: essentials | vanilla, counts only, nothing is written
+/atrium-import cmi run                        # import
+/atrium-import economy XConomy dry-run        # balances from any other Vault economy plugin
+/atrium-import economy XConomy run
+/atrium-import status                         # progress of a running import
 ```
 
-The importer brings over balances, homes, warps, nicknames, playtime and holograms. Options: `--only=<categories>`
-(for example `--only=economy,homes`) and `--overwrite`. Imports are idempotent (an import ledger skips records that
-were already imported) and all-or-nothing per player, and every run writes a report file. Data Atrium cannot store
-yet (kits, mail, ignore lists, jail/mute/ban states and similar) is listed in the report instead of being dropped
-silently.
+| Source | Command | Imports |
+|---|---|---|
+| CMI | `/atrium-import cmi` | balances, homes, warps, nicknames, playtime, holograms, spawn and first-join spawn, kits, jails, mutes, last location (`/back`) |
+| EssentialsX | `/atrium-import essentials` | balances, homes, warps, nicknames, spawn and first-join spawn, kits, jails, mutes, jail sentences, bans, mail, logout location (`/back`) |
+| Vanilla ban lists | `/atrium-import vanilla` | `banned-players.json` and `banned-ips.json` (bans, temp bans, IP bans); also read by the CMI and EssentialsX imports |
+| Vault economy | `/atrium-import economy <plugin>` | balances from any other plugin registered as a Vault economy (RoyaleEconomy, XConomy, EssentialsX, CMI, TheNewEconomy, ...) |
+
+Options: `--only=<categories>` (for example `--only=warps,spawn,kits`) and `--overwrite`. Imports are idempotent:
+an import ledger remembers what was imported per source, and spawn points, warps, kits and jails that already
+exist are skipped unless `--overwrite` is given. Player data is all-or-nothing per player, and every run writes a
+report file listing, per category, what was imported, skipped or failed and why. Data Atrium cannot store (ignore
+lists, per-group spawns, kit commands and similar) is listed in the report instead of being dropped silently.
+The full per-source matrix is in [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ## Optional integrations
 

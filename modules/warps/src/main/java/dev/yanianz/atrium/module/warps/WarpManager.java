@@ -254,6 +254,56 @@ final class WarpManager {
     }
 
     /**
+     * Full import used by {@code WarpImportService}: the warp is stored exactly as given (owner, permission
+     * and creation time included). A new warp goes through the normal create path; an existing one is
+     * replaced only with {@code overwrite}.
+     */
+    CompletableFuture<Outcome> importFull(CommandSender actor, Warp warp, boolean overwrite) {
+        if (!Warp.validName(warp.name()) || !Warp.validName(warp.category())) {
+            return CompletableFuture.completedFuture(Outcome.INVALID_NAME);
+        }
+        if (!warp.derivedPermission() && !Warp.validPermission(warp.storedPermission())) {
+            return CompletableFuture.completedFuture(Outcome.INVALID_PERMISSION);
+        }
+        Optional<Warp> existing = get(warp.name());
+        if (existing.isPresent()) {
+            if (!overwrite) {
+                return CompletableFuture.completedFuture(Outcome.EXISTS);
+            }
+            // Keep the stored spelling of the name so the row key does not change.
+            Warp replaced = new Warp(existing.get().name(), warp.category(), warp.location(), warp.creator(),
+                    warp.createdAt(), warp.storedPermission());
+            return overwrite(actor, replaced);
+        }
+        String key = warp.key();
+        if (!pendingNames.add(key)) {
+            return CompletableFuture.completedFuture(Outcome.EXISTS);
+        }
+        if (!createGate.test(new WarpCreateEvent(actor, warp.name(), null, warp.location(), warp.category()))) {
+            pendingNames.remove(key);
+            return CompletableFuture.completedFuture(Outcome.CANCELLED);
+        }
+        synchronized (lock) {
+            if (warps.containsKey(key)) {
+                pendingNames.remove(key);
+                return CompletableFuture.completedFuture(Outcome.EXISTS);
+            }
+        }
+        return storage.upsert(warp).handle((ignored, error) -> {
+            synchronized (lock) {
+                if (error == null) {
+                    warps.put(key, warp);
+                }
+                pendingNames.remove(key);
+            }
+            if (error != null) {
+                throw rethrow(error);
+            }
+            return Outcome.CREATED;
+        });
+    }
+
+    /**
      * Sets (or clears, with a blank node) the custom permission of an existing warp. It is an ordinary
      * update: the create gate runs first, storage is written, then memory changes.
      */

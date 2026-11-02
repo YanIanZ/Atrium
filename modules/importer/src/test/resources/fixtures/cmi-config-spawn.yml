@@ -1,0 +1,13 @@
+Spawn:
+  Main:
+    World: world
+    X: 0.5
+    Y: 64.0
+    Z: 0.5
+    Pitch: 10.0
+    Yaw: 90.0
+  FirstSpawn:
+    Use: true
+    Location: world;100.5;70.0;-50.5;180.0;0.0
+Newbie:
+  Kit: starter

@@ -13,20 +13,22 @@ public enum ImportCategory {
     NICKS("nicks"),
     PLAYTIME("playtime"),
     HOLOGRAMS("holograms"),
-    /** EssentialsSpawn's spawn point; reported until a spawn write API exists. */
+    /** Spawn and first-join spawn points (SpawnAdminService). */
     SPAWN("spawn"),
-    /** Essentials kits; reported until the kits module exposes an import API. */
+    /** Kits with their items (KitAdminService). */
     KITS("kits"),
-    /** Last and logout locations; reported until Atrium stores a per-player location. */
+    /** Jails (ModerationImportService). */
+    JAILS("jails"),
+    /** Active bans, temp bans, IP bans, mutes and jail sentences (ModerationImportService). */
+    PUNISHMENTS("punishments"),
+    /** Last/logout location as one imported /back entry (BackHistoryAdminService). */
     LOCATIONS("locations"),
+    /** Offline mail (MailAdminService). */
+    MAIL("mail"),
     /** Login/logout timestamps; reported only. */
     HISTORY("history"),
-    /** Essentials ignore lists; reported because IgnoreService is read-only. */
+    /** Ignore lists; reported only (the chat module has no write API for them). */
     IGNORE("ignore"),
-    /** Essentials mail; reported because the mail module has no public API. */
-    MAIL("mail"),
-    /** Jail, mute and ban states; reported only. */
-    STATES("states"),
     /** Row-level source problems that are not tied to one importable record. */
     SOURCE("source");
 
@@ -45,6 +47,9 @@ public enum ImportCategory {
             return null;
         }
         String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.equals("states")) {
+            return PUNISHMENTS; // name used before punishments were imported
+        }
         for (ImportCategory category : values()) {
             if (category != SOURCE && category.key.equals(normalized)) {
                 return category;
@@ -55,13 +60,24 @@ public enum ImportCategory {
 
     /** Categories the CMI importer understands, in display order. */
     public static Set<ImportCategory> cmi() {
-        return Collections.unmodifiableSet(EnumSet.range(ECONOMY, HOLOGRAMS));
+        return Collections.unmodifiableSet(EnumSet.of(ECONOMY, HOMES, WARPS, NICKS, PLAYTIME, HOLOGRAMS, SPAWN,
+                KITS, JAILS, PUNISHMENTS, LOCATIONS));
     }
 
     /** Categories the EssentialsX importer understands, in display order. */
     public static Set<ImportCategory> essentials() {
-        return Collections.unmodifiableSet(EnumSet.of(ECONOMY, HOMES, WARPS, NICKS, SPAWN, KITS,
-                LOCATIONS, HISTORY, IGNORE, MAIL, STATES));
+        return Collections.unmodifiableSet(EnumSet.of(ECONOMY, HOMES, WARPS, NICKS, SPAWN, KITS, JAILS,
+                PUNISHMENTS, LOCATIONS, MAIL, HISTORY, IGNORE));
+    }
+
+    /** Categories of the server's own ban files ({@code banned-players.json}, {@code banned-ips.json}). */
+    public static Set<ImportCategory> vanilla() {
+        return Collections.unmodifiableSet(EnumSet.of(PUNISHMENTS));
+    }
+
+    /** Categories of a Vault economy provider. */
+    public static Set<ImportCategory> economyOnly() {
+        return Collections.unmodifiableSet(EnumSet.of(ECONOMY));
     }
 
     /** {@code economy,homes,...} text used in usage messages. */

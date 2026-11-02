@@ -1,0 +1,24 @@
+lastAccountName: Alex
+money: 10
+timestamps:
+  login: 1600000000000
+  logout: 1600000100000
+  mute: 4102444800000
+  jail: 4102444800000
+muted: true
+mute-reason: spam
+jailed: true
+jail: cell1
+ban:
+  reason: griefing
+  timeout: 4102444800000
+logoutLocation:
+  world: world
+  x: 3.0
+  y: 66.0
+  z: 4.0
+mail:
+  - '{"senderName":"Steve","senderUUID":"11111111-2222-3333-4444-555555555555","message":"Hello there","timestamp":1600000000000,"expire":0,"read":true}'
+  - 'Console: Server restart tonight'
+  - 'just text'
+  - ''

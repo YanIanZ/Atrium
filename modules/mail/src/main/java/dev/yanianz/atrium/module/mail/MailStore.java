@@ -111,6 +111,43 @@ final class MailStore {
         });
     }
 
+    /**
+     * Imported mail for one recipient, in one transaction. A message identical to a stored one (same sender
+     * name, body and creation time) is skipped, so a repeated import never duplicates mail. Imported mail
+     * never expires and ignores the mailbox limit. Returns how many messages were stored.
+     */
+    CompletableFuture<Integer> importAll(UUID recipient, List<dev.yanianz.atrium.api.mail.MailAdminService.ImportedMail> mail) {
+        if (mail.isEmpty()) {
+            return CompletableFuture.completedFuture(0);
+        }
+        return db.transaction(connection -> {
+            int stored = 0;
+            try (PreparedStatement exists = connection.prepareStatement(
+                    "SELECT 1 FROM " + table + " WHERE recipient = ? AND sender_name = ? AND body = ? AND created = ?");
+                    PreparedStatement insert = connection.prepareStatement(
+                            "INSERT INTO " + table
+                                    + " (recipient, sender, sender_name, body, created, expires, is_read, dropped)"
+                                    + " VALUES (?, ?, ?, ?, ?, 0, ?, FALSE)")) {
+                for (var message : mail) {
+                    String senderName = message.senderName().length() > 64
+                            ? message.senderName().substring(0, 64) : message.senderName();
+                    Database.bind(exists, recipient.toString(), senderName, message.body(), message.created());
+                    try (ResultSet rs = exists.executeQuery()) {
+                        if (rs.next()) {
+                            continue;
+                        }
+                    }
+                    Database.bind(insert, recipient.toString(),
+                            message.sender() == null ? null : message.sender().toString(),
+                            senderName, message.body(), message.created(), message.read());
+                    insert.executeUpdate();
+                    stored++;
+                }
+            }
+            return stored;
+        });
+    }
+
     /** Reads (and marks as read) one page of a mailbox. Dropped messages are never shown. */
     CompletableFuture<Page> readPage(UUID recipient, int requestedPage, int pageSize) {
         int size = Math.max(1, pageSize);

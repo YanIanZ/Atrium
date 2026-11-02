@@ -66,6 +66,17 @@ Initial feature set.
 ### Migration
 - `/atrium-import cmi|essentials` with dry run, idempotent import ledger, per-player rollback and a report file;
   `/atrium-backup` for the SQLite database.
+- The CMI and EssentialsX imports also bring over spawn and first-join spawn, kits (items with name, lore and
+  enchantments; unsupported item data is reported), jails, active bans, temp bans, IP bans, mutes and jail
+  sentences, EssentialsX mail and the last/logout location as a `/back` entry. Warps keep yaw/pitch, category,
+  icon, owner and creation time, and worlds stored by UUID resolve to their name.
+- `/atrium-import vanilla` imports `banned-players.json` and `banned-ips.json`.
+- `/atrium-import economy <plugin>` imports balances from any other Vault economy provider (RoyaleEconomy,
+  XConomy, EssentialsX, CMI, TheNewEconomy, ...), with the provider's decimal precision and a per-plugin ledger.
+- `/atrium-import sources` lists the detected sources and what each can import; the report shows imported,
+  skipped and failed counts with their reasons for every category.
+- API: `SpawnAdminService`, `BackHistoryAdminService`, `WarpImportService`, `KitAdminService`,
+  `ModerationImportService` and `MailAdminService` for import tools.
 
 ### Atrium Vault
 - Folia-ready drop-in replacement for the Vault plugin (bundles VaultAPI 1.7.1 unmodified, LGPL-3.0) with a

@@ -1,0 +1,30 @@
+Starter:
+  Delay: 3600
+  MoneyCost: 100.50
+  MaxUsages: 5
+  Commands:
+    - say hi
+  Items:
+    '1':
+      type: STONE_SWORD
+      amount: 1
+      meta:
+        display-name: '&bTrusty Sword'
+        lore:
+          - First line
+          - Second line
+        enchants:
+          SHARPNESS: 2
+        custom-model-data: 7
+    '2':
+      type: BREAD
+      amount: 16
+    '37':
+      type: IRON_HELMET
+VIP Kit:
+  Enabled: false
+  MoneyCost: -5
+  Items:
+    - type: DIAMOND
+      amount: 3
+    - amount: 2

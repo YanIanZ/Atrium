@@ -13,7 +13,13 @@ import org.spongepowered.configurate.ConfigurationNode;
 final class EssentialsWarpParser {
     private EssentialsWarpParser() {}
 
-    record ParsedWarp(String name, String category, EssentialsLocations.EssLocation location, String problem) {
+    /** {@code owner} is Essentials' {@code lastowner}; {@code notes} lists renames. */
+    record ParsedWarp(String name, String category, EssentialsLocations.EssLocation location, String problem,
+            java.util.UUID owner, List<String> notes) {
+        ParsedWarp(String name, String category, EssentialsLocations.EssLocation location, String problem) {
+            this(name, category, location, problem, null, List.of());
+        }
+
         boolean ok() {
             return problem == null;
         }
@@ -83,21 +89,28 @@ final class EssentialsWarpParser {
         if (name == null || name.isBlank()) {
             return new ParsedWarp(null, null, null, "warp without a name");
         }
-        if (!name.matches("[A-Za-z0-9_-]{1,32}")) {
-            return new ParsedWarp(name, null, null, "invalid warp name '" + name + "'");
+        List<String> notes = new ArrayList<>();
+        if (!ImportNames.valid(name)) {
+            String fixed = ImportNames.sanitize(name);
+            if (fixed == null) {
+                return new ParsedWarp(name, null, null, "invalid warp name '" + name + "'");
+            }
+            notes.add("renamed '" + name + "' to '" + fixed + "' (Atrium names allow A-Z, 0-9, _ and -)");
+            name = fixed;
         }
         String category = CmiNodeLocations.text(node, "category", "Category");
         if (category == null || category.isBlank()) {
             category = "general";
         }
         category = category.trim();
-        if (!category.matches("[A-Za-z0-9_-]{1,32}")) {
+        if (!ImportNames.valid(category)) {
             return new ParsedWarp(name, null, null, "invalid warp category '" + category + "'");
         }
         Optional<EssentialsLocations.EssLocation> location = EssentialsLocations.parse(node);
         if (location.isEmpty()) {
             return new ParsedWarp(name, category, null, "warp '" + name + "' has no valid location");
         }
-        return new ParsedWarp(name, category.toLowerCase(Locale.ROOT), location.get(), null);
+        java.util.UUID owner = CmiWarpFileParser.uuid(CmiNodeLocations.text(node, "lastowner", "lastOwner", "owner"));
+        return new ParsedWarp(name, category.toLowerCase(Locale.ROOT), location.get(), null, owner, List.copyOf(notes));
     }
 }

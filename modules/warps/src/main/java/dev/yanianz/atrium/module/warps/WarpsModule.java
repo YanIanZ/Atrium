@@ -10,6 +10,7 @@ import dev.yanianz.atrium.api.teleport.TeleportOptions;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportCause;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportResult;
 import dev.yanianz.atrium.api.warps.WarpAdminService;
+import dev.yanianz.atrium.api.warps.WarpImportService;
 import dev.yanianz.atrium.api.warps.WarpService;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
@@ -54,7 +55,7 @@ import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 /** Server warps with categories, per-warp permissions, a chest menu and player-owned warp limits. */
-public final class WarpsModule implements AtriumModule, WarpService, WarpAdminService {
+public final class WarpsModule implements AtriumModule, WarpService, WarpAdminService, WarpImportService {
     static final String PERM_WARP = "atrium.warp";
     static final String PERM_ALL = "atrium.warps.all";
     static final String PERM_OTHERS = "atrium.warps.others";
@@ -174,6 +175,7 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
 
         ctx.service(WarpService.class, this);
         ctx.service(WarpAdminService.class, this);
+        ctx.service(WarpImportService.class, this);
     }
 
     @Override
@@ -235,6 +237,49 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                     case INVALID_PERMISSION -> throw new CompletionException(
                             new IllegalArgumentException("invalid warp permission: " + permission));
                     default -> throw new CompletionException(
+                            new IllegalStateException("Unexpected warp import outcome: " + outcome));
+                });
+    }
+
+    // ---- WarpImportService ----
+
+    @Override
+    public CompletableFuture<Boolean> importWarp(WarpImport input, boolean overwrite) {
+        String category = input.category() == null || input.category().isBlank()
+                ? config.get().defaultCategory : input.category().trim();
+        if (!Warp.validName(input.name()) || !Warp.validName(category)) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                    "invalid warp name or category: " + input.name() + " / " + category));
+        }
+        String permission = input.permission() == null ? "" : input.permission().strip();
+        if (!permission.isEmpty() && !Warp.validPermission(permission)) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("invalid warp permission: " + permission));
+        }
+        org.bukkit.Material icon = null;
+        if (input.iconMaterial() != null && !input.iconMaterial().isBlank()) {
+            icon = org.bukkit.Material.matchMaterial(input.iconMaterial().trim());
+            if (icon == null || !icon.isItem() || icon.isAir()) {
+                return CompletableFuture.failedFuture(new IllegalArgumentException(
+                        "invalid warp icon material: " + input.iconMaterial()));
+            }
+        }
+        long created = input.createdAt() > 0 ? input.createdAt() : System.currentTimeMillis();
+        Warp warp = new Warp(input.name(), category, input.location(), input.owner(), created, permission);
+        String iconName = icon == null ? null : icon.name();
+        int modelData = Math.max(-1, input.iconModelData());
+        return ctx.scheduler()
+                .supplyGlobal(() -> manager.importFull(ctx.plugin().getServer().getConsoleSender(), warp, overwrite))
+                .thenCompose(future -> future)
+                .thenCompose(outcome -> switch (outcome) {
+                    case CREATED, MOVED -> iconName == null ? CompletableFuture.completedFuture(Boolean.TRUE)
+                            : updateIcons(icons -> icons.put(warp.key(), new WarpsConfig.Icon(iconName, modelData)))
+                                    .thenApply(ignored -> Boolean.TRUE);
+                    case EXISTS, CANCELLED -> CompletableFuture.completedFuture(Boolean.FALSE);
+                    case INVALID_NAME -> CompletableFuture.failedFuture(
+                            new IllegalArgumentException("invalid warp name or category: " + input.name()));
+                    case INVALID_PERMISSION -> CompletableFuture.failedFuture(
+                            new IllegalArgumentException("invalid warp permission: " + permission));
+                    default -> CompletableFuture.failedFuture(
                             new IllegalStateException("Unexpected warp import outcome: " + outcome));
                 });
     }

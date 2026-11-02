@@ -33,11 +33,21 @@ final class EssentialsUserParser {
     record UserFile(String id, UUID uuid, String label, String nickname, BigDecimal money, String moneyProblem,
             List<RawHome> homes, EssentialsLocations.EssLocation lastLocation,
             EssentialsLocations.EssLocation logoutLocation, Long login, Long logout, Long lastLogin,
-            int ignored, int mail, boolean jailed, boolean muted, boolean banned, String stateDetail) {
+            int ignored, int mail, boolean jailed, boolean muted, boolean banned, String stateDetail,
+            States states, List<ParsedMail> mails) {
         boolean hasTimestamps() {
             return login != null || logout != null || lastLogin != null;
         }
     }
+
+    /**
+     * Punishment details. Timestamps are epoch millis; {@code 0} (or absent) means "no end", i.e. permanent.
+     */
+    record States(boolean muted, long muteUntil, String muteReason, boolean jailed, String jail, long jailUntil,
+            boolean banned, long banUntil, String banReason) {}
+
+    /** One mail message. {@code created == 0} when the format has no time; {@code expires == 0} = never. */
+    record ParsedMail(String senderName, UUID sender, String message, long created, long expires, boolean read) {}
 
     /** Strips {@code .yml} from a userdata file name. */
     static String fileId(String fileName) {
@@ -88,7 +98,8 @@ final class EssentialsUserParser {
         return new UserFile(id, uuid, label, nickname, money, moneyProblem, homes(root), lastLocation(root),
                 logoutLocation(root), timestamp(root, "login"), timestamp(root, "logout"),
                 timestamp(root, "lastlogin", "lastLogin", "lastlogout", "lastLogout"), ignoreCount(root),
-                mailCount(root), truthy(root, "jailed"), muted(root), banned(root), stateDetail(root));
+                mailCount(root), truthy(root, "jailed"), muted(root), banned(root), stateDetail(root),
+                states(root), mails(root));
     }
 
     // ---- homes ----
@@ -182,6 +193,117 @@ final class EssentialsUserParser {
             return node.childrenList().size();
         }
         return node.getString() == null || node.getString().isBlank() ? 0 : 1;
+    }
+
+    private static States states(ConfigurationNode root) {
+        ConfigurationNode timestamps = child(root, "timestamps", "timestamps-v2");
+        long muteUntil = orZero(readLong(child(timestamps, "mute", "mute-timeout")));
+        if (muteUntil == 0L) {
+            muteUntil = orZero(readLong(child(root, "mute-timeout", "muteTimeout", "mutetimeout")));
+        }
+        long jailUntil = orZero(readLong(child(timestamps, "jail", "jail-timeout")));
+        if (jailUntil == 0L) {
+            jailUntil = orZero(readLong(child(root, "jail-timeout", "jailTimeout", "jailtimeout")));
+        }
+        ConfigurationNode ban = child(root, "ban");
+        long banUntil = ban.isMap() ? orZero(readLong(child(ban, "timeout", "expires"))) : 0L;
+        String banReason = ban.isMap() ? text(ban, "reason", "Reason") : text(root, "banReason", "ban-reason");
+        String jail = text(root, "jail", "jail-name", "jailName");
+        if (jail != null && (jail.equalsIgnoreCase("true") || jail.equalsIgnoreCase("false"))) {
+            jail = null;
+        }
+        return new States(muted(root), muteUntil, text(root, "mute-reason", "muteReason", "mutereason"),
+                truthy(root, "jailed"), jail, jailUntil, banned(root), banUntil, banReason);
+    }
+
+    private static long orZero(Long value) {
+        return value == null ? 0L : value;
+    }
+
+    private static List<ParsedMail> mails(ConfigurationNode root) {
+        ConfigurationNode mail = child(root, "mail", "mails");
+        if (mail == null || mail.virtual()) {
+            return List.of();
+        }
+        List<ConfigurationNode> entries = mail.isList() ? new ArrayList<ConfigurationNode>(mail.childrenList())
+                : mail.isMap() ? new ArrayList<ConfigurationNode>(mail.childrenMap().values()) : List.of(mail);
+        List<ParsedMail> out = new ArrayList<>();
+        for (ConfigurationNode entry : entries) {
+            ParsedMail parsed = entry.isMap() ? mailFromMap(entry) : mailFromText(entry.getString());
+            if (parsed != null && !parsed.message().isBlank()) {
+                out.add(parsed);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    private static ParsedMail mailFromMap(ConfigurationNode node) {
+        String message = text(node, "message", "msg", "text");
+        if (message == null) {
+            return null;
+        }
+        String sender = text(node, "sender-name", "senderName", "sender_name", "sender");
+        UUID senderId = uuidFromId(text(node, "sender-uuid", "senderUUID", "senderUuid", "sender_uuid"));
+        return new ParsedMail(sender == null || sender.isBlank() ? "Unknown" : sender, senderId, message,
+                orZero(readLong(child(node, "timestamp", "time-sent", "timeSent", "sent"))),
+                orZero(readLong(child(node, "expire", "time-expire", "timeExpire", "expires"))),
+                child(node, "read").getBoolean(false));
+    }
+
+    /**
+     * A JSON object written by EssentialsX 2.19+ ({@code {"senderName":...,"message":...,"timestamp":...}}),
+     * or a legacy plain line {@code Sender: text}.
+     */
+    static ParsedMail mailFromText(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String text = raw.strip();
+        if (text.startsWith("{")) {
+            try {
+                com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(text).getAsJsonObject();
+                String message = jsonText(json, "message", "msg");
+                if (message == null) {
+                    return null;
+                }
+                String sender = jsonText(json, "senderName", "sender-name", "sender");
+                return new ParsedMail(sender == null || sender.isBlank() ? "Unknown" : sender,
+                        uuidFromId(jsonText(json, "senderUUID", "senderUuid", "sender-uuid")), message,
+                        jsonLong(json, "timestamp", "timeSent"), jsonLong(json, "expire", "timeExpire"),
+                        json.has("read") && json.get("read").isJsonPrimitive() && json.get("read").getAsBoolean());
+            } catch (RuntimeException e) {
+                return new ParsedMail("Unknown", null, text, 0L, 0L, false);
+            }
+        }
+        int colon = text.indexOf(": ");
+        if (colon > 0 && colon <= 32 && text.substring(0, colon).matches("[A-Za-z0-9_ ]+")) {
+            return new ParsedMail(text.substring(0, colon).strip(), null, text.substring(colon + 2), 0L, 0L, false);
+        }
+        return new ParsedMail("Unknown", null, text, 0L, 0L, false);
+    }
+
+    private static String jsonText(com.google.gson.JsonObject json, String... keys) {
+        for (String key : keys) {
+            var value = json.get(key);
+            if (value != null && value.isJsonPrimitive()) {
+                return value.getAsString();
+            }
+        }
+        return null;
+    }
+
+    private static long jsonLong(com.google.gson.JsonObject json, String... keys) {
+        for (String key : keys) {
+            var value = json.get(key);
+            if (value != null && value.isJsonPrimitive()) {
+                try {
+                    return Math.max(0L, value.getAsLong());
+                } catch (RuntimeException e) {
+                    return 0L;
+                }
+            }
+        }
+        return 0L;
     }
 
     private static boolean banned(ConfigurationNode root) {

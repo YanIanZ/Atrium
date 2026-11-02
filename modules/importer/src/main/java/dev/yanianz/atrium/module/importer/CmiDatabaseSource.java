@@ -36,6 +36,8 @@ final class CmiDatabaseSource implements AutoCloseable {
     private final String nickColumn;
     private final String homesColumn;
     private final String economyColumn;
+    private final String locationColumn;
+    private final String muteColumn;
     private final String playtimeTable;
     private final Map<String, String> playtimeColumns;
 
@@ -55,6 +57,8 @@ final class CmiDatabaseSource implements AutoCloseable {
             this.nickColumn = pick("nickname", "nick_name", "nick");
             this.homesColumn = pick("homes");
             this.economyColumn = pick("economy", "balance");
+            this.locationColumn = pick("lastteleportlocation", "teleportlocation", "logoutlocation", "logout_location");
+            this.muteColumn = pick("mutedtill", "muteduntil", "mutetill", "muted_until");
             if (uuidColumn == null) {
                 throw new SQLException("CMI users table has no player_uuid/uuid column");
             }
@@ -110,6 +114,16 @@ final class CmiDatabaseSource implements AutoCloseable {
         return economyColumn != null;
     }
 
+    /** Column used for the imported /back entry, or {@code null}. */
+    String locationColumn() {
+        return locationColumn;
+    }
+
+    /** Column with the mute end time (epoch millis), or {@code null}. */
+    String muteColumn() {
+        return muteColumn;
+    }
+
     boolean hasPlaytimeTable() {
         return playtimeTable != null;
     }
@@ -132,6 +146,8 @@ final class CmiDatabaseSource implements AutoCloseable {
         addIfPresent(selected, nickColumn);
         addIfPresent(selected, homesColumn);
         addIfPresent(selected, economyColumn);
+        addIfPresent(selected, locationColumn);
+        addIfPresent(selected, muteColumn);
         StringBuilder sql = new StringBuilder("SELECT ");
         for (int i = 0; i < selected.size(); i++) {
             sql.append(i == 0 ? "" : ", ").append(quote(selected.get(i)));
@@ -160,7 +176,8 @@ final class CmiDatabaseSource implements AutoCloseable {
                         }
                     }
                     result.add(new CmiUserRecord(id, uuid, rawUuid, value(rs, nameColumn),
-                            value(rs, nickColumn), value(rs, homesColumn), value(rs, economyColumn)));
+                            value(rs, nickColumn), value(rs, homesColumn), value(rs, economyColumn),
+                            value(rs, locationColumn), value(rs, muteColumn)));
                 }
             }
         }

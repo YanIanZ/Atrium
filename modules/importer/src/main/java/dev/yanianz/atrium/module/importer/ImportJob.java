@@ -11,6 +11,7 @@ import dev.yanianz.atrium.api.playtime.PlaytimeAdminService;
 import dev.yanianz.atrium.api.playtime.PlaytimeService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
 import dev.yanianz.atrium.api.warps.WarpAdminService;
+import dev.yanianz.atrium.api.warps.WarpImportService;
 import dev.yanianz.atrium.api.warps.WarpService;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
@@ -22,7 +23,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -90,6 +90,7 @@ abstract class ImportJob {
     protected HomeService homes;
     protected WarpService warps;
     protected WarpAdminService warpAdmin;
+    protected WarpImportService warpImport;
     protected NickService nicks;
     protected PlaytimeService playtime;
     protected PlaytimeAdminService playtimeAdmin;
@@ -108,8 +109,8 @@ abstract class ImportJob {
     private boolean notedExistingAccounts;
     private boolean notedOnlineRefused;
     private ImportLedger ledger;
-    /** UUIDs already imported from this source, per ledger category; loaded once, then kept in sync. */
-    private final Map<ImportCategory, Set<UUID>> done = new EnumMap<>(ImportCategory.class);
+    /** UUIDs already imported, per "source|category"; loaded once per key, then kept in sync. */
+    private final Map<String, Set<UUID>> done = new java.util.HashMap<>();
 
     ImportJob(ModuleContext ctx, ImporterConfig config, ImportOptions options, CommandSender sender) {
         this.ctx = ctx;
@@ -188,6 +189,7 @@ abstract class ImportJob {
         homes = ctx.services().get(HomeService.class).orElse(null);
         warps = ctx.services().get(WarpService.class).orElse(null);
         warpAdmin = ctx.services().get(WarpAdminService.class).orElse(null);
+        warpImport = ctx.services().get(WarpImportService.class).orElse(null);
         nicks = ctx.services().get(NickService.class).orElse(null);
         playtime = ctx.services().get(PlaytimeService.class).orElse(null);
         playtimeAdmin = ctx.services().get(PlaytimeAdminService.class).orElse(null);
@@ -201,8 +203,10 @@ abstract class ImportJob {
         if (options.includes(ImportCategory.ECONOMY) && economy == null) {
             report.note("EconomyService is unavailable; balances were not imported");
         }
-        if (options.includes(ImportCategory.WARPS) && warpAdmin == null) {
+        if (options.includes(ImportCategory.WARPS) && warpAdmin == null && warpImport == null) {
             report.note("WarpAdminService is unavailable; warps are counted but not imported");
+        } else if (options.includes(ImportCategory.WARPS) && warpImport == null) {
+            report.note("WarpImportService is unavailable: warps keep only name, location and category");
         }
         if (options.includes(ImportCategory.HOLOGRAMS) && holograms == null) {
             report.note("HologramService is unavailable; holograms were not imported");
@@ -215,29 +219,58 @@ abstract class ImportJob {
         ledger = new ImportLedger(ctx.database());
         for (ImportCategory category : List.of(ImportCategory.ECONOMY, ImportCategory.PLAYTIME)) {
             if (options.includes(category)) {
-                done.put(category, new HashSet<>(await(ledger.load(reportPrefix(), category), ImportCategory.SOURCE)));
+                ledgerSet(ledgerSource(), category);
             }
         }
     }
 
+    /**
+     * Ledger source name (at most 32 characters), e.g. {@code cmi} or {@code vault:XConomy}. Defaults to
+     * {@link #reportPrefix()}.
+     */
+    protected String ledgerSource() {
+        return reportPrefix();
+    }
+
+    private Set<UUID> ledgerSet(String source, ImportCategory category) {
+        String key = source + '|' + category.key();
+        Set<UUID> set = done.get(key);
+        if (set == null) {
+            // Fail closed: without the markers a re-run could apply values a second time.
+            set = new HashSet<>(await(ledger.load(source, category), ImportCategory.SOURCE));
+            done.put(key, set);
+        }
+        return set;
+    }
+
     private boolean alreadyImported(ImportCategory category, UUID uuid) {
-        Set<UUID> set = done.get(category);
-        return set != null && set.contains(uuid);
+        return alreadyImported(ledgerSource(), category, uuid);
+    }
+
+    /** Whether {@code uuid} was already imported from {@code source} for {@code category}. */
+    protected boolean alreadyImported(String source, ImportCategory category, UUID uuid) {
+        return ledgerSet(source, category).contains(uuid);
     }
 
     private void mark(ImportCategory category, UUID uuid) {
-        awaitWrite(ledger.mark(reportPrefix(), category, uuid), category, "import marker");
-        done.computeIfAbsent(category, ignored -> new HashSet<>()).add(uuid);
+        mark(ledgerSource(), category, uuid);
+    }
+
+    /** Writes the import marker; written before the value itself (see {@link ImportLedger}). */
+    protected void mark(String source, ImportCategory category, UUID uuid) {
+        awaitWrite(ledger.mark(source, category, uuid), category, "import marker");
+        ledgerSet(source, category).add(uuid);
+    }
+
+    private void unmark(ImportCategory category, UUID uuid, String label) {
+        unmark(ledgerSource(), category, uuid, label);
     }
 
     /** Best effort: a marker that cannot be removed only makes a re-run skip that player (no money minted). */
-    private void unmark(ImportCategory category, UUID uuid, String label) {
+    protected void unmark(String source, ImportCategory category, UUID uuid, String label) {
         try {
-            awaitWrite(ledger.unmark(reportPrefix(), category, uuid), category, "import marker removal");
-            Set<UUID> set = done.get(category);
-            if (set != null) {
-                set.remove(uuid);
-            }
+            awaitWrite(ledger.unmark(source, category, uuid), category, "import marker removal");
+            ledgerSet(source, category).remove(uuid);
         } catch (StepFailed failure) {
             ctx.logger().error("Removing the {} import marker of {} failed; a re-run needs --overwrite for it",
                     category.key(), label, failure);
@@ -246,7 +279,7 @@ abstract class ImportJob {
         }
     }
 
-    private boolean isOnline(UUID uuid) {
+    protected boolean isOnline(UUID uuid) {
         try {
             return ctx.plugin().getServer().getPlayer(uuid) != null;
         } catch (RuntimeException e) {
@@ -310,7 +343,7 @@ abstract class ImportJob {
             return HomeChange.none();
         }
         if (homes == null) {
-            report.unsupported(ImportCategory.HOMES, incoming.size());
+            report.unsupported(ImportCategory.HOMES, incoming.size(), "homes module (HomeService) not available");
             if (!notedHomesMissing) {
                 notedHomesMissing = true;
                 report.note("HomeService unavailable: homes were counted but not imported");
@@ -319,7 +352,7 @@ abstract class ImportJob {
         }
         List<HomeInfo> existing = await(homes.homes(user.uuid()), ImportCategory.HOMES);
         ImportPlanner.Merge merge = ImportPlanner.mergeHomes(existing, incoming, options.overwrite());
-        report.skipped(ImportCategory.HOMES, merge.skipped());
+        report.skipped(ImportCategory.HOMES, merge.skipped(), "home with that name already exists (use --overwrite)");
         for (String problem : merge.problems()) {
             report.invalid(ImportCategory.HOMES, user.label(), problem);
         }
@@ -344,7 +377,7 @@ abstract class ImportJob {
             return NickChange.none();
         }
         if (nicks == null) {
-            report.unsupported(ImportCategory.NICKS, 1);
+            report.unsupported(ImportCategory.NICKS, 1, "nick module (NickService) not available");
             if (!notedNickMissing) {
                 notedNickMissing = true;
                 report.note("NickService unavailable: nicknames were counted but not imported");
@@ -365,7 +398,7 @@ abstract class ImportJob {
         NickService.NickInfo original = await(nicks.nick(user.uuid()), ImportCategory.NICKS).orElse(null);
         ImportPlanner.NickPlan plan = ImportPlanner.planNick(original != null, true, options.overwrite());
         if (plan.action() == ImportPlanner.Action.SKIP) {
-            report.skipped(ImportCategory.NICKS, 1);
+            report.skipped(ImportCategory.NICKS, 1, "player already has a nickname (use --overwrite)");
             return NickChange.none();
         }
         return new NickChange(true, nickname);
@@ -390,7 +423,7 @@ abstract class ImportJob {
         }
         report.found(ImportCategory.ECONOMY, 1);
         if (economy == null) {
-            report.unsupported(ImportCategory.ECONOMY, 1);
+            report.unsupported(ImportCategory.ECONOMY, 1, "economy module (EconomyService) not available");
             if (!notedEconomyMissing) {
                 notedEconomyMissing = true;
                 report.note("EconomyService unavailable: balances were counted but not imported");
@@ -405,7 +438,7 @@ abstract class ImportJob {
         } else if (options.overwrite()) {
             exists = true;
         } else {
-            report.unsupported(ImportCategory.ECONOMY, 1);
+            report.unsupported(ImportCategory.ECONOMY, 1, "account existence unknown (EconomyAccounts missing); needs --overwrite");
             if (!notedAccountsMissing) {
                 notedAccountsMissing = true;
                 report.note("EconomyAccounts unavailable: existing accounts cannot be told apart from new ones, "
@@ -420,7 +453,7 @@ abstract class ImportJob {
             return BalanceChange.none();
         }
         if (plan.action() == ImportPlanner.Action.SKIP) {
-            report.skipped(ImportCategory.ECONOMY, 1);
+            report.skipped(ImportCategory.ECONOMY, 1, plan.problem() + " (use --overwrite)");
             noteExistingAccount(exists);
             return BalanceChange.none();
         }
@@ -443,7 +476,7 @@ abstract class ImportJob {
         report.found(ImportCategory.PLAYTIME, 1);
         report.extra(ImportCategory.PLAYTIME, user.playtimeSeconds());
         if (playtimeAdmin == null) {
-            report.unsupported(ImportCategory.PLAYTIME, 1);
+            report.unsupported(ImportCategory.PLAYTIME, 1, "playtime module (PlaytimeAdminService) not available");
             if (!notedPlaytimeMissing) {
                 notedPlaytimeMissing = true;
                 report.note("PlaytimeAdminService unavailable: playtime was counted but not imported");
@@ -467,7 +500,7 @@ abstract class ImportJob {
             return PlaytimeChange.none();
         }
         if (plan.action() == ImportPlanner.Action.SKIP) {
-            report.skipped(ImportCategory.PLAYTIME, 1);
+            report.skipped(ImportCategory.PLAYTIME, 1, "playtime already tracked or imported (use --overwrite)");
             return PlaytimeChange.none();
         }
         return new PlaytimeChange(true, plan.seconds());
@@ -525,7 +558,7 @@ abstract class ImportJob {
                         options.overwrite()), ImportCategory.NICKS, "nickname of " + label);
                 nickApplied = ImportPlanner.nickApplied(result);
                 if (result == NickService.Result.SKIPPED) {
-                    report.skipped(ImportCategory.NICKS, 1);
+                    report.skipped(ImportCategory.NICKS, 1, "nick module kept the existing nickname");
                 } else if (result != NickService.Result.SUCCESS) {
                     throw new StepFailed(ImportCategory.NICKS, "nickname was not stored: " + result);
                 }
@@ -550,7 +583,7 @@ abstract class ImportJob {
                 if (!options.overwrite() && economyAccounts != null
                         && await(economyAccounts.hasAccount(uuid), ImportCategory.ECONOMY)) {
                     // The account appeared since planning: existing money is never replaced without overwrite.
-                    report.skipped(ImportCategory.ECONOMY, 1);
+                    report.skipped(ImportCategory.ECONOMY, 1, "economy account appeared during the import (use --overwrite)");
                     noteExistingAccount(true);
                 } else {
                     mark(ImportCategory.ECONOMY, uuid);
@@ -603,22 +636,22 @@ abstract class ImportJob {
         String message = "player is online; not imported (run the import again after they log out)";
         boolean any = false;
         if (plan.playtime().active()) {
-            report.skipped(ImportCategory.PLAYTIME, 1);
+            report.skipped(ImportCategory.PLAYTIME, 1, "player online (re-run after they log out)");
             report.issue(new ImportIssue(ImportCategory.PLAYTIME, plan.label(), message));
             any = true;
         }
         if (plan.nick().active()) {
-            report.skipped(ImportCategory.NICKS, 1);
+            report.skipped(ImportCategory.NICKS, 1, "player online (re-run after they log out)");
             report.issue(new ImportIssue(ImportCategory.NICKS, plan.label(), message));
             any = true;
         }
         if (plan.homes().active()) {
-            report.skipped(ImportCategory.HOMES, plan.homes().changes());
+            report.skipped(ImportCategory.HOMES, plan.homes().changes(), "player online (re-run after they log out)");
             report.issue(new ImportIssue(ImportCategory.HOMES, plan.label(), message));
             any = true;
         }
         if (plan.balance().active()) {
-            report.skipped(ImportCategory.ECONOMY, 1);
+            report.skipped(ImportCategory.ECONOMY, 1, "player online (re-run after they log out)");
             report.issue(new ImportIssue(ImportCategory.ECONOMY, plan.label(), message));
             any = true;
         }
@@ -716,19 +749,41 @@ abstract class ImportJob {
 
     // ---- warps ----
 
-    /** One warp decoded from a foreign source. */
-    protected record WarpRecord(String name, String category, StoredLocation location, String problem) {}
+    /**
+     * One warp decoded from a foreign source.
+     *
+     * @param permission    custom per-warp permission node to store, or {@code null} for the derived one
+     * @param owner         owning player, or {@code null}
+     * @param createdAt     epoch millis, or 0 when the source has no creation date
+     * @param iconBytes     icon serialized with {@code ItemStack#serializeAsBytes}, or {@code null}
+     * @param iconMaterial  icon material name when the source stores only the material, or {@code null}
+     * @param notes         differences that are reported once per warp (e.g. a permission rule Atrium has no
+     *                      per-warp equivalent for)
+     */
+    protected record WarpRecord(String name, String category, StoredLocation location, String problem,
+            String permission, UUID owner, long createdAt, byte[] iconBytes, String iconMaterial, int iconModelData,
+            List<String> notes) {
+        protected WarpRecord(String name, String category, StoredLocation location, String problem) {
+            this(name, category, location, problem, null, null, 0L, null, null, -1, List.of());
+        }
+
+        WarpRecord withProblem(String newProblem) {
+            return new WarpRecord(name, category, null, newProblem, permission, owner, createdAt, iconBytes,
+                    iconMaterial, iconModelData, notes);
+        }
+    }
 
     protected void importWarps(String phase, List<WarpRecord> parsed) {
         Set<String> existing = warps == null ? Set.of()
                 : warps.names().stream().map(name -> name.toLowerCase(Locale.ROOT))
                         .collect(java.util.stream.Collectors.toSet());
-        if (warps == null && warpAdmin != null && !notedWarpReadMissing) {
+        if (warps == null && (warpAdmin != null || warpImport != null) && !notedWarpReadMissing) {
             notedWarpReadMissing = true;
             report.note("WarpService unavailable: existing warps cannot be checked, so a dry run may overcount");
         }
         beginPhase(phase, parsed.size());
         int processed = 0;
+        Set<String> seen = new HashSet<>();
         for (WarpRecord warp : parsed) {
             if (cancelled.get()) {
                 break;
@@ -736,10 +791,15 @@ abstract class ImportJob {
             report.found(ImportCategory.WARPS, 1);
             if (warp.problem() != null) {
                 report.invalid(ImportCategory.WARPS, warp.name(), warp.problem());
+            } else if (!seen.add(warp.name().toLowerCase(Locale.ROOT))) {
+                report.invalid(ImportCategory.WARPS, warp.name(), "duplicate warp name in the source (names are case-insensitive)");
             } else if (config.checkWorlds && !worldExists(warp.location().world())) {
                 report.invalid(ImportCategory.WARPS, warp.name(),
                         "warp is in missing world '" + warp.location().world() + "'");
             } else {
+                for (String note : warp.notes()) {
+                    report.issue(new ImportIssue(ImportCategory.WARPS, warp.name(), "note: " + note));
+                }
                 importWarp(warp, existing);
             }
             processed++;
@@ -756,11 +816,11 @@ abstract class ImportJob {
         boolean exists = existing.contains(warp.name().toLowerCase(Locale.ROOT));
         ImportPlanner.WarpPlan plan = ImportPlanner.planWarp(exists, true, options.overwrite());
         if (plan.action() == ImportPlanner.Action.SKIP) {
-            report.skipped(ImportCategory.WARPS, 1);
+            report.skipped(ImportCategory.WARPS, 1, "warp already exists (use --overwrite)");
             return;
         }
-        if (warpAdmin == null) {
-            report.unsupported(ImportCategory.WARPS, 1);
+        if (warpAdmin == null && warpImport == null) {
+            report.unsupported(ImportCategory.WARPS, 1, "warps module not available");
             if (!notedWarpsMissing) {
                 notedWarpsMissing = true;
                 report.note("WarpAdminService unavailable: warps were counted but not imported");
@@ -771,26 +831,56 @@ abstract class ImportJob {
             report.imported(ImportCategory.WARPS, 1);
             return;
         }
-        // The warps module owns validation, the create event and the storage write; a Location is
-        // only a short-lived handle, so a world that unloaded since the check is reported, not stored.
-        Optional<Location> location = warp.location().toLocation();
-        if (location.isEmpty()) {
-            report.invalid(ImportCategory.WARPS, warp.name(),
-                    "world '" + warp.location().world() + "' is not loaded");
-            return;
-        }
         try {
-            boolean written = awaitWrite(warpAdmin.importWarp(warp.name(), location.get(), warp.category(),
-                    null, null, options.overwrite()), ImportCategory.WARPS, "warp " + warp.name());
+            boolean written;
+            if (warpImport != null) {
+                WarpIcon icon = warpIcon(warp);
+                written = awaitWrite(warpImport.importWarp(new WarpImportService.WarpImport(warp.name(),
+                        warp.location(), warp.category(), warp.permission(), warp.owner(), warp.createdAt(),
+                        icon.material(), icon.modelData()), options.overwrite()), ImportCategory.WARPS,
+                        "warp " + warp.name());
+            } else {
+                // Older warps module: only name, location and category can be stored.
+                Optional<Location> location = warp.location().toLocation();
+                if (location.isEmpty()) {
+                    report.invalid(ImportCategory.WARPS, warp.name(),
+                            "world '" + warp.location().world() + "' is not loaded");
+                    return;
+                }
+                written = awaitWrite(warpAdmin.importWarp(warp.name(), location.get(), warp.category(),
+                        warp.permission(), warp.owner(), options.overwrite()), ImportCategory.WARPS, "warp " + warp.name());
+            }
             if (written) {
                 report.imported(ImportCategory.WARPS, 1);
             } else {
-                report.skipped(ImportCategory.WARPS, 1);
+                report.skipped(ImportCategory.WARPS, 1, "warp exists or a plugin cancelled the create event");
             }
         } catch (StepFailed failure) {
             report.failed(ImportCategory.WARPS, warp.name(), failure.getMessage());
             ctx.logger().warn("{} warp '{}' import failed: {}", sourceName(), warp.name(), failure.getMessage());
         }
+    }
+
+    private record WarpIcon(String material, int modelData) {}
+
+    /** Material and custom model data of the source icon; a broken icon is reported, the warp still imports. */
+    @SuppressWarnings("deprecation") // custom model data as one int is what the warps module stores
+    private WarpIcon warpIcon(WarpRecord warp) {
+        if (warp.iconBytes() != null && warp.iconBytes().length > 0) {
+            try {
+                return await(ctx.scheduler().supplyGlobal(() -> {
+                    org.bukkit.inventory.ItemStack item = org.bukkit.inventory.ItemStack.deserializeBytes(warp.iconBytes());
+                    var meta = item.getItemMeta();
+                    int model = meta != null && meta.hasCustomModelData() ? meta.getCustomModelData() : -1;
+                    return new WarpIcon(item.getType().isAir() ? null : item.getType().name(), model);
+                }), ImportCategory.WARPS);
+            } catch (StepFailed failure) {
+                report.issue(new ImportIssue(ImportCategory.WARPS, warp.name(),
+                        "note: icon could not be read, default icon used: " + failure.getMessage()));
+                return new WarpIcon(null, -1);
+            }
+        }
+        return new WarpIcon(warp.iconMaterial(), warp.iconModelData());
     }
 
     // ---- helpers ----
@@ -945,6 +1035,15 @@ abstract class ImportJob {
                 Msg.number("unsupported", total.unsupported()));
 
         int shown = config.maxProblemsPerCategory();
+        for (ImportCategory category : ImportCategory.values()) {
+            if (category == ImportCategory.SOURCE || !options.includes(category)) {
+                continue;
+            }
+            for (Map.Entry<String, Long> reason : report.reasons(category).entrySet()) {
+                send("importer.reason-line", Msg.unparsed("category", category.key()),
+                        Msg.unparsed("reason", reason.getKey()), Msg.number("count", reason.getValue()));
+            }
+        }
         for (ImportCategory category : ImportCategory.values()) {
             if (category != ImportCategory.SOURCE && !options.includes(category)) {
                 continue;

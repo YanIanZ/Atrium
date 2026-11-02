@@ -1,0 +1,17 @@
+jails:
+  cell1:
+    world: 5f9d6a1e-1111-2222-3333-444455556666
+    world-name: world
+    x: 10.5
+    y: 64.0
+    z: -2.5
+    yaw: 180.0
+    pitch: 0.0
+  'bad jail!':
+    world: world
+    x: 1.0
+    y: 2.0
+    z: 3.0
+  broken:
+    world: world
+    x: nope

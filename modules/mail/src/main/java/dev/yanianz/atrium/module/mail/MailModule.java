@@ -76,6 +76,8 @@ public final class MailModule implements AtriumModule, Listener {
         rebuildFormatter();
         ctx.listen(this);
         new MailCommands(this, ctx).register();
+        MailStore importStore = store;
+        ctx.service(dev.yanianz.atrium.api.mail.MailAdminService.class, importStore::importAll);
 
         ctx.permission("atrium.mail", PermissionDefault.TRUE, "Use the mail system");
         ctx.permission("atrium.mail.send", PermissionDefault.TRUE, "Send mail to players");

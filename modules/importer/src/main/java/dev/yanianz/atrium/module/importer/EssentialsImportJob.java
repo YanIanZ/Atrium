@@ -1,9 +1,13 @@
 package dev.yanianz.atrium.module.importer;
 
+import dev.yanianz.atrium.api.moderation.PunishmentType;
+import dev.yanianz.atrium.api.teleport.SpawnAdminService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
 import dev.yanianz.atrium.api.user.AtriumUser;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -16,27 +20,24 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import org.bukkit.World;
 import org.bukkit.command.CommandSender;
+import org.spongepowered.configurate.BasicConfigurationNode;
+import org.spongepowered.configurate.ConfigurationNode;
 
 /**
- * Imports EssentialsX data through Atrium's public services. Money, homes and nicknames are written;
- * warps and kits are written or reported; spawn, last locations, timestamps, ignore lists, mail and
- * punishment states are reported because Atrium has no write API for them yet.
+ * Imports EssentialsX data through Atrium's public services: money, homes, nicknames, warps, spawn
+ * (EssentialsSpawn), kits, jails, mute/jail/ban states, mail and the last location (as a {@code /back}
+ * entry). Login timestamps and ignore lists are reported only. The server's ban lists are imported too,
+ * under the ledger source {@code vanilla}.
  *
  * <p>Reads run in batches of {@link ImporterConfig#batchSize()} files, never all at once, and a broken
  * file is one report entry instead of a failed run.
  */
-final class EssentialsImportJob extends ImportJob {
+final class EssentialsImportJob extends ExtendedImportJob {
     private final Path essentialsFolder;
     private final Path spawnFolder;
 
-    private EssentialsLocations.WorldIndex worldIndex;
-    private boolean notedLocations;
-    private boolean notedHistory;
-    private boolean notedIgnore;
-    private boolean notedMail;
-    private boolean notedStates;
+    private ConfigurationNode essentialsConfig;
 
     EssentialsImportJob(ModuleContext ctx, ImporterConfig config, ImportOptions options, CommandSender sender,
             Path essentialsFolder, Path spawnFolder) {
@@ -59,9 +60,7 @@ final class EssentialsImportJob extends ImportJob {
     protected void run() throws Exception {
         sourceDescription = essentialsFolder.toString();
         report.note("Source: " + sourceDescription);
-        if (readsUsers()) {
-            importUsers();
-        }
+        // Server-wide data first: jail sentences in userdata need the jails, kits may be first-join kits.
         if (options.includes(ImportCategory.WARPS)) {
             importWarps();
         }
@@ -71,14 +70,39 @@ final class EssentialsImportJob extends ImportJob {
         if (options.includes(ImportCategory.KITS)) {
             importKits();
         }
+        if (options.includes(ImportCategory.JAILS) || options.includes(ImportCategory.PUNISHMENTS)) {
+            importJailsFile();
+        }
+        if (readsUsers()) {
+            importUsers();
+        }
+        if (options.includes(ImportCategory.PUNISHMENTS) && !isCancelled()) {
+            importVanillaBans(serverFolder());
+        }
     }
 
-    /** Warps, spawn and kits need no userdata read at all. */
+    /** Warps, spawn, kits and jails need no userdata read at all. */
     private boolean readsUsers() {
         return options.includes(ImportCategory.ECONOMY) || options.includes(ImportCategory.HOMES)
                 || options.includes(ImportCategory.NICKS) || options.includes(ImportCategory.LOCATIONS)
                 || options.includes(ImportCategory.HISTORY) || options.includes(ImportCategory.IGNORE)
-                || options.includes(ImportCategory.MAIL) || options.includes(ImportCategory.STATES);
+                || options.includes(ImportCategory.MAIL) || options.includes(ImportCategory.PUNISHMENTS);
+    }
+
+    /** Essentials' config.yml (per-warp permissions, kit costs, newbie spawn), or an empty node. */
+    private ConfigurationNode essentialsConfig() {
+        if (essentialsConfig != null) {
+            return essentialsConfig;
+        }
+        Path file = findFile(essentialsFolder, "config.yml", "config.yaml");
+        try {
+            essentialsConfig = file == null ? BasicConfigurationNode.root() : loadYaml(file);
+        } catch (IOException e) {
+            ctx.logger().warn("Reading Essentials config.yml failed; kit costs and permission rules are unknown", e);
+            report.note("Essentials config.yml could not be read: " + describe(e));
+            essentialsConfig = BasicConfigurationNode.root();
+        }
+        return essentialsConfig;
     }
 
     // ---- users ----
@@ -157,6 +181,63 @@ final class EssentialsImportJob extends ImportJob {
         reportExtras(data);
         processUser(new UserRecord(uuid, data.label(), homes, data.nickname(), data.money(), data.moneyProblem(),
                 0L, false));
+        if (options.includes(ImportCategory.LOCATIONS)) {
+            EssentialsLocations.EssLocation last = data.lastLocation() != null ? data.lastLocation() : data.logoutLocation();
+            if (last != null) {
+                Optional<StoredLocation> resolved = worldIndex().resolve(last);
+                if (resolved.isEmpty()) {
+                    report.found(ImportCategory.LOCATIONS, 1);
+                    report.invalid(ImportCategory.LOCATIONS, data.label(),
+                            "last location is in world '" + last.worldToken() + "' which is not loaded");
+                } else {
+                    importBack(uuid, data.label(), resolved.get(), firstNonNull(data.logout(), data.lastLogin(), data.login()));
+                }
+            }
+        }
+        importMail(uuid, data.label(), data.mails(), firstNonNull(data.logout(), data.lastLogin(), data.login()));
+        if (options.includes(ImportCategory.PUNISHMENTS)) {
+            for (PunishmentRecord record : punishmentsOf(uuid, data)) {
+                importPunishment(record);
+            }
+        }
+    }
+
+    private static long firstNonNull(Long... values) {
+        for (Long value : values) {
+            if (value != null && value > 0) {
+                return value;
+            }
+        }
+        return 0L;
+    }
+
+    /** Mute, jail and (legacy userdata) ban states as punishment records. */
+    static List<PunishmentRecord> punishmentsOf(UUID uuid, EssentialsUserParser.UserFile data) {
+        EssentialsUserParser.States states = data.states();
+        String name = data.label() == null || data.label().length() > 16 ? null : data.label();
+        // Essentials keeps no creation time for mutes, jails and bans; the last session is the best guess,
+        // and a file without timestamps gets the import time instead of 1970.
+        long lastSeen = firstNonNull(data.logout(), data.lastLogin(), data.login());
+        Instant created = lastSeen > 0 ? Instant.ofEpochMilli(lastSeen) : Instant.now();
+        List<PunishmentRecord> out = new ArrayList<>();
+        if (states.muted()) {
+            boolean temp = states.muteUntil() > 0;
+            out.add(new PunishmentRecord("essentials", temp ? PunishmentType.TEMPMUTE : PunishmentType.MUTE, uuid, name,
+                    null, null, states.muteReason(), created, temp ? Instant.ofEpochMilli(states.muteUntil()) : null,
+                    null, data.label(), null));
+        }
+        if (states.jailed()) {
+            out.add(new PunishmentRecord("essentials", PunishmentType.JAIL, uuid, name, null, null, null, created,
+                    states.jailUntil() > 0 ? Instant.ofEpochMilli(states.jailUntil()) : null, states.jail(), data.label(),
+                    null));
+        }
+        if (states.banned()) {
+            boolean temp = states.banUntil() > 0;
+            out.add(new PunishmentRecord("essentials", temp ? PunishmentType.TEMPBAN : PunishmentType.BAN, uuid, name,
+                    null, null, states.banReason(), created, temp ? Instant.ofEpochMilli(states.banUntil()) : null,
+                    null, data.label(), null));
+        }
+        return out;
     }
 
     private List<ImportHome> homesOf(EssentialsUserParser.UserFile data) {
@@ -181,19 +262,8 @@ final class EssentialsImportJob extends ImportJob {
         return List.copyOf(homes);
     }
 
+    /** Login timestamps and ignore lists have no Atrium write API: counted and explained, not written. */
     private void reportExtras(EssentialsUserParser.UserFile data) {
-        if (options.includes(ImportCategory.LOCATIONS)) {
-            int found = (data.lastLocation() == null ? 0 : 1) + (data.logoutLocation() == null ? 0 : 1);
-            if (found > 0) {
-                report.found(ImportCategory.LOCATIONS, found);
-                report.unsupported(ImportCategory.LOCATIONS, found);
-                if (!notedLocations) {
-                    notedLocations = true;
-                    report.note("Last/logout locations are reported only: Atrium keeps the server-side position "
-                            + "and has no per-player join-location API.");
-                }
-            }
-        }
         if (options.includes(ImportCategory.HISTORY)) {
             int found = 0;
             for (Long stamp : new Long[] {data.login(), data.logout(), data.lastLogin()}) {
@@ -203,57 +273,15 @@ final class EssentialsImportJob extends ImportJob {
             }
             if (found > 0) {
                 report.found(ImportCategory.HISTORY, found);
-                report.unsupported(ImportCategory.HISTORY, found);
-                if (!notedHistory) {
-                    notedHistory = true;
-                    report.note("Login/logout timestamps are reported only: Atrium derives first-join and "
-                            + "last-seen from its own sessions.");
-                }
+                report.unsupported(ImportCategory.HISTORY, found,
+                        "Atrium derives first-join and last-seen from its own sessions");
             }
         }
         if (options.includes(ImportCategory.IGNORE) && data.ignored() > 0) {
             report.found(ImportCategory.IGNORE, data.ignored());
-            report.unsupported(ImportCategory.IGNORE, data.ignored());
-            if (!notedIgnore) {
-                notedIgnore = true;
-                report.note("Ignore lists are reported only: IgnoreService has no write method.");
-            }
+            report.unsupported(ImportCategory.IGNORE, data.ignored(),
+                    "the chat module has no ignore-list write API; players re-add them with /ignore");
         }
-        if (options.includes(ImportCategory.MAIL) && data.mail() > 0) {
-            report.found(ImportCategory.MAIL, data.mail());
-            report.unsupported(ImportCategory.MAIL, data.mail());
-            if (!notedMail) {
-                notedMail = true;
-                report.note("Mail is reported only: the mail module has no public API.");
-            }
-        }
-        if (options.includes(ImportCategory.STATES)) {
-            int found = (data.jailed() ? 1 : 0) + (data.muted() ? 1 : 0) + (data.banned() ? 1 : 0);
-            if (found > 0) {
-                report.found(ImportCategory.STATES, found);
-                report.unsupported(ImportCategory.STATES, found);
-                if (!notedStates) {
-                    notedStates = true;
-                    report.note("Jail, mute and ban states are reported only: PunishmentService has no import "
-                            + "entry point and punish() would enforce the state live. Example: " + data.label()
-                            + " is " + stateText(data) + "; re-apply it with /ban, /mute or /jail.");
-                }
-            }
-        }
-    }
-
-    private static String stateText(EssentialsUserParser.UserFile data) {
-        List<String> states = new ArrayList<>();
-        if (data.banned()) {
-            states.add("banned" + (data.stateDetail() == null ? "" : " (" + data.stateDetail() + ")"));
-        }
-        if (data.muted()) {
-            states.add("muted");
-        }
-        if (data.jailed()) {
-            states.add("jailed");
-        }
-        return String.join(", ", states);
     }
 
     // ---- warps ----
@@ -298,9 +326,15 @@ final class EssentialsImportJob extends ImportJob {
                     warps.add(new WarpRecord(warp.name(), warp.category(), null,
                             "warp is in world '" + warp.location().worldToken() + "' which is not loaded"));
                 } else {
-                    warps.add(new WarpRecord(warp.name(), warp.category(), resolved.get(), null));
+                    warps.add(new WarpRecord(warp.name(), warp.category(), resolved.get(), null, null, warp.owner(),
+                            0L, null, null, -1, warp.notes()));
                 }
             }
+        }
+        if (CmiNodeLocations.truthy(essentialsConfig(), false, "per-warp-permission")) {
+            report.note("Essentials 'per-warp-permission' is on: warp access needs essentials.warps.<name> there. "
+                    + "In Atrium set requirePerWarpPermission: true in modules/warps.yml and grant atrium.warp.<name> "
+                    + "(or atrium.warps.all) instead.");
         }
         importWarps("warps", warps);
     }
@@ -310,7 +344,7 @@ final class EssentialsImportJob extends ImportJob {
     private void importSpawn() {
         Path file = spawnFolder == null ? null : spawnFolder.resolve("spawn.yml");
         if (file == null || !Files.isRegularFile(file)) {
-            report.note("EssentialsSpawn spawn.yml not found; no spawn to report");
+            report.note("EssentialsSpawn spawn.yml not found; no spawn to import");
             return;
         }
         List<EssentialsSpawnParser.SpawnPoint> points;
@@ -321,31 +355,35 @@ final class EssentialsImportJob extends ImportJob {
             report.failed(ImportCategory.SPAWN, "spawn.yml", "cannot read file: " + describe(e));
             return;
         }
-        beginPhase("spawn", points.size());
-        int processed = 0;
+        String newbies = CmiNodeLocations.text(CmiNodeLocations.child(essentialsConfig(), "newbies"), "spawnpoint");
+        importSpawns(spawnRecords(points, newbies));
+    }
+
+    /**
+     * EssentialsSpawn keeps one spawn per permission group. Atrium has a default spawn, a first-join spawn
+     * and per-world spawns, so the {@code default} group becomes the default spawn, the group named by
+     * {@code newbies.spawnpoint} also becomes the first-join spawn, and other groups are reported.
+     */
+    List<SpawnRecord> spawnRecords(List<EssentialsSpawnParser.SpawnPoint> points, String newbies) {
+        List<SpawnRecord> out = new ArrayList<>();
+        EssentialsSpawnParser.SpawnPoint preferred = EssentialsSpawnParser.preferred(points);
         for (EssentialsSpawnParser.SpawnPoint point : points) {
-            if (isCancelled()) {
-                break;
-            }
-            report.found(ImportCategory.SPAWN, 1);
             Optional<StoredLocation> resolved = worldIndex().resolve(point.location());
+            String label = "group " + point.group();
             if (resolved.isEmpty()) {
-                report.invalid(ImportCategory.SPAWN, point.group(),
-                        "spawn is in world '" + point.location().worldToken() + "' which is not loaded");
-            } else {
-                report.unsupported(ImportCategory.SPAWN, 1);
-                if (point == EssentialsSpawnParser.preferred(points)) {
-                    StoredLocation location = resolved.get();
-                    report.note("Spawn group '" + point.group() + "' is at " + location.world() + " "
-                            + location.blockX() + " " + location.blockY() + " " + location.blockZ()
-                            + "; reported only, set it with /setspawn default at that position.");
-                }
+                out.add(new SpawnRecord(label, SpawnAdminService.Kind.DEFAULT, null, null,
+                        "spawn is in world '" + point.location().worldToken() + "' which is not loaded", null));
+                continue;
             }
-            processed++;
+            boolean main = point == preferred;
+            out.add(new SpawnRecord(label, SpawnAdminService.Kind.DEFAULT, null, resolved.get(), null,
+                    main ? null : "per-group spawn; Atrium has no group spawns (use a per-world spawn or a warp)"));
+            if (newbies != null && !newbies.equalsIgnoreCase("none") && point.group().equalsIgnoreCase(newbies)) {
+                out.add(new SpawnRecord("first-join (newbies.spawnpoint " + newbies + ")",
+                        SpawnAdminService.Kind.FIRST_JOIN, null, resolved.get(), null, null));
+            }
         }
-        if (processed > 0) {
-            reportProgress(processed);
-        }
+        return out;
     }
 
     // ---- kits ----
@@ -356,7 +394,7 @@ final class EssentialsImportJob extends ImportJob {
             file = findFile(essentialsFolder, "config.yml", "config.yaml");
         }
         if (file == null) {
-            report.note("Essentials kits.yml/config.yml not found; no kits to report");
+            report.note("Essentials kits.yml/config.yml not found; no kits to import");
             return;
         }
         List<EssentialsKitsParser.ParsedKit> kits;
@@ -367,56 +405,80 @@ final class EssentialsImportJob extends ImportJob {
             report.failed(ImportCategory.KITS, file.getFileName().toString(), "cannot read file: " + describe(e));
             return;
         }
-        beginPhase("kits", kits.size());
-        int processed = 0;
-        List<String> names = new ArrayList<>();
+        ConfigurationNode costs = CmiNodeLocations.child(essentialsConfig(), "command-costs");
+        List<KitRecord> records = new ArrayList<>();
         for (EssentialsKitsParser.ParsedKit kit : kits) {
-            if (isCancelled()) {
-                break;
-            }
-            report.found(ImportCategory.KITS, 1);
-            if (!kit.ok()) {
-                report.invalid(ImportCategory.KITS, kit.name(), kit.problem());
-            } else {
-                report.unsupported(ImportCategory.KITS, 1);
-                if (names.size() < 25) {
-                    names.add(kit.name() + " (" + kit.items() + " item(s)"
-                            + (kit.delaySeconds() > 0 ? ", delay " + kit.delaySeconds() + "s" : "") + ")");
-                }
-            }
-            processed++;
+            records.add(kitRecord(kit, costs));
         }
-        if (!names.isEmpty()) {
-            report.note("Kits are reported only: the kits module has no public write API. Recreate them with "
-                    + "/kiteditor: " + String.join(", ", names)
-                    + (kits.size() > names.size() ? ", ..." : ""));
-        }
-        if (processed > 0) {
-            reportProgress(processed);
-        }
+        report.note("Essentials kit permissions essentials.kits.<name> become atrium.kit.<name>");
+        importKits(records);
     }
 
-    // ---- worlds ----
-
-    private EssentialsLocations.WorldIndex worldIndex() {
-        if (worldIndex != null) {
-            return worldIndex;
+    static KitRecord kitRecord(EssentialsKitsParser.ParsedKit kit, ConfigurationNode costs) {
+        if (!kit.ok()) {
+            return new KitRecord(kit.name() == null ? "?" : kit.name(), kit.name() == null ? "?" : kit.name(), List.of(), 0,
+                    BigDecimal.ZERO, null, -1, false, false, null, List.of(), kit.problem());
         }
-        try {
-            worldIndex = await(ctx.scheduler().supplyGlobal(() -> {
-                Map<UUID, String> byId = new HashMap<>();
-                Set<String> names = new HashSet<>();
-                for (World world : ctx.plugin().getServer().getWorlds()) {
-                    byId.put(world.getUID(), world.getName());
-                    names.add(world.getName());
+        List<String> notes = new ArrayList<>();
+        BigDecimal cost = BigDecimal.ZERO;
+        String rawCost = costs == null ? null : CmiNodeLocations.text(costs, "kit-" + kit.sourceName(), "kit-" + kit.name());
+        if (rawCost == null) {
+            rawCost = kit.money();
+        }
+        if (rawCost != null && !rawCost.isBlank()) {
+            try {
+                cost = new BigDecimal(rawCost.trim());
+                if (cost.signum() < 0) {
+                    cost = BigDecimal.ZERO;
+                    notes.add("negative cost ignored");
                 }
-                return new EssentialsLocations.WorldIndex(Map.copyOf(byId), Set.copyOf(names));
-            }), ImportCategory.SOURCE);
-        } catch (StepFailed failure) {
-            ctx.logger().warn("Cannot list loaded worlds; world UUIDs in Essentials data will not resolve", failure);
-            report.note("Loaded worlds could not be listed: " + failure.getMessage());
-            worldIndex = EssentialsLocations.WorldIndex.empty();
+            } catch (NumberFormatException e) {
+                notes.add("cost '" + rawCost + "' is not a number; imported as free");
+            }
         }
-        return worldIndex;
+        if (!kit.commands().isEmpty()) {
+            notes.add(kit.commands().size() + " command/money line(s) not imported (Atrium kits give items only)");
+        }
+        return new KitRecord(kit.name().toLowerCase(Locale.ROOT), kit.sourceName(), kit.specs(), kit.delaySeconds(), cost,
+                null, -1, kit.oneTime(), false, null, List.copyOf(notes), null);
+    }
+
+    // ---- jails ----
+
+    private void importJailsFile() {
+        Path file = findFile(essentialsFolder, "jail.yml", "jails.yml");
+        if (file == null) {
+            if (options.includes(ImportCategory.JAILS)) {
+                report.note("Essentials jail.yml/jails.yml not found; no jails to import");
+            }
+            return;
+        }
+        List<EssentialsJailParser.ParsedJail> parsed;
+        try {
+            parsed = EssentialsJailParser.parse(loadYaml(file));
+        } catch (Exception e) {
+            ctx.logger().error("Reading Essentials jails {} failed", file, e);
+            report.failed(ImportCategory.JAILS, file.getFileName().toString(), "cannot read file: " + describe(e));
+            return;
+        }
+        List<JailRecord> jails = new ArrayList<>();
+        for (EssentialsJailParser.ParsedJail jail : parsed) {
+            if (!jail.ok()) {
+                jails.add(new JailRecord(jail.name(), null, 0, null, List.of(), jail.problem()));
+                continue;
+            }
+            Optional<StoredLocation> resolved = worldIndex().resolve(jail.location());
+            jails.add(resolved.isPresent()
+                    ? new JailRecord(jail.name(), resolved.get(), 0, null, jail.notes(), null)
+                    : new JailRecord(jail.name(), null, 0, null, List.of(),
+                            "jail is in world '" + jail.location().worldToken() + "' which is not loaded"));
+        }
+        if (options.includes(ImportCategory.JAILS)) {
+            report.note("Essentials jails are points; Atrium jails get the moderation module's default radius");
+            importJails(jails);
+        } else {
+            // Only the names are needed so that jail sentences can be checked in a dry run.
+            jails.stream().filter(j -> j.problem() == null).forEach(j -> sourceJails.add(j.name().toLowerCase(Locale.ROOT)));
+        }
     }
 }

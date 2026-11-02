@@ -6,13 +6,33 @@ import org.spongepowered.configurate.ConfigurationNode;
 
 /**
  * Parses EssentialsX kits from {@code kits.yml} (and the legacy {@code kits:} section of
- * {@code config.yml}). Only names and item counts are read: the kits module has no public write API, so
- * kits are reported for an admin to recreate with {@code /kit create}.
+ * {@code config.yml}):
+ * <pre>
+ * kits:
+ *   tools:
+ *     delay: 600          # seconds; -1 = once per player
+ *     items:
+ *       - stone_pickaxe 1 efficiency:2
+ *       - /say {player} got tools
+ * </pre>
+ * The cost of a kit lives in {@code config.yml} under {@code command-costs: kit-<name>} and is read by
+ * the import job. The permission is {@code essentials.kits.<name>}; Atrium uses {@code atrium.kit.<name>}.
  */
 final class EssentialsKitsParser {
     private EssentialsKitsParser() {}
 
-    record ParsedKit(String name, int items, long delaySeconds, String money, String problem) {
+    /**
+     * @param items        number of item lines (commands included)
+     * @param delaySeconds cooldown; 0 when the kit is one-time ({@code oneTime})
+     * @param specs        the parsed items
+     * @param commands     command and money lines Atrium kits cannot run
+     */
+    record ParsedKit(String name, int items, long delaySeconds, String money, String problem, boolean oneTime,
+            List<KitItemSpec> specs, List<String> commands, String sourceName) {
+        ParsedKit(String name, int items, long delaySeconds, String money, String problem) {
+            this(name, items, delaySeconds, money, problem, false, List.of(), List.of(), name);
+        }
+
         boolean ok() {
             return problem == null;
         }
@@ -35,22 +55,49 @@ final class EssentialsKitsParser {
     }
 
     private static ParsedKit parseOne(String rawName, ConfigurationNode node) {
-        String name = rawName == null ? null : rawName.trim();
-        if (name == null || name.isBlank()) {
+        String source = rawName == null ? null : rawName.trim();
+        if (source == null || source.isBlank()) {
             return new ParsedKit(null, 0, 0, null, "kit without a name");
         }
-        if (!name.matches("[A-Za-z0-9_-]{1,32}")) {
-            return new ParsedKit(name, 0, 0, null, "invalid kit name '" + name + "'");
+        String name = ImportNames.valid(source) ? source : ImportNames.sanitize(source);
+        if (name == null) {
+            return new ParsedKit(source, 0, 0, null, "invalid kit name '" + source + "'");
         }
         if (!node.isMap()) {
             return new ParsedKit(name, 0, 0, null, "kit '" + name + "' is not a section");
         }
         ConfigurationNode items = CmiNodeLocations.child(node, "items", "Items");
-        int count = items.virtual() ? 0
-                : items.isList() ? items.childrenList().size() : items.isMap() ? items.childrenMap().size() : 0;
+        List<String> lines = new ArrayList<>();
+        if (items.isList()) {
+            for (ConfigurationNode item : items.childrenList()) {
+                String text = item.getString();
+                if (text != null) {
+                    lines.add(text);
+                }
+            }
+        } else if (items.isMap()) {
+            for (ConfigurationNode item : items.childrenMap().values()) {
+                String text = item.getString();
+                if (text != null) {
+                    lines.add(text);
+                }
+            }
+        }
+        List<KitItemSpec> specs = new ArrayList<>();
+        List<String> commands = new ArrayList<>();
+        for (String line : lines) {
+            EssentialsItemParser.Line parsed = EssentialsItemParser.parse(line, -1);
+            if (parsed.kind() == EssentialsItemParser.Kind.ITEM) {
+                specs.add(parsed.item());
+            } else {
+                commands.add(parsed.text());
+            }
+        }
         long delay = readLong(CmiNodeLocations.child(node, "delay", "cooldown", "Delay"));
+        boolean oneTime = delay < 0;
         String money = CmiNodeLocations.text(node, "money", "cost", "Cost");
-        return new ParsedKit(name, count, delay, money, null);
+        return new ParsedKit(name, lines.size(), Math.max(0L, delay), money, null, oneTime, List.copyOf(specs),
+                List.copyOf(commands), source);
     }
 
     private static long readLong(ConfigurationNode node) {
@@ -58,8 +105,8 @@ final class EssentialsKitsParser {
             return 0L;
         }
         try {
-            return Math.max(0L, node.getLong(0L));
-        } catch (RuntimeException e) {
+            return Long.parseLong(String.valueOf(node.raw()).trim());
+        } catch (NumberFormatException e) {
             return 0L;
         }
     }

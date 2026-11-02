@@ -111,6 +111,7 @@ public final class ModerationModule implements AtriumModule {
 
         ctx.service(PunishmentService.class, manager);
         ctx.service(MuteService.class, manager);
+        ctx.service(dev.yanianz.atrium.api.moderation.ModerationImportService.class, new ModerationImporter(manager, config));
         ctx.listen(new ModerationListener(ctx, config, manager));
         new ModerationCommands(ctx, config, manager).register();
         ctx.logger().info("Moderation ready: {} jails, {} escalation rules", jails.all().size(),

@@ -2,6 +2,7 @@ package dev.yanianz.atrium.module.importer;
 
 import dev.yanianz.atrium.core.module.ModuleContext;
 import java.math.BigDecimal;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -14,10 +15,13 @@ import java.util.concurrent.CompletableFuture;
 import org.bukkit.command.CommandSender;
 
 /**
- * Imports CMI's database and files. This class only reads CMI's own shape; the writing, rollback,
- * progress, status and reporting all come from {@link ImportJob}.
+ * Imports CMI's database and files: users (money, homes, nicknames, playtime, last location, mutes) from
+ * the database, and warps, holograms, spawn points, kits and jails from the files. The server's ban lists
+ * (which CMI uses for bans) are imported under the ledger source {@code vanilla}. This class only reads
+ * CMI's own shape; writing, rollback, progress and reporting come from {@link ImportJob} and
+ * {@link ExtendedImportJob}.
  */
-final class CmiImportJob extends ImportJob {
+final class CmiImportJob extends ExtendedImportJob {
     private final Path cmiFolder;
     private final HologramWrites hologramWrites = new HologramWrites();
     private boolean hologramsMissingNoted;
@@ -39,34 +43,97 @@ final class CmiImportJob extends ImportJob {
 
     @Override
     protected void run() throws Exception {
-        boolean needsUsers = options.includes(ImportCategory.ECONOMY) || options.includes(ImportCategory.HOMES)
-                || options.includes(ImportCategory.NICKS) || options.includes(ImportCategory.PLAYTIME);
-        if (needsUsers) {
-            CmiConnectionConfig connection = CmiConnectionConfig.read(cmiFolder);
-            sourceDescription = connection.describe();
-            report.note("Source: " + sourceDescription);
-            try (CmiDatabaseSource source = CmiDatabaseSource.open(connection)) {
-                noteSourceShape(source);
-                importUsers(source);
-            }
-        } else {
-            sourceDescription = cmiFolder.toString();
-            report.note("Source: " + sourceDescription
-                    + " (database not opened: no user category was selected)");
-        }
+        // Files first: jails must exist before jail sentences, kits before players log in.
         if (options.includes(ImportCategory.WARPS)) {
             importWarps();
         }
         if (options.includes(ImportCategory.HOLOGRAMS)) {
             importHolograms();
         }
+        if (options.includes(ImportCategory.SPAWN) || options.includes(ImportCategory.KITS)) {
+            readConfig();
+        }
+        if (options.includes(ImportCategory.SPAWN) && cmiConfig != null) {
+            importSpawns(spawnRecords(CmiSpawnParser.parse(cmiConfig)));
+        }
+        if (options.includes(ImportCategory.KITS)) {
+            importKits();
+        }
+        if (options.includes(ImportCategory.JAILS)) {
+            importJails();
+        }
+        boolean needsUsers = options.includes(ImportCategory.ECONOMY) || options.includes(ImportCategory.HOMES)
+                || options.includes(ImportCategory.NICKS) || options.includes(ImportCategory.PLAYTIME)
+                || options.includes(ImportCategory.LOCATIONS) || options.includes(ImportCategory.PUNISHMENTS);
+        if (needsUsers) {
+            CmiConnectionConfig connection = CmiConnectionConfig.read(cmiFolder);
+            sourceDescription = connection.describe();
+            report.note("Source: " + sourceDescription);
+            if (connection.kind() == CmiConnectionConfig.Kind.SQLITE
+                    && (connection.sqliteFile() == null || !Files.isRegularFile(connection.sqliteFile()))) {
+                // Only files were copied over (or CMI never used SQLite): the file categories above are done,
+                // the per-player ones cannot be read. Not an internal error, so no stack trace.
+                String problem = "CMI SQLite database not found at " + connection.sqliteFile()
+                        + "; player data (economy, homes, nicks, playtime, last location, mutes) was not read."
+                        + " Copy CMI's database file, or configure CMI's MySQL connection in config.yml";
+                ctx.logger().warn(problem);
+                report.failed(ImportCategory.SOURCE, "database", problem);
+            } else {
+                try (CmiDatabaseSource source = CmiDatabaseSource.open(connection)) {
+                    noteSourceShape(source);
+                    importUsers(source);
+                }
+            }
+        } else {
+            sourceDescription = cmiFolder.toString();
+            report.note("Source: " + sourceDescription
+                    + " (database not opened: no user category was selected)");
+        }
+        if (options.includes(ImportCategory.PUNISHMENTS) && !isCancelled()) {
+            importVanillaBans(serverFolder());
+        }
+    }
+
+    // ---- config.yml: spawn, warp permission default, first-join kit ----
+
+    private org.spongepowered.configurate.ConfigurationNode cmiConfig;
+
+    private void readConfig() {
+        Path file = findFile(cmiFolder, "config.yml", "config.yaml");
+        if (file == null) {
+            report.note("CMI config.yml not found; no spawn points to import");
+            return;
+        }
+        try {
+            cmiConfig = loadYaml(file);
+        } catch (Exception e) {
+            ctx.logger().error("Reading {} failed", file, e);
+            report.failed(ImportCategory.SPAWN, "config.yml", "cannot read file: " + describe(e));
+        }
+    }
+
+    private List<SpawnRecord> spawnRecords(CmiSpawnParser.Result parsed) {
+        List<SpawnRecord> out = new ArrayList<>();
+        for (CmiSpawnParser.ParsedSpawn spawn : parsed.spawns()) {
+            out.add(new SpawnRecord(spawn.label(), spawn.kind(), null, spawn.location(), spawn.problem(), null));
+        }
+        if (out.isEmpty()) {
+            report.note("CMI config.yml has no Spawn.Main or Spawn.FirstSpawn location");
+        }
+        return out;
     }
 
     private void noteSourceShape(CmiDatabaseSource source) {
         report.note("Columns: homes=" + yesNo(source.hasHomesColumn())
                 + ", nickname=" + yesNo(source.hasNickColumn())
                 + ", economy=" + yesNo(source.hasEconomyColumn())
-                + ", playtime_table=" + yesNo(source.hasPlaytimeTable()));
+                + ", playtime_table=" + yesNo(source.hasPlaytimeTable())
+                + ", last_location=" + (source.locationColumn() == null ? "no" : source.locationColumn())
+                + ", mute=" + (source.muteColumn() == null ? "no" : source.muteColumn()));
+        if (options.includes(ImportCategory.PUNISHMENTS) && source.muteColumn() == null) {
+            noteOnce("cmi-mutes", "No mute column found in the CMI users table: CMI mutes are not imported "
+                    + "(re-apply them with /mute). CMI bans are read from the server's ban lists.");
+        }
     }
 
     // ---- users ----
@@ -106,6 +173,7 @@ final class CmiImportJob extends ImportJob {
                 }
                 processUser(recordOf(user, playtimes.getOrDefault(user.id(), 0L),
                         playtimeUnavailable.contains(user.id())));
+                importUserExtras(user);
                 processed++;
                 if (processed % every == 0) {
                     reportProgress(processed);
@@ -116,6 +184,36 @@ final class CmiImportJob extends ImportJob {
             reportProgress(processed);
         }
         report.note("Users processed: " + processed + (isCancelled() ? " (cancelled)" : ""));
+    }
+
+    /** The last location as a /back entry, and an active mute. */
+    private void importUserExtras(CmiUserRecord user) {
+        if (user.uuid() == null) {
+            return;
+        }
+        if (options.includes(ImportCategory.LOCATIONS) && user.lastLocation() != null && !user.lastLocation().isBlank()) {
+            Optional<dev.yanianz.atrium.api.teleport.StoredLocation> location = CmiLocations.parse(user.lastLocation());
+            if (location.isEmpty()) {
+                report.found(ImportCategory.LOCATIONS, 1);
+                report.invalid(ImportCategory.LOCATIONS, user.label(), "last location could not be parsed");
+            } else {
+                importBack(user.uuid(), user.label(), location.get(), 0L);
+            }
+        }
+        if (options.includes(ImportCategory.PUNISHMENTS) && user.mutedUntil() != null && !user.mutedUntil().isBlank()) {
+            long until;
+            try {
+                until = Long.parseLong(user.mutedUntil().trim());
+            } catch (NumberFormatException e) {
+                until = 0L;
+            }
+            if (until > System.currentTimeMillis()) {
+                String name = user.name() != null && user.name().length() <= 16 ? user.name() : null;
+                importPunishment(new PunishmentRecord("cmi", dev.yanianz.atrium.api.moderation.PunishmentType.TEMPMUTE,
+                        user.uuid(), name, null, null, null, java.time.Instant.now(), java.time.Instant.ofEpochMilli(until),
+                        null, user.label(), null));
+            }
+        }
     }
 
     private UserRecord recordOf(CmiUserRecord user, long playtimeSeconds, boolean playtimeUnavailable) {
@@ -165,13 +263,99 @@ final class CmiImportJob extends ImportJob {
             report.failed(ImportCategory.WARPS, file.getFileName().toString(), "cannot read file: " + describe(e));
             return;
         }
+        boolean requireDefault = false;
+        Path config = findFile(cmiFolder, "config.yml", "config.yaml");
+        if (config != null) {
+            try {
+                requireDefault = CmiNodeLocations.truthy(CmiNodeLocations.child(loadYaml(config), "Warps"), false,
+                        "requirePerm", "RequirePerm");
+            } catch (Exception e) {
+                ctx.logger().warn("Reading {} for Warps.requirePerm failed", config, e);
+            }
+        }
         List<WarpRecord> warps = new ArrayList<>(parsed.size());
+        int permissionWarps = 0;
         for (CmiWarpFileParser.ParsedWarp warp : parsed) {
-            warps.add(warp.ok()
-                    ? new WarpRecord(warp.name(), warp.category(), warp.location(), null)
-                    : new WarpRecord(warp.name(), warp.category(), null, warp.problem()));
+            if (!warp.ok()) {
+                warps.add(new WarpRecord(warp.name(), warp.category(), null, warp.problem()));
+                continue;
+            }
+            boolean needsPermission = warp.permissionRequired() != null ? warp.permissionRequired() : requireDefault;
+            if (needsPermission) {
+                permissionWarps++;
+            }
+            warps.add(new WarpRecord(warp.name(), warp.category(), byName(warp.location()), null, null, warp.owner(),
+                    warp.createdAt(), warp.icon(), null, -1, warp.notes()));
+        }
+        if (permissionWarps > 0) {
+            report.note(permissionWarps + " CMI warp(s) required a permission (cmi.command.warp.<name>). Atrium has one "
+                    + "switch for all warps: set requirePerWarpPermission: true in modules/warps.yml and grant "
+                    + "atrium.warp.<name> (atrium.warps.all for every warp). With it off, every warp is public.");
         }
         importWarps("warps", warps);
+    }
+
+    // ---- kits ----
+
+    private void importKits() {
+        Path folder = cmiFolder.resolve("Kits");
+        List<Path> files = new ArrayList<>();
+        if (Files.isDirectory(folder)) {
+            try (var stream = Files.list(folder)) {
+                stream.filter(Files::isRegularFile)
+                        .filter(p -> p.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".yml"))
+                        .sorted().forEach(files::add);
+            } catch (java.io.IOException e) {
+                report.failed(ImportCategory.KITS, "Kits", "cannot list folder: " + describe(e));
+                return;
+            }
+        }
+        if (files.isEmpty()) {
+            report.note("CMI Kits folder has no kit files; no kits to import");
+            return;
+        }
+        String firstJoinKit = cmiConfig == null ? null : CmiSpawnParser.parse(cmiConfig).firstJoinKit();
+        List<KitRecord> records = new ArrayList<>();
+        for (Path file : files) {
+            List<CmiKitParser.ParsedKit> kits;
+            try {
+                kits = CmiKitParser.parse(loadYaml(file));
+            } catch (Exception e) {
+                ctx.logger().error("Reading CMI kit file {} failed", file, e);
+                report.failed(ImportCategory.KITS, file.getFileName().toString(), "cannot read file: " + describe(e));
+                continue;
+            }
+            for (CmiKitParser.ParsedKit kit : kits) {
+                boolean firstJoin = firstJoinKit != null && firstJoinKit.equalsIgnoreCase(kit.sourceName());
+                records.add(new KitRecord(kit.name(), kit.sourceName(), kit.items(), kit.delaySeconds(), kit.cost(),
+                        null, kit.maxUses(), false, firstJoin, kit.icon(), kit.notes(), kit.problem()));
+            }
+        }
+        report.note("CMI kit permissions cmi.kit.<name> become atrium.kit.<name>");
+        importKits(records);
+    }
+
+    // ---- jails ----
+
+    private void importJails() {
+        Path file = findFile(cmiFolder.resolve("Saves"), "Jails.yml", "jails.yml");
+        if (file == null) {
+            report.note("CMI Saves/Jails.yml not found; no jails to import");
+            return;
+        }
+        List<CmiJailParser.ParsedJail> parsed;
+        try {
+            parsed = CmiJailParser.parse(loadYaml(file));
+        } catch (Exception e) {
+            ctx.logger().error("Reading {} failed", file, e);
+            report.failed(ImportCategory.JAILS, file.getFileName().toString(), "cannot read file: " + describe(e));
+            return;
+        }
+        List<JailRecord> jails = new ArrayList<>();
+        for (CmiJailParser.ParsedJail jail : parsed) {
+            jails.add(new JailRecord(jail.name(), jail.spawn(), jail.radius(), jail.release(), jail.notes(), jail.problem()));
+        }
+        importJails(jails);
     }
 
     // ---- holograms ----

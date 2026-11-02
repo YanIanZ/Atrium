@@ -14,8 +14,8 @@ class ImportOptionsTest {
     void defaultsToDryRunAllCategories() {
         ImportOptions options = ImportOptions.parse("", true);
         assertTrue(options.dryRun());
-        assertEquals(Set.copyOf(java.util.EnumSet.range(ImportCategory.ECONOMY, ImportCategory.HOLOGRAMS)),
-                options.only());
+        assertEquals(ImportCategory.cmi(), options.only());
+        assertTrue(options.only().containsAll(java.util.EnumSet.range(ImportCategory.ECONOMY, ImportCategory.HOLOGRAMS)));
         assertFalse(options.only().contains(ImportCategory.SOURCE));
         assertFalse(options.overwrite());
     }
@@ -48,15 +48,23 @@ class ImportOptionsTest {
     void onlyAcceptsCategoriesOfTheChosenSource() {
         ImportOptions essentials = ImportOptions.parse("", true, ImportCategory.essentials());
         assertTrue(essentials.only().contains(ImportCategory.SPAWN));
-        assertTrue(essentials.only().contains(ImportCategory.STATES));
+        assertTrue(essentials.only().contains(ImportCategory.PUNISHMENTS));
+        assertTrue(essentials.only().contains(ImportCategory.MAIL));
+        // The old category name still selects punishments.
+        assertEquals(Set.of(ImportCategory.PUNISHMENTS),
+                ImportOptions.parse("--only=states", true, ImportCategory.essentials()).only());
         assertFalse(essentials.only().contains(ImportCategory.HOLOGRAMS));
         assertThrows(IllegalArgumentException.class,
                 () -> ImportOptions.parse("--only=holograms", true, ImportCategory.essentials()));
 
         ImportOptions cmi = ImportOptions.parse("--only=warps", true, ImportCategory.cmi());
         assertEquals(Set.of(ImportCategory.WARPS), cmi.only());
+        assertEquals(Set.of(ImportCategory.SPAWN, ImportCategory.JAILS),
+                ImportOptions.parse("--only=spawn,jails", true, ImportCategory.cmi()).only());
         assertThrows(IllegalArgumentException.class,
-                () -> ImportOptions.parse("--only=spawn", true, ImportCategory.cmi()));
+                () -> ImportOptions.parse("--only=mail", true, ImportCategory.cmi()));
+        assertThrows(IllegalArgumentException.class,
+                () -> ImportOptions.parse("--only=homes", true, ImportCategory.economyOnly()));
     }
 
     @Test
@@ -80,7 +88,8 @@ class ImportOptionsTest {
         List<String> options = ImportOptions.suggestions("--o", ImportCategory.essentials());
         assertTrue(options.contains("--only"));
         assertTrue(options.contains("--only=homes"));
-        assertTrue(options.contains("--only=states"));
+        assertTrue(options.contains("--only=punishments"));
+        assertTrue(options.contains("--only=mail"));
         assertFalse(options.contains("--only=holograms"));
 
         assertTrue(ImportOptions.suggestions("dry-run --only ho", ImportCategory.essentials())
@@ -94,11 +103,11 @@ class ImportOptionsTest {
         assertFalse(first.contains("run"));
         assertTrue(ImportOptions.suggestions("dry-run --on", ImportCategory.essentials())
                 .contains("dry-run --only=economy"));
-        assertTrue(ImportOptions.suggestions("--only=sta", ImportCategory.essentials())
-                .contains("--only=states"));
+        assertTrue(ImportOptions.suggestions("--only=pun", ImportCategory.essentials())
+                .contains("--only=punishments"));
         assertTrue(ImportOptions.suggestions("--only=homes,", ImportCategory.essentials())
                 .contains("--only=homes,warps"));
-        assertFalse(ImportOptions.suggestions("--only=sta", ImportCategory.cmi())
-                .contains("--only=states"));
+        assertFalse(ImportOptions.suggestions("--only=ma", ImportCategory.cmi())
+                .contains("--only=mail"));
     }
 }

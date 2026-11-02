@@ -39,11 +39,14 @@ final class ImportReport {
     private final Map<ImportCategory, List<ImportIssue>> issues = new EnumMap<>(ImportCategory.class);
     private final Map<ImportCategory, Boolean> truncated = new EnumMap<>(ImportCategory.class);
     private final List<String> notes = new ArrayList<>();
+    /** Per category: "skipped: reason" / "unsupported: reason" -> count, in first-seen order. */
+    private final Map<ImportCategory, Map<String, Long>> reasons = new EnumMap<>(ImportCategory.class);
 
     ImportReport() {
         for (ImportCategory category : ImportCategory.values()) {
             counters.put(category, new Counters());
             issues.put(category, new ArrayList<>());
+            reasons.put(category, new java.util.LinkedHashMap<>());
         }
     }
 
@@ -77,6 +80,34 @@ final class ImportReport {
 
     void unsupported(ImportCategory category, long count) {
         counters.get(category).unsupported += count;
+    }
+
+    /** Skipped with a reason that is tallied per category in the report and the summary. */
+    void skipped(ImportCategory category, long count, String reason) {
+        if (count <= 0) {
+            return;
+        }
+        skipped(category, count);
+        tally(category, "skipped", reason, count);
+    }
+
+    /** Not imported because Atrium cannot store it; the reason is tallied like {@link #skipped}. */
+    void unsupported(ImportCategory category, long count, String reason) {
+        if (count <= 0) {
+            return;
+        }
+        unsupported(category, count);
+        tally(category, "unsupported", reason, count);
+    }
+
+    private void tally(ImportCategory category, String kind, String reason, long count) {
+        String key = kind + ": " + (reason == null || reason.isBlank() ? "no reason given" : reason);
+        reasons.get(category).merge(key, count, Long::sum);
+    }
+
+    /** "skipped: reason" / "unsupported: reason" -> count, in first-seen order. */
+    Map<String, Long> reasons(ImportCategory category) {
+        return java.util.Collections.unmodifiableMap(reasons.get(category));
     }
 
     void extra(ImportCategory category, long value) {
@@ -153,6 +184,12 @@ final class ImportReport {
                 out.append(" extra=").append(counter.extra);
             }
             out.append('\n');
+            for (Map.Entry<String, Long> reason : reasons.get(category).entrySet()) {
+                out.append("  ").append(reason.getKey()).append(" (").append(reason.getValue()).append(")\n");
+            }
+            if (counter.invalid + counter.failed > 0) {
+                out.append("  invalid/failed: see 'Problems for ").append(category.key()).append("' below\n");
+            }
         }
         out.append('\n');
         for (Map.Entry<ImportCategory, List<ImportIssue>> entry : issues.entrySet()) {

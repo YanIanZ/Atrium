@@ -43,12 +43,13 @@ public final class ImporterModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "CMI and EssentialsX data importer plus a SQLite backup helper";
+        return "CMI, EssentialsX, vanilla ban list and Vault economy importer plus a SQLite backup helper";
     }
 
     @Override
     public Set<String> softDependencies() {
-        return Set.of("economy", "homes", "warps", "nick", "playtime", "holograms");
+        return Set.of("economy", "homes", "warps", "nick", "playtime", "holograms", "teleport", "moderation", "kits",
+                "mail");
     }
 
     @Override
@@ -57,7 +58,7 @@ public final class ImporterModule implements AtriumModule {
         this.config = context.config(ImporterConfig.class, ImporterConfig::new);
         context.migrate(ImportLedger.MIGRATIONS);
 
-        context.permission(PERM_IMPORT, PermissionDefault.OP, "Import CMI or EssentialsX data");
+        context.permission(PERM_IMPORT, PermissionDefault.OP, "Import data from CMI, EssentialsX, vanilla ban lists or a Vault economy");
         context.permission(PERM_STATUS, PermissionDefault.OP, "Show the status of the running import");
         context.permission(PERM_BACKUP, PermissionDefault.OP, "Back up the Atrium database");
 
@@ -75,13 +76,28 @@ public final class ImporterModule implements AtriumModule {
                         .then(Commands.argument("args", StringArgumentType.greedyString())
                                 .suggests(suggestions(ImportCategory.essentials()))
                                 .executes(c -> essentials(c, StringArgumentType.getString(c, "args")))))
+                .then(Cmds.literal("vanilla").requires(Cmds.permission(PERM_IMPORT))
+                        .executes(c -> vanilla(c, ""))
+                        .then(Commands.argument("args", StringArgumentType.greedyString())
+                                .suggests(suggestions(ImportCategory.vanilla()))
+                                .executes(c -> vanilla(c, StringArgumentType.getString(c, "args")))))
+                .then(Cmds.literal("economy").requires(Cmds.permission(PERM_IMPORT))
+                        .executes(this::economyUsage)
+                        .then(Commands.argument("plugin", StringArgumentType.word())
+                                .suggests(this::providerSuggestions)
+                                .executes(c -> economy(c, ""))
+                                .then(Commands.argument("args", StringArgumentType.greedyString())
+                                        .suggests(suggestions(ImportCategory.economyOnly()))
+                                        .executes(c -> economy(c, StringArgumentType.getString(c, "args"))))))
+                .then(Cmds.literal("sources").requires(Cmds.permission(PERM_IMPORT)).executes(this::sources))
                 .then(Cmds.literal("status")
                         .requires(source -> source.getSender().hasPermission(PERM_STATUS)
                                 || source.getSender().hasPermission(PERM_IMPORT))
                         .executes(this::status))
                 .then(Cmds.literal("cancel").requires(Cmds.permission(PERM_IMPORT)).executes(this::cancel));
         context.command(CommandSpec.of(root.build(),
-                "Import CMI or EssentialsX economy, homes, warps, nicknames, playtime and more"));
+                "Import CMI, EssentialsX, vanilla ban lists or any Vault economy: balances, homes, warps, spawn, kits, "
+                        + "jails, punishments, mail and more"));
 
         context.command(CommandSpec.of(Cmds.literal("atrium-backup", PERM_BACKUP)
                 .executes(this::backup)
@@ -108,7 +124,7 @@ public final class ImporterModule implements AtriumModule {
     private int usage(CommandContext<CommandSourceStack> context) {
         CommandSender sender = context.getSource().getSender();
         ctx.messages().send(sender, "importer.usage",
-                Msg.unparsed("sources", "cmi|essentials|status|cancel"),
+                Msg.unparsed("sources", "cmi|essentials|vanilla|economy <plugin>|sources|status|cancel"),
                 Msg.component("reason", ctx.messages().render(sender, "importer.reason-missing-subcommand")));
         return Cmds.OK;
     }
@@ -119,6 +135,120 @@ public final class ImporterModule implements AtriumModule {
 
     private int essentials(CommandContext<CommandSourceStack> context, String rawArgs) {
         return start(context, rawArgs, "essentials", ImportCategory.essentials());
+    }
+
+    private int vanilla(CommandContext<CommandSourceStack> context, String rawArgs) {
+        CommandSender sender = context.getSource().getSender();
+        ImportOptions options = parseOptions(sender, rawArgs, "vanilla", ImportCategory.vanilla());
+        if (options == null) {
+            return Cmds.OK;
+        }
+        launch(sender, options, new VanillaImportJob(ctx, config.get(), options, sender), "server folder");
+        return Cmds.OK;
+    }
+
+    private int economyUsage(CommandContext<CommandSourceStack> context) {
+        CommandSender sender = context.getSource().getSender();
+        ctx.messages().send(sender, "importer.usage-economy",
+                Msg.component("reason", ctx.messages().render(sender, "importer.reason-missing-plugin")));
+        return Cmds.OK;
+    }
+
+    private int economy(CommandContext<CommandSourceStack> context, String rawArgs) {
+        CommandSender sender = context.getSource().getSender();
+        String plugin = StringArgumentType.getString(context, "plugin");
+        ImportOptions options = parseOptions(sender, rawArgs, "economy", ImportCategory.economyOnly());
+        if (options == null) {
+            return Cmds.OK;
+        }
+        if (!BalanceSource.vaultInstalled(ctx.plugin().getServer())) {
+            ctx.messages().send(sender, "importer.economy-no-vault");
+            return Cmds.OK;
+        }
+        String atrium = ctx.plugin().getName();
+        java.util.List<BalanceSource.Provider> providers = VaultProviders.list(ctx.plugin().getServer(), atrium);
+        if (BalanceSource.pick(providers, plugin).isEmpty()) {
+            String known = providers.stream().filter(BalanceSource.Provider::importable)
+                    .map(BalanceSource.Provider::pluginName).distinct().reduce((a, b) -> a + ", " + b).orElse("none");
+            ctx.messages().send(sender, "importer.economy-no-provider", Msg.unparsed("plugin", plugin),
+                    Msg.unparsed("providers", known));
+            return Cmds.OK;
+        }
+        EconomyImportJob job = new EconomyImportJob(ctx, config.get(), options, sender, plugin,
+                wanted -> VaultProviders.find(ctx.plugin().getServer(), atrium, wanted));
+        launch(sender, options, job, "Vault provider " + plugin);
+        return Cmds.OK;
+    }
+
+    private java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> providerSuggestions(
+            CommandContext<CommandSourceStack> context, com.mojang.brigadier.suggestion.SuggestionsBuilder builder) {
+        if (BalanceSource.vaultInstalled(ctx.plugin().getServer())) {
+            String typed = builder.getRemainingLowerCase();
+            VaultProviders.list(ctx.plugin().getServer(), ctx.plugin().getName()).stream()
+                    .filter(BalanceSource.Provider::importable).map(BalanceSource.Provider::pluginName).distinct()
+                    .filter(name -> name.toLowerCase(java.util.Locale.ROOT).startsWith(typed)).forEach(builder::suggest);
+        }
+        return builder.buildFuture();
+    }
+
+    private int sources(CommandContext<CommandSourceStack> context) {
+        CommandSender sender = context.getSource().getSender();
+        ImporterConfig cfg = config.get();
+        Path cmi = resolveCmiFolder();
+        Path essentials = resolveEssentialsFolder();
+        java.util.List<ImportSources.Source> found = ImportSources.scan(
+                cmi, cmiFolderHint(), essentials, essentialsFolderHint(),
+                essentials == null ? null : resolveSpawnFolder(essentials),
+                Path.of("").toAbsolutePath());
+        ctx.messages().send(sender, "importer.sources-header");
+        for (ImportSources.Source source : found) {
+            ctx.messages().send(sender, source.available() ? "importer.sources-line" : "importer.sources-missing",
+                    Msg.unparsed("name", source.name()), Msg.unparsed("command", source.command()),
+                    Msg.unparsed("detail", source.detail()));
+        }
+        if (!BalanceSource.vaultInstalled(ctx.plugin().getServer())) {
+            ctx.messages().send(sender, "importer.sources-no-vault");
+        } else {
+            java.util.List<BalanceSource.Provider> providers = VaultProviders.list(ctx.plugin().getServer(),
+                    ctx.plugin().getName());
+            if (providers.isEmpty()) {
+                ctx.messages().send(sender, "importer.sources-no-providers");
+            }
+            for (BalanceSource.Provider provider : providers) {
+                ctx.messages().send(sender, provider.importable() ? "importer.sources-provider" : "importer.sources-provider-own",
+                        Msg.unparsed("plugin", provider.pluginName()), Msg.unparsed("provider", provider.providerName()));
+            }
+        }
+        if (cfg.checkWorlds) {
+            ctx.messages().send(sender, "importer.sources-footer");
+        }
+        return Cmds.OK;
+    }
+
+    /** Parses the options or tells the sender why not; {@code null} on failure. */
+    private ImportOptions parseOptions(CommandSender sender, String rawArgs, String source, Set<ImportCategory> categories) {
+        try {
+            return ImportOptions.parse(rawArgs, true, categories);
+        } catch (ImportOptions.ParseException e) {
+            Component reason = ctx.messages().render(sender, "importer.reason-" + e.reasonKey(),
+                    Msg.unparsed("value", e.value()));
+            ctx.messages().send(sender, "importer.usage-" + source,
+                    Msg.unparsed("categories", ImportCategory.keys(categories)),
+                    Msg.component("reason", reason));
+            return null;
+        }
+    }
+
+    private void launch(CommandSender sender, ImportOptions options, ImportJob job, String path) {
+        if (!active.tryClaim(job)) {
+            ctx.messages().send(sender, "importer.already-running");
+            return;
+        }
+        ctx.messages().send(sender, options.dryRun() ? "importer.dry-run-started" : "importer.started",
+                Msg.unparsed("source", job.sourceName()),
+                Msg.unparsed("options", options.describe()),
+                Msg.unparsed("path", path));
+        job.start();
     }
 
     private int start(CommandContext<CommandSourceStack> context, String rawArgs, String source,
