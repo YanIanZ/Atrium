@@ -78,6 +78,17 @@ support (profile-scoped data for MultiProfile, on-demand AWF world loading, regi
 State at the end of phase 9: 59 modules, 241 commands and 799 permissions on a default configuration; boot smoke
 tests pass on Folia and Paper with Atrium and Atrium Vault installed.
 
+## Phase 10: fine-grained parity, engines and stability ✅
+A feature-by-feature audit (190 small CMI features: toggles, automatic behaviours, quality-of-life details) drove a
+second parity pass: chat filters and rooms, elevators and launchpads, spawner tools, cheques, jail cells, statistics,
+world/death/respawn rules, a new combat module, PlayerVaults-style vaults and more. Engines: TAB for the tab list and
+sidebar, EconomyShopGUI/ShopGUIPlus price sources, client-side chat bubbles with PacketEvents. Migration: complete
+CMI/EssentialsX import plus balances from any Vault economy plugin. Stability: 54-slot ender chests, non-blocking Vault
+reads on Folia, a compatibility harness with popular plugins (docs/COMPATIBILITY.md).
+
+Verified: `./gradlew build` → 2325 tests, 0 failures; fresh Folia and Paper with Atrium Vault → 60/60 modules,
+312 commands, 1051 permissions, `SMOKE: OK`.
+
 ## Open items
 
 - **Real-client testing.** The phases above are verified by unit tests and console boot smoke tests. GUIs, NPCs,

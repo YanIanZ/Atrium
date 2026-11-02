@@ -55,7 +55,7 @@ public class DiscordConfig {
     @Comment("Revoke template. Fields: {type} {target} {actor} {id} {count}; all escaped before insertion.")
     public String revokeFormat = "**Revoked {type}** of {target} by {actor} ({count} record(s))";
 
-    @Comment("Content of the message sent by /discord test <channel>.")
+    @Comment("Content of the message sent by /discordrelay test <channel>.")
     public String testMessage = "Test message from Atrium.";
 
     @Comment("Relay quit messages on the joins webhook (silent quits of vanished players are always skipped).")

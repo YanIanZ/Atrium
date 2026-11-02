@@ -12,7 +12,7 @@ import io.papermc.paper.command.brigadier.Commands;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.CommandSender;
 
-/** {@code /discord status} and {@code /discord test <channel>}. */
+/** {@code /discordrelay status} and {@code /discordrelay test <channel>} (not /discord, which servers usually use for an invite link). */
 final class DiscordCommands {
     private final ModuleContext ctx;
     private final Cmds cmds;
@@ -25,7 +25,7 @@ final class DiscordCommands {
     }
 
     void register() {
-        ctx.command(CommandSpec.of(Cmds.literal("discord")
+        ctx.command(CommandSpec.of(Cmds.literal("discordrelay")
                 .executes(this::usage)
                 .then(Commands.literal("status")
                         .requires(Cmds.permission("atrium.discord.status"))

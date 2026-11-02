@@ -1,5 +1,5 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
-usage-discord: "<prefix><muted>Penggunaan: <highlight>/discord status</highlight> atau <highlight>/discord test (kanal)</highlight>."
+usage-discord: "<prefix><muted>Penggunaan: <highlight>/discordrelay status</highlight> atau <highlight>/discordrelay test (kanal)</highlight>."
 status-header: "<prefix><primary>Relay Discord:"
 # <error> di bawah adalah placeholder error terakhir, bukan theme tag.
 status-entry: "<prefix><muted><channel>: <state> <dark_gray>| <muted>antrean <queued>/<capacity> <dark_gray>| <muted>terkirim <sent> <dark_gray>| <muted>dibuang <dropped> <dark_gray>| <muted>gagal <failed> <dark_gray>| <muted>ulang <retries> <dark_gray>| <muted>terakhir: <error>"

@@ -1,5 +1,5 @@
 # Theme tags: <primary> <secondary> <accent> <muted> <success> <warning> <error> <highlight>
-usage-discord: "<prefix><muted>Usage: <highlight>/discord status</highlight> or <highlight>/discord test (channel)</highlight>."
+usage-discord: "<prefix><muted>Usage: <highlight>/discordrelay status</highlight> or <highlight>/discordrelay test (channel)</highlight>."
 status-header: "<prefix><primary>Discord relay:"
 # <error> below is the last-error placeholder, not the theme tag.
 status-entry: "<prefix><muted><channel>: <state> <dark_gray>| <muted>queue <queued>/<capacity> <dark_gray>| <muted>sent <sent> <dark_gray>| <muted>dropped <dropped> <dark_gray>| <muted>failed <failed> <dark_gray>| <muted>retries <retries> <dark_gray>| <muted>last: <error>"
