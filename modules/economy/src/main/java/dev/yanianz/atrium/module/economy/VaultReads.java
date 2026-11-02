@@ -2,7 +2,7 @@ package dev.yanianz.atrium.module.economy;
 
 import java.math.BigDecimal;
 import java.util.Set;
-import java.util.UUID;
+import dev.yanianz.atrium.module.economy.EconomyStore.Key;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
@@ -39,17 +39,20 @@ final class VaultReads {
         return Mode.WAIT;
     }
 
-    /** The storage side this policy reads from, kept narrow so the policy is testable without a server. */
+    /**
+     * The storage side this policy reads from, kept narrow so the policy is testable without a server.
+     * Every balance is one account in one world group; an online player has every group cached.
+     */
     interface Store {
         /** Newest known value: the committed balance of an online player, or a recent offline read. */
-        BigDecimal cachedRead(UUID account);
+        BigDecimal cachedRead(Key account);
 
-        boolean isOnline(UUID account);
+        boolean isOnline(Key account);
 
-        CompletableFuture<BigDecimal> balance(UUID account);
+        CompletableFuture<BigDecimal> balance(Key account);
 
         /** Keeps an asynchronously loaded value so the next non-waiting read can use it. */
-        void rememberRead(UUID account, BigDecimal value);
+        void rememberRead(Key account, BigDecimal value);
     }
 
     private static final long WARNING_INTERVAL_NANOS = TimeUnit.MINUTES.toNanos(1);
@@ -59,7 +62,7 @@ final class VaultReads {
     private final long timeoutMillis;
     private final BooleanSupplier tickThread;
     private final BooleanSupplier enabled;
-    private final Set<UUID> loading = ConcurrentHashMap.newKeySet();
+    private final Set<Key> loading = ConcurrentHashMap.newKeySet();
     private final RateLimited waits = new RateLimited();
     private final RateLimited deferred = new RateLimited();
 
@@ -75,7 +78,7 @@ final class VaultReads {
     boolean onTickThread() { return tickThread.getAsBoolean(); }
 
     /** Reads a balance without ever waiting on a tick thread or for an online player. */
-    BigDecimal balance(UUID account) {
+    BigDecimal balance(Key account) {
         BigDecimal cached = store.cachedRead(account);
         boolean online = store.isOnline(account);
         return switch (decide(cached != null, online, onTickThread())) {
@@ -89,7 +92,7 @@ final class VaultReads {
     }
 
     /** Loads a value in the background; concurrent callers share one load. */
-    void defer(UUID account) {
+    void defer(Key account) {
         if (!loading.add(account)) return;
         warnDeferred(account.toString());
         store.balance(account).whenComplete((value, failure) -> {

@@ -1,6 +1,7 @@
 package dev.yanianz.atrium.module.economy;
 
 import dev.yanianz.atrium.api.economy.TransactionResult;
+import dev.yanianz.atrium.module.economy.EconomyStore.Key;
 import dev.yanianz.atrium.core.module.ModuleContext;
 import java.math.BigDecimal;
 import java.util.*;
@@ -21,6 +22,10 @@ import org.bukkit.plugin.ServicePriority;
  * is warmed before the player is in game, so a scoreboard plugin calling Vault from its own thread on
  * join cannot stall. Writes keep their transactional semantics and are the only path that waits, bounded
  * by {@code vaultTimeoutMillis}, because Vault has no asynchronous result.
+ *
+ * <p>World groups: the overloads with a world name use the group of that world. The overloads without one
+ * use the player's context group: the group of the world an online player is in, otherwise the default
+ * group. With groups disabled both resolve to the single default group, exactly as before.
  */
 @SuppressWarnings("deprecation")
 final class VaultBridge extends AbstractEconomy implements AutoCloseable {
@@ -34,10 +39,10 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
         this.ctx = ctx;
         this.store = store;
         this.reads = new VaultReads(new VaultReads.Store() {
-            @Override public BigDecimal cachedRead(UUID account) { return store.cachedRead(account); }
-            @Override public boolean isOnline(UUID account) { return store.isOnline(account); }
-            @Override public CompletableFuture<BigDecimal> balance(UUID account) { return store.balance(account); }
-            @Override public void rememberRead(UUID account, BigDecimal value) { store.rememberRead(account, value); }
+            @Override public BigDecimal cachedRead(Key account) { return store.cachedRead(account); }
+            @Override public boolean isOnline(Key account) { return store.isOnline(account.id()); }
+            @Override public CompletableFuture<BigDecimal> balance(Key account) { return store.balance(account); }
+            @Override public void rememberRead(Key account, BigDecimal value) { store.rememberRead(account, value); }
         }, ctx.logger(), config.vaultTimeoutMillis, VaultBridge::onTickThread, () -> enabled);
     }
 
@@ -71,24 +76,27 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
 
     private <T> T await(CompletableFuture<T> future) { return reads.await(future); }
 
-    private BigDecimal balance(UUID id) { return reads.balance(id); }
+    /** Balance key: the group of {@code world}, or the context group when no world is given. */
+    private Key key(UUID id, String world) { return store.keyFor(id, world); }
+
+    private BigDecimal balance(UUID id, String world) { return reads.balance(key(id, world)); }
 
     /**
      * Names are resolved through the online list first (no storage), then through the account store.
      * Resolving a name needs storage, so a tick thread gets a background lookup and {@code 0}.
      */
-    private BigDecimal namedBalance(String name) {
+    private BigDecimal namedBalance(String name, String world) {
         Player online = Bukkit.getPlayerExact(name);
-        if (online != null) return reads.balance(online.getUniqueId());
+        if (online != null) return balance(online.getUniqueId(), world);
         if (reads.onTickThread()) {
-            deferName(name);
+            deferName(name, world);
             return BigDecimal.ZERO;
         }
-        return await(ctx.users().loadByName(name)).map(user -> reads.balance(user.uuid())).orElse(BigDecimal.ZERO);
+        return await(ctx.users().loadByName(name)).map(user -> balance(user.uuid(), world)).orElse(BigDecimal.ZERO);
     }
 
-    private void deferName(String name) {
-        String key = name.toLowerCase(Locale.ROOT);
+    private void deferName(String name, String world) {
+        String key = name.toLowerCase(Locale.ROOT) + "|" + (world == null ? "" : world);
         if (!resolving.add(key)) return;
         reads.warnDeferred("name '" + name + "'");
         ctx.users().loadByName(name).whenComplete((user, failure) -> {
@@ -97,7 +105,7 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
                 ctx.logger().warn("Deferred Vault name lookup failed for '{}'", name, failure);
                 return;
             }
-            user.ifPresent(found -> reads.defer(found.uuid()));
+            user.ifPresent(found -> reads.defer(key(found.uuid(), world)));
         });
     }
 
@@ -112,17 +120,37 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
                 result.success() ? EconomyResponse.ResponseType.SUCCESS : EconomyResponse.ResponseType.FAILURE,
                 result.success() ? null : result.status().name());
     }
-    private EconomyResponse write(UUID id, double value, boolean deposit) {
+    private CompletableFuture<TransactionResult> change(Key key, double value, boolean deposit) {
+        return deposit ? store.deposit(key, BigDecimal.valueOf(value), "vault:deposit")
+                : store.withdraw(key, BigDecimal.valueOf(value), "vault:withdraw");
+    }
+    private EconomyResponse write(UUID id, String world, double value, boolean deposit) {
         if (!Double.isFinite(value) || value < 0) return invalid("Invalid amount");
-        try { return response(await(deposit ? store.deposit(id, BigDecimal.valueOf(value), "vault:deposit")
-                : store.withdraw(id, BigDecimal.valueOf(value), "vault:withdraw"))); }
+        try { return response(await(change(key(id, world), value, deposit))); }
         catch (IllegalStateException e) { return invalid(e.getMessage()); }
     }
-    private EconomyResponse write(String name, double value, boolean deposit) {
+    private EconomyResponse write(String name, String world, double value, boolean deposit) {
         if (!Double.isFinite(value) || value < 0) return invalid("Invalid amount");
-        try { return response(await(byName(name, id -> deposit ? store.deposit(id, BigDecimal.valueOf(value), "vault:deposit")
-                : store.withdraw(id, BigDecimal.valueOf(value), "vault:withdraw")))); }
+        try { return response(await(byName(name, id -> change(key(id, world), value, deposit)))); }
         catch (IllegalStateException e) { return invalid(e.getMessage()); }
+    }
+    private boolean accountExists(String name, String world) {
+        if (Bukkit.getPlayerExact(name) != null) return true;
+        return await(ctx.users().loadByName(name).thenCompose(user -> user.isPresent()
+                ? store.exists(key(user.get().uuid(), world)) : CompletableFuture.completedFuture(false)));
+    }
+    private boolean accountExists(OfflinePlayer player, String world) {
+        // A warmed online account was created at join; an account is created on demand in any group.
+        return store.isOnline(player.getUniqueId()) || await(store.exists(key(player.getUniqueId(), world)));
+    }
+    private boolean createAccount(String name, String world) {
+        try { await(byName(name, id -> store.ensure(key(id, world)))); return true; } catch (IllegalStateException e) { return false; }
+    }
+    private boolean createAccount(OfflinePlayer player, String world) {
+        try { await(store.ensure(key(player.getUniqueId(), world))); return true; } catch (IllegalStateException e) { return false; }
+    }
+    private static boolean covers(BigDecimal balance, double amount) {
+        return Double.isFinite(amount) && amount >= 0 && balance.compareTo(BigDecimal.valueOf(amount)) >= 0;
     }
     @Override public boolean isEnabled() { return enabled; }
     @Override public String getName() { return "Atrium"; }
@@ -134,33 +162,22 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
     }
     @Override public String currencyNamePlural() { return store.currencyNamePlural(); }
     @Override public String currencyNameSingular() { return store.currencyNameSingular(); }
-    @Override public boolean hasAccount(String name) {
-        if (Bukkit.getPlayerExact(name) != null) return true;
-        return await(ctx.users().loadByName(name).thenCompose(user -> user.isPresent()
-                ? store.exists(user.get().uuid()) : CompletableFuture.completedFuture(false)));
-    }
-    @Override public boolean hasAccount(OfflinePlayer player) {
-        // A warmed online account was created at join, so existence needs no storage round trip.
-        return store.isOnline(player.getUniqueId()) || await(store.exists(player.getUniqueId()));
-    }
-    @Override public double getBalance(String name) { return namedBalance(name).doubleValue(); }
-    @Override public double getBalance(OfflinePlayer player) { return balance(player.getUniqueId()).doubleValue(); }
+    @Override public boolean hasAccount(String name) { return accountExists(name, null); }
+    @Override public boolean hasAccount(OfflinePlayer player) { return accountExists(player, null); }
+    @Override public double getBalance(String name) { return namedBalance(name, null).doubleValue(); }
+    @Override public double getBalance(OfflinePlayer player) { return balance(player.getUniqueId(), null).doubleValue(); }
     @Override public boolean has(String name, double amount) {
-        return Double.isFinite(amount) && amount >= 0 && namedBalance(name).compareTo(BigDecimal.valueOf(amount)) >= 0;
+        return Double.isFinite(amount) && amount >= 0 && covers(namedBalance(name, null), amount);
     }
     @Override public boolean has(OfflinePlayer player, double amount) {
-        return Double.isFinite(amount) && amount >= 0 && balance(player.getUniqueId()).compareTo(BigDecimal.valueOf(amount)) >= 0;
+        return Double.isFinite(amount) && amount >= 0 && covers(balance(player.getUniqueId(), null), amount);
     }
-    @Override public EconomyResponse depositPlayer(String name, double amount) { return write(name, amount, true); }
-    @Override public EconomyResponse withdrawPlayer(String name, double amount) { return write(name, amount, false); }
-    @Override public EconomyResponse depositPlayer(OfflinePlayer player, double amount) { return write(player.getUniqueId(), amount, true); }
-    @Override public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount) { return write(player.getUniqueId(), amount, false); }
-    @Override public boolean createPlayerAccount(String name) {
-        try { await(byName(name, store::ensure)); return true; } catch (IllegalStateException e) { return false; }
-    }
-    @Override public boolean createPlayerAccount(OfflinePlayer player) {
-        try { await(store.ensure(player.getUniqueId())); return true; } catch (IllegalStateException e) { return false; }
-    }
+    @Override public EconomyResponse depositPlayer(String name, double amount) { return write(name, null, amount, true); }
+    @Override public EconomyResponse withdrawPlayer(String name, double amount) { return write(name, null, amount, false); }
+    @Override public EconomyResponse depositPlayer(OfflinePlayer player, double amount) { return write(player.getUniqueId(), null, amount, true); }
+    @Override public EconomyResponse withdrawPlayer(OfflinePlayer player, double amount) { return write(player.getUniqueId(), null, amount, false); }
+    @Override public boolean createPlayerAccount(String name) { return createAccount(name, null); }
+    @Override public boolean createPlayerAccount(OfflinePlayer player) { return createAccount(player, null); }
     private EconomyResponse unsupported() { return new EconomyResponse(0, 0, EconomyResponse.ResponseType.NOT_IMPLEMENTED, "Banks are not supported"); }
     @Override public List<String> getBanks() { return List.of(); }
     @Override public EconomyResponse createBank(String name, String player) { return unsupported(); }
@@ -174,16 +191,20 @@ final class VaultBridge extends AbstractEconomy implements AutoCloseable {
     @Override public EconomyResponse isBankOwner(String name, OfflinePlayer player) { return unsupported(); }
     @Override public EconomyResponse isBankMember(String name, String player) { return unsupported(); }
     @Override public EconomyResponse isBankMember(String name, OfflinePlayer player) { return unsupported(); }
-    @Override public boolean hasAccount(String name, String world) { return hasAccount(name); }
-    @Override public double getBalance(String name, String world) { return getBalance(name); }
-    @Override public boolean createPlayerAccount(String name, String world) { return createPlayerAccount(name); }
-    @Override public boolean has(String name, String world, double amount) { return has(name, amount); }
-    @Override public EconomyResponse withdrawPlayer(String name, String world, double amount) { return withdrawPlayer(name, amount); }
-    @Override public EconomyResponse depositPlayer(String name, String world, double amount) { return depositPlayer(name, amount); }
-    @Override public boolean hasAccount(OfflinePlayer player, String world) { return hasAccount(player); }
-    @Override public double getBalance(OfflinePlayer player, String world) { return getBalance(player); }
-    @Override public boolean createPlayerAccount(OfflinePlayer player, String world) { return createPlayerAccount(player); }
-    @Override public boolean has(OfflinePlayer player, String world, double amount) { return has(player, amount); }
-    @Override public EconomyResponse withdrawPlayer(OfflinePlayer player, String world, double amount) { return withdrawPlayer(player, amount); }
-    @Override public EconomyResponse depositPlayer(OfflinePlayer player, String world, double amount) { return depositPlayer(player, amount); }
+    @Override public boolean hasAccount(String name, String world) { return accountExists(name, world); }
+    @Override public double getBalance(String name, String world) { return namedBalance(name, world).doubleValue(); }
+    @Override public boolean createPlayerAccount(String name, String world) { return createAccount(name, world); }
+    @Override public boolean has(String name, String world, double amount) {
+        return Double.isFinite(amount) && amount >= 0 && covers(namedBalance(name, world), amount);
+    }
+    @Override public EconomyResponse withdrawPlayer(String name, String world, double amount) { return write(name, world, amount, false); }
+    @Override public EconomyResponse depositPlayer(String name, String world, double amount) { return write(name, world, amount, true); }
+    @Override public boolean hasAccount(OfflinePlayer player, String world) { return accountExists(player, world); }
+    @Override public double getBalance(OfflinePlayer player, String world) { return balance(player.getUniqueId(), world).doubleValue(); }
+    @Override public boolean createPlayerAccount(OfflinePlayer player, String world) { return createAccount(player, world); }
+    @Override public boolean has(OfflinePlayer player, String world, double amount) {
+        return Double.isFinite(amount) && amount >= 0 && covers(balance(player.getUniqueId(), world), amount);
+    }
+    @Override public EconomyResponse withdrawPlayer(OfflinePlayer player, String world, double amount) { return write(player.getUniqueId(), world, amount, false); }
+    @Override public EconomyResponse depositPlayer(OfflinePlayer player, String world, double amount) { return write(player.getUniqueId(), world, amount, true); }
 }

@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory;
 
 /** The Vault read policy, tested without a server: it must never block where blocking would hurt. */
 class VaultReadsTest {
-    private final UUID account = UUID.randomUUID();
+    private final EconomyStore.Key account = new EconomyStore.Key(UUID.randomUUID(), WorldGroups.DEFAULT_KEY);
     private final FakeStore store = new FakeStore();
 
     private VaultReads reads(boolean tickThread) {
@@ -78,10 +78,10 @@ class VaultReadsTest {
         final AtomicReference<BigDecimal> remembered = new AtomicReference<>();
         private final CountDownLatch rememberedLatch = new CountDownLatch(1);
 
-        @Override public BigDecimal cachedRead(UUID id) { return cached; }
-        @Override public boolean isOnline(UUID id) { return online; }
-        @Override public CompletableFuture<BigDecimal> balance(UUID id) { loads.incrementAndGet(); return load; }
-        @Override public void rememberRead(UUID id, BigDecimal value) {
+        @Override public BigDecimal cachedRead(EconomyStore.Key id) { return cached; }
+        @Override public boolean isOnline(EconomyStore.Key id) { return online; }
+        @Override public CompletableFuture<BigDecimal> balance(EconomyStore.Key id) { loads.incrementAndGet(); return load; }
+        @Override public void rememberRead(EconomyStore.Key id, BigDecimal value) {
             remembered.set(value);
             rememberedLatch.countDown();
         }

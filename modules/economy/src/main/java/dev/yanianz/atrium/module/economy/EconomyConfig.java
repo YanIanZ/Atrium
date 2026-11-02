@@ -1,7 +1,9 @@
 package dev.yanianz.atrium.module.economy;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.spongepowered.configurate.objectmapping.ConfigSerializable;
 import org.spongepowered.configurate.objectmapping.meta.Comment;
 
@@ -53,6 +55,12 @@ public class EconomyConfig {
     @Comment("Filters for the /baltop snapshot.")
     public Baltop baltop = new Baltop();
 
+    @Comment("""
+            Separate balances per group of worlds. Off by default: with enabled false every world shares one balance,
+            exactly as before. Balances that existed before groups were enabled always belong to the default group,
+            so turning groups on (or renaming the default group) never loses money. Check with /eco groups.""")
+    public WorldGroups groups = new WorldGroups();
+
     @ConfigSerializable
     public static class Tax {
         @Comment("Enable the /pay tax.")
@@ -102,5 +110,28 @@ public class EconomyConfig {
                 recorded last join are hidden while the filter is active. The filter is applied to the periodic
                 snapshot, so a change appears after the next refresh.""")
         public int inactiveDays = 0;
+    }
+
+    @ConfigSerializable
+    public static class WorldGroups {
+        @Comment("Enable separate balances per world group. Restart after changing.")
+        public boolean enabled = false;
+
+        @Comment("""
+                Name of the group used for every world not listed below (and for offline players). Existing balances
+                belong to this group whatever it is called. Names: 1-32 of a-z 0-9 _ -.""")
+        public String defaultGroup = "default";
+
+        @Comment("""
+                Allow /pay (and cheque redemption) between different world groups. Off: a payment to a player who is
+                in another group is refused with a message.""")
+        public boolean allowCrossGroupPay = false;
+
+        @Comment("""
+                Group name -> worlds. Entries are world names (case-insensitive) or glob patterns with * and ?.
+                An exact name wins over a pattern; patterns are tried in the order listed. Worlds not listed use
+                the default group. Listing the main world in a new group makes the money players had there (which is
+                in the default group) unavailable in that world, so prefer adding new worlds to new groups.""")
+        public Map<String, List<String>> worldGroups = new LinkedHashMap<>(Map.of("creative", List.of("creative", "creative_*")));
     }
 }

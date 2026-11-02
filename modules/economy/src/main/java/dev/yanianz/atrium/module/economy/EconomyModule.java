@@ -13,6 +13,7 @@ import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
+import dev.yanianz.atrium.module.economy.EconomyStore.Key;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import java.math.BigDecimal;
@@ -24,7 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.Location;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.NamespacedKey;
 import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
@@ -32,6 +35,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -50,9 +54,12 @@ public final class EconomyModule implements AtriumModule, Listener {
     private final Map<UUID, PendingPayment> confirmations = new ConcurrentHashMap<>();
     private final Set<UUID> redeeming = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean refreshing = new AtomicBoolean();
-    private volatile List<EconomyStore.Entry> leaders = List.of();
+    /** Leaderboard snapshot per group storage key. */
+    private volatile Map<String, List<EconomyStore.Entry>> leaders = Map.of();
     private AutoCloseable vault;
-    private record PendingPayment(UUID target, BigDecimal amount, long expires) {}
+    private record PendingPayment(Key from, Key target, BigDecimal amount, long expires) {}
+    /** Trailing command words with the world-group selector removed; {@code key} is null when none was given. */
+    private record Selected(String rest, String key) {}
 
     @Override public String id() { return "economy"; }
     @Override public String description() { return "Transactional economy, payments and balances"; }
@@ -75,6 +82,8 @@ public final class EconomyModule implements AtriumModule, Listener {
                 || chequeMaximum.signum() <= 0 || config.baltop.inactiveDays < 0) {
             throw new IllegalArgumentException("Invalid economy payment, cheque, leaderboard or Vault settings");
         }
+        // MySQL: complete a half-applied migration 3 first, so the normal run does not fail on a duplicate column.
+        EconomyStore.repairPartialGroupMigration(ctx.database()).get(30, java.util.concurrent.TimeUnit.SECONDS);
         ctx.migrate(EconomyStore.MIGRATIONS);
         ctx.component(store.component);
         ctx.service(EconomyService.class, store);
@@ -87,14 +96,19 @@ public final class EconomyModule implements AtriumModule, Listener {
         ctx.permission("atrium.balance.others", PermissionDefault.OP, "Read another player's balance");
         ctx.permission("atrium.eco.*", PermissionDefault.OP, "Economy administration");
         ctx.permission("atrium.eco.others", PermissionDefault.OP, "Manage other accounts");
+        ctx.permission("atrium.eco.group", PermissionDefault.OP,
+                "Choose a world group with g:<name> or --group <name> in /balance, /pay, /eco and /baltop");
         ctx.permission("atrium.cheque.redeem", PermissionDefault.TRUE, "Redeem a money cheque by right-clicking it");
-        for (String action : List.of("give", "take", "set", "reset", "log"))
+        for (String action : List.of("give", "take", "set", "reset", "log", "groups"))
             ctx.permission("atrium.eco." + action, PermissionDefault.OP, "Economy " + action);
         registerCommands();
         refresh();
         Duration interval = Duration.ofMinutes(config.leaderboardRefreshMinutes);
         ctx.track(ctx.scheduler().asyncTimer(this::refresh, interval, interval));
-        for (AtriumUser user : ctx.users().online()) observe(store.online(user.uuid()));
+        for (AtriumUser user : ctx.users().online()) {
+            Player player = Bukkit.getPlayer(user.uuid());
+            observe(store.online(user.uuid(), player == null ? null : player.getWorld().getName()));
+        }
         if (ctx.plugin().getServer().getPluginManager().isPluginEnabled("Vault")) {
             vault = VaultBridge.register(ctx, store, config);
         }
@@ -109,19 +123,15 @@ public final class EconomyModule implements AtriumModule, Listener {
     }
     private void registerCommands() {
         ctx.command(CommandSpec.of(Cmds.literal("balance", "atrium.balance")
-                .executes(c -> {
-                    Player player = ctx.commands().player(c.getSource());
-                    showBalance(c.getSource().getSender(), player.getUniqueId(), player.getName()); return Cmds.OK;
-                }).then(Commands.argument("player", StringArgumentType.word())
+                .executes(c -> balance(c, null, ""))
+                .then(Commands.argument("player", StringArgumentType.word())
                         .suggests(Cmds.knownPlayers(ctx.users()))
-                        .executes(c -> {
-                            CommandSender sender = c.getSource().getSender();
-                            String name = StringArgumentType.getString(c, "player");
-                            if (!(sender instanceof Player player && player.getName().equalsIgnoreCase(name))
-                                    && !sender.hasPermission("atrium.balance.others")) throw ctx.commands().fail(c.getSource(), "core.no-permission-others",
-                                            Msg.unparsed("permission", "atrium.balance.others"));
-                            resolve(sender, name, user -> showBalance(sender, user.uuid(), user.name())); return Cmds.OK;
-                        })).build(), "View balance", "bal"));
+                        .executes(c -> balance(c, StringArgumentType.getString(c, "player"), ""))
+                        .then(Commands.argument("options", StringArgumentType.greedyString())
+                                .suggests(groupSuggestions())
+                                .executes(c -> balance(c, StringArgumentType.getString(c, "player"),
+                                        StringArgumentType.getString(c, "options")))))
+                .build(), "View balance (g:<group> picks a world group)", "bal"));
         ctx.command(CommandSpec.of(Cmds.literal("pay", "atrium.pay")
                 .executes(c -> { send(c.getSource().getSender(), "pay-usage"); return Cmds.OK; })
                 .then(Commands.argument("player", StringArgumentType.word())
@@ -134,7 +144,7 @@ public final class EconomyModule implements AtriumModule, Listener {
                         .executes(this::writeCheque))
                 .build(), "Create a tradeable money cheque: /cheque <amount>", "banknote", "moneycheque"));
         var eco = Cmds.literal("eco").requires(source -> source.getSender().hasPermission("atrium.eco.*")
-                        || List.of("give", "take", "set", "reset", "log").stream()
+                        || List.of("give", "take", "set", "reset", "log", "groups").stream()
                             .anyMatch(action -> source.getSender().hasPermission("atrium.eco." + action)))
                 .executes(c -> { send(c.getSource().getSender(), "usage"); return Cmds.OK; });
         for (String action : List.of("give", "take", "set", "reset", "log")) {
@@ -145,21 +155,133 @@ public final class EconomyModule implements AtriumModule, Listener {
             } else {
                 target.executes(c -> { send(c.getSource().getSender(), "usage"); return Cmds.OK; });
             }
-            if (!action.equals("log")) target.then(Commands.argument("amount", StringArgumentType.greedyString()).executes(c -> admin(c, action)));
+            // The greedy tail also carries the optional g:<group> / --group <group> selector.
+            target.then(Commands.argument(action.equals("log") ? "options" : "amount", StringArgumentType.greedyString())
+                    .suggests(groupSuggestions()).executes(c -> admin(c, action)));
             eco.then(Cmds.literal(action).requires(source -> source.getSender().hasPermission("atrium.eco.*")
                     || source.getSender().hasPermission("atrium.eco." + action)).then(target));
         }
+        eco.then(Cmds.literal("groups").requires(source -> source.getSender().hasPermission("atrium.eco.*")
+                || source.getSender().hasPermission("atrium.eco.groups")).executes(this::groups));
         ctx.command(CommandSpec.of(eco.build(), "Economy administration"));
-        ctx.command(CommandSpec.of(Cmds.literal("baltop", "atrium.baltop").executes(c -> top(c, 1))
-                .then(Commands.argument("page", IntegerArgumentType.integer(1)).executes(c -> top(c, IntegerArgumentType.getInteger(c, "page"))))
-                .build(), "Richest accounts"));
+        ctx.command(CommandSpec.of(Cmds.literal("baltop", "atrium.baltop").executes(c -> top(c, 1, ""))
+                .then(Commands.argument("page", IntegerArgumentType.integer(1))
+                        .executes(c -> top(c, IntegerArgumentType.getInteger(c, "page"), ""))
+                        .then(Commands.argument("options", StringArgumentType.greedyString()).suggests(groupSuggestions())
+                                .executes(c -> top(c, IntegerArgumentType.getInteger(c, "page"),
+                                        StringArgumentType.getString(c, "options")))))
+                .then(Commands.argument("options", StringArgumentType.greedyString()).suggests(groupSuggestions())
+                        .executes(c -> top(c, 0, StringArgumentType.getString(c, "options"))))
+                .build(), "Richest accounts (g:<group> picks a world group)"));
     }
     private AmountSyntax.Expression expression(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        return expression(c, StringArgumentType.getString(c, "amount"));
+    }
+
+    private AmountSyntax.Expression expression(CommandContext<CommandSourceStack> c, String text) throws CommandSyntaxException {
         try {
-            return AmountSyntax.parse(StringArgumentType.getString(c, "amount"));
+            return AmountSyntax.parse(text);
         } catch (IllegalArgumentException e) {
             throw ctx.commands().fail(c.getSource(), "economy.invalid-amount");
         }
+    }
+
+    // ---- world groups ----
+
+    private com.mojang.brigadier.suggestion.SuggestionProvider<CommandSourceStack> groupSuggestions() {
+        return Cmds.suggest(() -> store.worldGroups().names().stream().map(name -> "g:" + name).toList());
+    }
+
+    /**
+     * Splits the optional world-group selector off trailing text. Choosing a group needs
+     * {@code atrium.eco.group}; an unknown group fails with the list of configured groups.
+     */
+    private Selected select(CommandContext<CommandSourceStack> c, String text) throws CommandSyntaxException {
+        GroupOption option;
+        try {
+            option = GroupOption.parse(text);
+        } catch (IllegalArgumentException e) {
+            throw ctx.commands().fail(c.getSource(), "economy.group-syntax");
+        }
+        if (option.group() == null) return new Selected(option.rest(), null);
+        CommandSender sender = c.getSource().getSender();
+        if (!sender.hasPermission("atrium.eco.group") && !sender.hasPermission("atrium.eco.*")) {
+            throw ctx.commands().fail(c.getSource(), "core.no-permission-others", Msg.unparsed("permission", "atrium.eco.group"));
+        }
+        String key = store.key(option.group());
+        if (key == null) {
+            throw ctx.commands().fail(c.getSource(), "economy.group-unknown", Msg.unparsed("group", option.group()),
+                    Msg.unparsed("groups", String.join(", ", store.worldGroups().names())));
+        }
+        return new Selected(option.rest(), key);
+    }
+
+    /** Group of the world the sender stands in; the default group for the console. Call on the sender's thread. */
+    private String senderGroup(CommandSender sender) {
+        return sender instanceof Player player ? store.worldGroups().keyOfWorld(player.getWorld().getName())
+                : WorldGroups.DEFAULT_KEY;
+    }
+
+    /** A target's group: its current world's group while online, otherwise the sender's group. */
+    private String targetGroup(String senderGroup, UUID target) {
+        return store.isOnline(target) ? store.contextGroup(target) : senderGroup;
+    }
+
+    private String groupName(String key) { return store.worldGroups().display(key); }
+
+    private int balance(CommandContext<CommandSourceStack> c, String name, String options) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        // "/balance g:x" and "/balance --group x" select a group for the sender's own balance.
+        if (name != null && (name.toLowerCase(Locale.ROOT).startsWith("g:") || name.toLowerCase(Locale.ROOT).startsWith("--group"))) {
+            options = (name + " " + options).trim();
+            name = null;
+        }
+        Selected selected = select(c, options);
+        if (!selected.rest().isEmpty()) throw ctx.commands().fail(c.getSource(), "economy.group-syntax");
+        String fromSender = senderGroup(sender);
+        if (name == null) {
+            Player player = ctx.commands().player(c.getSource());
+            String key = selected.key() != null ? selected.key() : fromSender;
+            showBalance(sender, new Key(player.getUniqueId(), key), player.getName());
+            return Cmds.OK;
+        }
+        if (!(sender instanceof Player player && player.getName().equalsIgnoreCase(name))
+                && !sender.hasPermission("atrium.balance.others")) throw ctx.commands().fail(c.getSource(), "core.no-permission-others",
+                        Msg.unparsed("permission", "atrium.balance.others"));
+        String target = name;
+        resolve(sender, target, user -> showBalance(sender, new Key(user.uuid(),
+                selected.key() != null ? selected.key() : targetGroup(fromSender, user.uuid())), user.name()));
+        return Cmds.OK;
+    }
+
+    private int groups(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        WorldGroups groups = store.worldGroups();
+        List<String> worlds = new ArrayList<>();
+        for (World world : Bukkit.getWorlds()) worlds.add(world.getName());
+        observe(store.storedGroups().thenAccept(stored -> {
+            send(sender, groups.enabled() ? "groups-enabled" : "groups-disabled",
+                    Msg.unparsed("default", groups.defaultName()),
+                    Msg.unparsed("cross", Boolean.toString(groups.allowCrossGroupPay())));
+            for (String key : groups.keys()) {
+                List<String> patterns = groups.worlds(key);
+                send(sender, "groups-entry", Msg.unparsed("group", groups.display(key)),
+                        Msg.unparsed("worlds", patterns.isEmpty() ? "-" : String.join(", ", patterns)),
+                        Msg.unparsed("accounts", Long.toString(stored.getOrDefault(key, 0L))),
+                        Msg.unparsed("role", key.equals(WorldGroups.DEFAULT_KEY) ? "default" : "group"));
+            }
+            for (String world : worlds) {
+                send(sender, "groups-world", Msg.unparsed("world", world),
+                        Msg.unparsed("group", groups.display(groups.keyOfWorld(world))));
+            }
+            for (Map.Entry<String, Long> entry : stored.entrySet()) {
+                if (!groups.keys().contains(entry.getKey())) {
+                    send(sender, "groups-stored", Msg.unparsed("group", entry.getKey()),
+                            Msg.unparsed("accounts", Long.toString(entry.getValue())));
+                }
+            }
+        }).exceptionally(failure -> { failed(sender, failure); return null; }));
+        return Cmds.OK;
     }
 
     /**
@@ -177,7 +299,7 @@ public final class EconomyModule implements AtriumModule, Listener {
     }
 
     /** Runs {@code action} with the resolved amount after loading the optional base balance. */
-    private void withAmount(CommandSender sender, UUID baseAccount, AmountSyntax.Expression expression,
+    private void withAmount(CommandSender sender, Key baseAccount, AmountSyntax.Expression expression,
             Consumer<BigDecimal> action) {
         if (!expression.needsBase()) {
             BigDecimal value = resolved(sender, expression, BigDecimal.ZERO);
@@ -198,26 +320,39 @@ public final class EconomyModule implements AtriumModule, Listener {
         Player sender = ctx.commands().player(c.getSource());
         if (!sender.hasPermission("atrium.pay.others")) throw ctx.commands().fail(c.getSource(), "core.no-permission-others",
                 Msg.unparsed("permission", "atrium.pay.others"));
-        UUID from = sender.getUniqueId();
-        AmountSyntax.Expression expression = expression(c);
+        Selected selected = select(c, StringArgumentType.getString(c, "amount"));
+        AmountSyntax.Expression expression = expression(c, selected.rest());
+        Key from = new Key(sender.getUniqueId(), selected.key() != null ? selected.key() : senderGroup(sender));
         String targetName = StringArgumentType.getString(c, "player");
         withAmount(sender, from, expression, value -> {
             if (value.compareTo(paymentMinimum) < 0) {
                 send(sender, "minimum", Msg.unparsed("amount", store.format(paymentMinimum)));
                 return;
             }
-            resolve(sender, targetName, user -> payTo(sender, from, value, user));
+            resolve(sender, targetName, user -> {
+                // An explicit group applies to both sides. Otherwise an online receiver is paid in the group of
+                // the world it is in, an offline receiver in the payer's group.
+                String to = WorldGroups.receiverGroup(from.group(), selected.key(),
+                        store.isOnline(user.uuid()) ? store.contextGroup(user.uuid()) : null);
+                if (!store.worldGroups().permits(from.group(), to)) {
+                    send(sender, "pay-cross-group", Msg.unparsed("player", user.name()),
+                            Msg.unparsed("target_group", groupName(to)), Msg.unparsed("group", groupName(from.group())));
+                    return;
+                }
+                payTo(sender, from, value, user, new Key(user.uuid(), to));
+            });
         });
         return Cmds.OK;
     }
 
-    private void payTo(Player sender, UUID from, BigDecimal value, AtriumUser user) {
-        if (from.equals(user.uuid())) { send(sender, "self"); return; }
+    private void payTo(Player sender, Key from, BigDecimal value, AtriumUser user, Key to) {
+        if (from.id().equals(user.uuid())) { send(sender, "self"); return; }
         if (value.compareTo(confirmationThreshold) > 0) {
-            PendingPayment previous = confirmations.remove(from);
+            PendingPayment previous = confirmations.remove(from.id());
             long now = System.nanoTime();
-            if (previous == null || !previous.target().equals(user.uuid()) || previous.amount().compareTo(value) != 0 || previous.expires() < now) {
-                confirmations.put(from, new PendingPayment(user.uuid(), value, now + TimeUnit.SECONDS.toNanos(30)));
+            if (previous == null || !previous.from().equals(from) || !previous.target().equals(to)
+                    || previous.amount().compareTo(value) != 0 || previous.expires() < now) {
+                confirmations.put(from.id(), new PendingPayment(from, to, value, now + TimeUnit.SECONDS.toNanos(30)));
                 send(sender, "confirm", Msg.unparsed("player", user.name()), Msg.unparsed("amount", store.format(value))); return;
             }
         }
@@ -229,7 +364,7 @@ public final class EconomyModule implements AtriumModule, Listener {
             send(sender, "tax-too-high", Msg.unparsed("tax", store.format(taxAmount)));
             return;
         }
-        observe(store.transferTaxed(from, user.uuid(), received, taxAmount, "pay:" + from)
+        observe(store.transferTaxed(from, to, received, taxAmount, "pay:" + from.id())
                 .thenAccept(result -> {
                     result(sender, result);
                     if (result.success() && taxAmount.signum() > 0) {
@@ -244,45 +379,75 @@ public final class EconomyModule implements AtriumModule, Listener {
         if (!(sender instanceof Player player && player.getName().equalsIgnoreCase(name))
                 && !sender.hasPermission("atrium.eco.others") && !sender.hasPermission("atrium.eco.*"))
             throw ctx.commands().fail(c.getSource(), "core.no-permission-others", Msg.unparsed("permission", "atrium.eco.others"));
-        if (!action.equals("log") && !action.equals("reset") && !Cmds.hasArgument(c, "amount")) {
+        String tail = Cmds.hasArgument(c, "amount") ? StringArgumentType.getString(c, "amount")
+                : Cmds.hasArgument(c, "options") ? StringArgumentType.getString(c, "options") : "";
+        Selected selected = select(c, tail);
+        if (action.equals("log") && !selected.rest().isEmpty()) throw ctx.commands().fail(c.getSource(), "economy.group-syntax");
+        if (!action.equals("log") && !action.equals("reset") && selected.rest().isEmpty()) {
             send(sender, "usage");
             return Cmds.OK;
         }
-        AmountSyntax.Expression expression = action.equals("log") || action.equals("reset") ? null : expression(c);
-        if (action.equals("reset") && Cmds.hasArgument(c, "amount")) expression(c); // validate the optional argument
+        AmountSyntax.Expression expression = action.equals("log") || action.equals("reset") ? null : expression(c, selected.rest());
+        if (action.equals("reset") && !selected.rest().isEmpty()) expression(c, selected.rest()); // validate the optional argument
         String reason = "eco:" + action + ":" + sender.getName();
+        String fromSender = senderGroup(sender);
         resolve(sender, name, user -> {
             if (action.equals("log")) {
-                observe(store.history(user.uuid()).thenAccept(entries -> {
+                // Without a selector the log shows every group, each line tagged with its group.
+                observe(store.history(user.uuid(), selected.key()).thenAccept(entries -> {
                     if (entries.isEmpty()) send(sender, "empty");
-                    for (var entry : entries) send(sender, "log", Msg.unparsed("time", Instant.ofEpochMilli(entry.created()).toString()),
-                            Msg.unparsed("amount", entry.amount()), Msg.unparsed("balance", entry.balance()), Msg.unparsed("reason", entry.reason()));
+                    boolean tagged = store.worldGroups().enabled();
+                    for (var entry : entries) send(sender, tagged ? "log-group" : "log",
+                            Msg.unparsed("time", Instant.ofEpochMilli(entry.created()).toString()),
+                            Msg.unparsed("amount", entry.amount()), Msg.unparsed("balance", entry.balance()),
+                            Msg.unparsed("reason", entry.reason()), Msg.unparsed("group", groupName(entry.group())));
                 }).exceptionally(failure -> { failed(sender, failure); return null; }));
                 return;
             }
+            Key key = new Key(user.uuid(), selected.key() != null ? selected.key() : targetGroup(fromSender, user.uuid()));
             if (action.equals("reset")) {
-                applyAdmin(sender, user, action, store.startingBalance(), reason);
+                applyAdmin(sender, key, action, store.startingBalance(), reason);
                 return;
             }
-            withAmount(sender, user.uuid(), expression, value -> applyAdmin(sender, user, action, value, reason));
+            withAmount(sender, key, expression, value -> applyAdmin(sender, key, action, value, reason));
         });
         return Cmds.OK;
     }
 
-    private void applyAdmin(CommandSender sender, AtriumUser user, String action, BigDecimal value, String reason) {
+    private void applyAdmin(CommandSender sender, Key key, String action, BigDecimal value, String reason) {
         CompletableFuture<TransactionResult> operation = switch (action) {
-            case "give" -> store.deposit(user.uuid(), value, reason);
-            case "take" -> store.withdraw(user.uuid(), value, reason);
-            default -> store.set(user.uuid(), value, reason);
+            case "give" -> store.deposit(key, value, reason);
+            case "take" -> store.withdraw(key, value, reason);
+            default -> store.set(key, value, reason);
         };
         observe(operation.thenAccept(result -> result(sender, result)));
     }
-    private int top(CommandContext<CommandSourceStack> c, int page) {
+    /** {@code page} 0 means "take the page from the options", for "/baltop g:x 2". */
+    private int top(CommandContext<CommandSourceStack> c, int page, String options) throws CommandSyntaxException {
         CommandSender sender = c.getSource().getSender();
-        List<EconomyStore.Entry> snapshot = leaders;
+        Selected selected = select(c, options);
+        if (page == 0) {
+            page = 1;
+            if (!selected.rest().isEmpty()) {
+                try {
+                    page = Integer.parseInt(selected.rest());
+                } catch (NumberFormatException e) {
+                    throw ctx.commands().fail(c.getSource(), "economy.group-syntax");
+                }
+                if (page < 1) throw ctx.commands().fail(c.getSource(), "economy.group-syntax");
+            }
+        } else if (!selected.rest().isEmpty()) {
+            throw ctx.commands().fail(c.getSource(), "economy.group-syntax");
+        }
+        String group = selected.key() != null ? selected.key() : senderGroup(sender);
+        List<EconomyStore.Entry> snapshot = leaders.getOrDefault(group, List.of());
         long start = (long) (page - 1) * config.pageSize;
         if (start >= snapshot.size()) { send(sender, "empty"); return Cmds.OK; }
-        send(sender, "top-header", Msg.unparsed("page", Integer.toString(page)));
+        if (store.worldGroups().enabled()) {
+            send(sender, "top-header-group", Msg.unparsed("page", Integer.toString(page)), Msg.unparsed("group", groupName(group)));
+        } else {
+            send(sender, "top-header", Msg.unparsed("page", Integer.toString(page)));
+        }
         for (int i = (int) start; i < Math.min(start + config.pageSize, snapshot.size()); i++) {
             var entry = snapshot.get(i);
             send(sender, "top-entry", Msg.unparsed("rank", Integer.toString(i + 1)), Msg.unparsed("player", entry.name()),
@@ -324,13 +489,14 @@ public final class EconomyModule implements AtriumModule, Listener {
         }
         AmountSyntax.Expression expression = expression(c);
         UUID owner = player.getUniqueId();
-        withAmount(player, owner, expression, value -> {
+        Key account = new Key(owner, senderGroup(player));
+        withAmount(player, account, expression, value -> {
             if (value.signum() <= 0 || value.compareTo(chequeMaximum) > 0) {
                 send(player, "cheque-amount", Msg.unparsed("max", store.format(chequeMaximum)));
                 return;
             }
             String id = UUID.randomUUID().toString();
-            observe(store.createCheque(owner, id, value).thenAccept(result -> {
+            observe(store.createCheque(account, id, value).thenAccept(result -> {
                 if (!result.success()) {
                     send(player, "status-" + result.status().name().toLowerCase(Locale.ROOT));
                     return;
@@ -412,7 +578,14 @@ public final class EconomyModule implements AtriumModule, Listener {
         }
         // The note is consumed only after the credit succeeded, so a storage failure never costs the player
         // the money. A duplicate copy of the same note loses the atomic claim and is worthless.
-        observe(store.claimCheque(id, owner).thenCompose(claim -> {
+        // The note pays into the group of the world the player stands in. Unless cross-group payments are
+        // allowed, a note written in another group is left unclaimed and stays valid there.
+        String group = senderGroup(player);
+        observe(store.claimCheque(id, owner, store.worldGroups().allowCrossGroupPay() ? null : group).thenCompose(claim -> {
+            if (claim.status() == EconomyStore.Claim.WRONG_GROUP) {
+                send(player, "cheque-wrong-group", Msg.unparsed("group", groupName(claim.group())));
+                return CompletableFuture.completedFuture(null);
+            }
             if (claim.status() == EconomyStore.Claim.MISSING) {
                 send(player, "cheque-invalid");
                 return CompletableFuture.completedFuture(null);
@@ -425,7 +598,7 @@ public final class EconomyModule implements AtriumModule, Listener {
                 send(player, "cheque-claim-failed");
                 return CompletableFuture.completedFuture(null);
             }
-            return store.deposit(owner, claim.value(), "cheque:redeem:" + id).thenApply(deposit -> {
+            return store.deposit(new Key(owner, group), claim.value(), "cheque:redeem:" + id).thenApply(deposit -> {
                 if (!deposit.success()) {
                     ctx.logger().warn("Crediting cheque {} to {} failed with {}; releasing the note", id, owner, deposit.status());
                     observe(store.unclaimCheque(id, owner).thenAccept(returned -> {
@@ -469,8 +642,11 @@ public final class EconomyModule implements AtriumModule, Listener {
             });
         }).exceptionally(failure -> { failed(sender, failure); return null; }));
     }
-    private void showBalance(CommandSender sender, UUID id, String name) {
-        observe(store.balance(id).thenAccept(value -> send(sender, "balance", Msg.unparsed("player", name), Msg.unparsed("amount", store.format(value))))
+    private void showBalance(CommandSender sender, Key key, String name) {
+        boolean tagged = store.worldGroups().enabled();
+        observe(store.balance(key).thenAccept(value -> send(sender, tagged ? "balance-group" : "balance",
+                        Msg.unparsed("player", name), Msg.unparsed("amount", store.format(value)),
+                        Msg.unparsed("group", groupName(key.group()))))
                 .exceptionally(failure -> { failed(sender, failure); return null; }));
     }
     private void result(CommandSender sender, TransactionResult result) {
@@ -505,7 +681,7 @@ public final class EconomyModule implements AtriumModule, Listener {
         }
         long inactiveSince = config.baltop.inactiveDays <= 0 ? 0
                 : System.currentTimeMillis() - Duration.ofDays(config.baltop.inactiveDays).toMillis();
-        store.leaderboard(excluded, inactiveSince).whenComplete((snapshot, failure) -> {
+        store.leaderboards(excluded, inactiveSince).whenComplete((snapshot, failure) -> {
             if (failure != null) ctx.logger().warn("Cannot refresh economy leaderboard; retaining previous snapshot", failure);
             else leaders = snapshot;
             refreshing.set(false);
@@ -515,7 +691,8 @@ public final class EconomyModule implements AtriumModule, Listener {
         UUID id = event.getUniqueId();
         // Warming here is intentional: this thread already blocks for the core user data, and the player
         // is not in game yet, so every Vault read for this account is answered from a cached value later.
-        // The value waits in the bounded read cache, so a denied login cannot leak an online entry.
+        // The world is unknown before login, so every group is loaded (one query). The values wait in the
+        // bounded read cache, so a denied login cannot leak an online entry.
         try { store.warm(id).get(config.vaultTimeoutMillis, TimeUnit.MILLISECONDS); }
         catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -525,8 +702,14 @@ public final class EconomyModule implements AtriumModule, Listener {
         }
     }
     @EventHandler(priority = EventPriority.MONITOR) public void join(PlayerJoinEvent event) {
-        // Fallback for a warm that failed or timed out before login; it also publishes the committed value.
-        observe(store.online(event.getPlayer().getUniqueId()));
+        // Fallback for a warm that failed or timed out before login; it also publishes the committed values.
+        Player player = event.getPlayer();
+        observe(store.online(player.getUniqueId(), player.getWorld().getName()));
+    }
+    @EventHandler(priority = EventPriority.MONITOR) public void changedWorld(PlayerChangedWorldEvent event) {
+        // Every group is cached while online, so switching the context group needs no storage access.
+        Player player = event.getPlayer();
+        store.moved(player.getUniqueId(), player.getWorld().getName());
     }
     @EventHandler(priority = EventPriority.MONITOR) public void quit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId();

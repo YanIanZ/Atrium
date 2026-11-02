@@ -11,6 +11,12 @@ import java.util.concurrent.CompletableFuture;
  * maintenance tools use this to decide on account existence instead of on the balance value.
  */
 public interface EconomyAccounts {
-    /** Whether an account row is stored for this UUID. Never creates one. */
+    /**
+     * Whether an account row is stored for this UUID in its context group (see {@link EconomyService}): the
+     * current world's group while online, otherwise the default group. Never creates one.
+     */
     CompletableFuture<Boolean> hasAccount(UUID account);
+
+    /** Whether an account row is stored for this UUID in the named world group. Never creates one. */
+    default CompletableFuture<Boolean> hasAccount(UUID account, String group) { return hasAccount(account); }
 }

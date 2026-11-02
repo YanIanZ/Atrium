@@ -2,7 +2,7 @@
 
 Provides `EconomyService`, `/balance [player]` (`/bal`), `/pay <player> <amount>`,
 `/eco give|take|set <player> <amount>`, `/eco reset <player> [amount]`,
-`/eco log <player>` (latest ten entries), and `/baltop [page]`.
+`/eco log <player>` (latest ten entries), `/eco groups`, and `/baltop [page]`.
 Reset restores the configured starting balance; its optional compatibility amount is
 validated but ignored. Amount suffixes: `k`, `m`, `b` (case insensitive). No exponent,
 grouping, currency symbols, negative input, NaN or infinity in command amounts.
@@ -53,16 +53,58 @@ Consumers charging for an action must await a successful `withdraw` **before** r
 the action, then schedule entity/world effects on the owning scheduler. Do not implement
 charges as a balance read followed by set, or execute the command before charging.
 
+## World groups (separate money per group of worlds)
+
+Off by default (`groups.enabled: false`): every world shares one balance and every command, API call
+and Vault call behaves exactly as before. Configuration in `economy.yml`:
+
+```yaml
+groups:
+  enabled: true
+  default-group: default        # used for every unlisted world and for offline players
+  allow-cross-group-pay: false  # refuse /pay (and cheques) between different groups
+  world-groups:
+    survival: [world, world_nether, world_the_end]
+    resource: ["resource_*", "mine?"]   # globs: * and ?; an exact name wins over a glob
+```
+
+Storage: balances are keyed by (uuid, group) since schema v3. The migration copies every existing balance
+into the default group, whose storage key is always `default` whatever `default-group` is called, so enabling
+groups later or renaming the default group never moves money. Ledger rows and cheques record their group.
+A group removed from the configuration keeps its rows; `/eco groups` lists such stored groups, the configured
+groups with their worlds and account counts, and the group of every loaded world. Listing an existing main
+world in a new group makes the money players had there (in the default group) unavailable in that world, so
+prefer putting new worlds into new groups.
+
+Commands use the sender's current group (console: the default group). A target that is online uses its own
+current group; an offline target uses the sender's group. With `atrium.eco.group` (OP) any of `/balance`,
+`/pay`, `/eco` and `/baltop` take `g:<group>` or `--group <group>` (for `/pay` it applies to both sides),
+e.g. `/eco give Steve 100 g:survival`, `/baltop g:resource 2`, `/eco log Steve g:survival` (without it the log
+shows every group). `/pay` to an online player in another group is refused unless `allow-cross-group-pay`; an
+offline receiver is paid in the payer's group. A cheque pays into the redeemer's current group and, unless
+cross-group payments are allowed, only in the group it was written in. `/baltop` shows one snapshot per group.
+
+`EconomyService`: methods without a group use the **context group**: the group of the world the player is
+in while online, otherwise the default group (offline players are always the default group). This is what
+placeholders (`cachedBalance`/`balance`) show. `transfer(from, to, ...)` moves money inside the payer's
+context group (both sides), so money never crosses groups implicitly. Additive overloads take an explicit
+group: `balance/cachedBalance/deposit/withdraw/set(uuid, group, ...)`, `transfer(from, to, group, ...)`, plus
+`groupsEnabled()`, `groups()`, `defaultGroup()`, `groupOfWorld(world)`, `currentGroup(uuid)` and
+`EconomyAccounts.hasAccount(uuid, group)`. An unknown group fails reads with `IllegalArgumentException` and
+writes with `NO_ACCOUNT`.
+
 ## Vault compatibility
 
 Vault is optional and compile-only; the existing plugin descriptor already grants its
 optional classpath. A separately loaded provider registers with ServicesManager and is
-unregistered on module disable. World overloads share the global account; banks are not
+unregistered on module disable. World overloads (`getBalance(player, world)`, `withdrawPlayer(player, world,
+amount)`, ...) use the group of that world; the world-less ones use the context group (current group of an
+online player, else the default group). With groups disabled all of them share the one account. Banks are not
 supported. OfflinePlayer overloads use UUIDs directly, including unnamed offline players.
 Legacy string overloads use Atrium's known-player lookup.
 
-Vault requires synchronous methods. The balance of an online player is warmed in
-`AsyncPlayerPreLoginEvent` (blocking there is expected, as the core loads user data on
+Vault requires synchronous methods. The balances of an online player (every group, in one query, since the
+world is not known before login) are warmed in `AsyncPlayerPreLoginEvent` (blocking there is expected, as the core loads user data on
 that thread) and kept cached until quit; the cache is evicted after the queued writes
 drain so a late commit cannot repopulate it. A read for an online player therefore always
 answers from the cache and never waits, even on a foreign plugin thread such as a
@@ -96,5 +138,7 @@ scripts/new-server.sh economy 25631 # only once
 
 JUnit covers parsing, rounding, display, SQLite reads without writes, simultaneous
 withdrawals, exact large transfers, rollback on ledger failure, debt and receiver limits,
-rejected account creation, and cache lifecycle. MySQL concurrency and live Vault behavior
+rejected account creation, and cache lifecycle; for world groups: resolution (exact names, globs, default,
+renamed default), the `g:` selector, per-group isolation and ledger, the v3 migration keeping old balances,
+Vault world mapping, cross-group pay refusal, the per-group pre-login warm-up, and the disabled mode. MySQL concurrency and live Vault behavior
 need integration testing with those services installed.
