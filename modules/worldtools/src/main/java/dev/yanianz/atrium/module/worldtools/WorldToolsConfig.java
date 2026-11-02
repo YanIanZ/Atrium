@@ -46,6 +46,36 @@ public class WorldToolsConfig {
             + "A bigger selection is refused instead of starting a job that would run for hours.")
     public long maxSelectionVolume = 1_000_000L;
 
+    @Comment("Enable /mirror (mirror building). Off by default: nothing is mirrored until an admin turns\n"
+            + "this on, and every player still has to enable mirror mode for themselves.")
+    public boolean mirrorEnabled = false;
+
+    @Comment("Transform used by /mirror on and /mirror selection when none is given (see /mirror list).")
+    public String mirrorDefaultTransform = "mirror_x";
+
+    @Comment("Largest distance in blocks from the mirror centre (1-128). Further copies are skipped.")
+    public int mirrorMaxRadius = 32;
+
+    @Comment("Mirrored blocks per second and per player (1-256).")
+    public int mirrorRatePerSecond = 20;
+
+    @Comment("How many mirrored blocks a player may do at once (1-256).")
+    public int mirrorRateBurst = 40;
+
+    @Comment("In survival, mirrored placements take the same item from the inventory, one per copy.\n"
+            + "All-or-nothing: when the inventory cannot pay for every copy, nothing is mirrored.\n"
+            + "Set to false to make mirroring free in survival as well.")
+    public boolean mirrorChargeSurvival = true;
+
+    @Comment("Also charge mirrored placements in creative mode. Off by default: creative building is free.")
+    public boolean mirrorChargeCreative = false;
+
+    @Comment("Show a particle at the mirror centre to its owner.")
+    public boolean mirrorMarkerParticles = true;
+
+    @Comment("Ticks between centre marker particles (5-200). Only the owner receives them.")
+    public int mirrorMarkerIntervalTicks = 20;
+
     boolean selectionWandEnabled() {
         return selectionWandEnabled;
     }
@@ -60,6 +90,42 @@ public class WorldToolsConfig {
 
     long maxSelectionVolume() {
         return Math.max(1L, Math.min(Cuboid.MAX_VOLUME_HARD_LIMIT, maxSelectionVolume));
+    }
+
+    boolean mirrorEnabled() {
+        return mirrorEnabled;
+    }
+
+    String mirrorDefaultTransform() {
+        return mirrorDefaultTransform == null || mirrorDefaultTransform.isBlank() ? "mirror_x" : mirrorDefaultTransform;
+    }
+
+    int mirrorMaxRadius() {
+        return clamp(mirrorMaxRadius, 1, 128);
+    }
+
+    int mirrorRatePerSecond() {
+        return clamp(mirrorRatePerSecond, 1, 256);
+    }
+
+    int mirrorRateBurst() {
+        return clamp(mirrorRateBurst, 1, 256);
+    }
+
+    boolean mirrorChargeSurvival() {
+        return mirrorChargeSurvival;
+    }
+
+    boolean mirrorChargeCreative() {
+        return mirrorChargeCreative;
+    }
+
+    boolean mirrorMarkerParticles() {
+        return mirrorMarkerParticles;
+    }
+
+    int mirrorMarkerIntervalTicks() {
+        return clamp(mirrorMarkerIntervalTicks, 5, 200);
     }
 
     int maxReplaceRadius() {

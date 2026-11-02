@@ -35,13 +35,14 @@ import org.bukkit.entity.Player;
 import org.bukkit.permissions.PermissionDefault;
 import org.bukkit.util.BiomeSearchResult;
 
-/** /replaceblock (chunk-batched, region-threaded) and /findbiome (asynchronous biome-source search). */
+/** /replaceblock (chunk-batched, region-threaded), /findbiome (async biome search) and /mirror. */
 public final class WorldToolsModule implements AtriumModule {
     private ModuleContext ctx;
     private Cmds cmds;
     private ConfigHandle<WorldToolsConfig> config;
     private ProtectionService protection;
     private ReplaceJobs jobs;
+    private MirrorBuilding mirror;
     private final Set<UUID> searching = ConcurrentHashMap.newKeySet();
     private final Selections selections = new Selections();
     private volatile List<String> blockNames = List.of();
@@ -55,7 +56,7 @@ public final class WorldToolsModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "Bulk block replacement and biome search";
+        return "Bulk block replacement, biome search and mirror building";
     }
 
     @Override
@@ -70,6 +71,7 @@ public final class WorldToolsModule implements AtriumModule {
         this.config = ctx.config(WorldToolsConfig.class, WorldToolsConfig::new);
         this.protection = ctx.services().get(ProtectionService.class).orElse(null);
         this.jobs = new ReplaceJobs(ctx, config::get, protection);
+        this.mirror = new MirrorBuilding(ctx, config, protection);
         // The block registry only holds modern blocks (Material.values() would initialise legacy support).
         this.blockNames = RegistryAccess.registryAccess().getRegistry(RegistryKey.BLOCK).stream()
                 .map(b -> b.getKey().getKey()).sorted().toList();
@@ -78,8 +80,12 @@ public final class WorldToolsModule implements AtriumModule {
         ctx.permission("atrium.replaceblock.others", PermissionDefault.OP, "Cancel every running /replaceblock job");
         ctx.permission("atrium.findbiome", PermissionDefault.OP, "Find the nearest biome of a type");
         ctx.permission(PERM_SELECT, PermissionDefault.OP, "Use the selection wand and /select");
+        ctx.permission("atrium.mirror", PermissionDefault.OP, "Mirror the blocks you place and break");
+        ctx.permission(MirrorBuilding.PERM_BYPASS_COST, PermissionDefault.OP,
+                "Mirror blocks without spending items in survival");
 
         ctx.listen(new SelectionListener(ctx, config, selections));
+        ctx.listen(mirror);
 
         SuggestionProvider<CommandSourceStack> blocks = Cmds.suggest(() -> blockNames);
         SuggestionProvider<CommandSourceStack> targets = (c, builder) -> {
@@ -129,12 +135,36 @@ public final class WorldToolsModule implements AtriumModule {
                 .then(Commands.argument("biome", ArgumentTypes.resource(RegistryKey.BIOME)).executes(this::findBiome)
                         .then(Commands.argument("radius", IntegerArgumentType.integer(64)).executes(this::findBiome)))
                 .build(), "Find the nearest biome of a type"));
+
+        SuggestionProvider<CommandSourceStack> transforms = Cmds.suggest(MirrorTransform::names);
+        ctx.command(CommandSpec.of(Cmds.literal("mirror", "atrium.mirror")
+                .executes(this::mirrorInfo)
+                .then(Cmds.literal("on")
+                        .executes(c -> mirrorOn(c, null))
+                        .then(Commands.argument("transform", StringArgumentType.word()).suggests(transforms)
+                                .executes(c -> mirrorOn(c, StringArgumentType.getString(c, "transform")))))
+                .then(Cmds.literal("selection")
+                        .executes(c -> mirrorSelection(c, null))
+                        .then(Commands.argument("transform", StringArgumentType.word()).suggests(transforms)
+                                .executes(c -> mirrorSelection(c, StringArgumentType.getString(c, "transform")))))
+                .then(Cmds.literal("center")
+                        .executes(this::mirrorCenter)
+                        .then(Cmds.literal("selection").executes(this::mirrorCenterSelection)))
+                .then(Cmds.literal("set")
+                        .then(Commands.argument("transform", StringArgumentType.word()).suggests(transforms)
+                                .executes(this::mirrorSet)))
+                .then(Cmds.literal("list").executes(this::mirrorList))
+                .then(Cmds.literal("off").executes(this::mirrorOff))
+                .build(), "Mirror the blocks you place and break around a centre"));
     }
 
     @Override
     public void disable() {
         if (jobs != null) {
             jobs.shutdown();
+        }
+        if (mirror != null) {
+            mirror.shutdown();
         }
     }
 
@@ -378,6 +408,144 @@ public final class WorldToolsModule implements AtriumModule {
             searching.remove(player.getUniqueId());
             throw e;
         }
+        return Cmds.OK;
+    }
+
+    // ---- mirror building ----
+
+    private int mirrorInfo(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        int radius = config.get().mirrorMaxRadius();
+        String all = String.join(", ", MirrorTransform.names());
+        if (sender instanceof Player player) {
+            mirror.session(player.getUniqueId()).ifPresentOrElse(session -> ctx.messages().send(player,
+                            "worldtools.mirror-status", Msg.unparsed("transform", session.transform().id()),
+                            Msg.number("x", session.x()), Msg.number("y", session.y()),
+                            Msg.number("z", session.z()), Msg.unparsed("world", session.world()),
+                            Msg.number("radius", radius)),
+                    () -> ctx.messages().send(player, "worldtools.mirror-usage", Msg.unparsed("transforms", all)));
+        } else {
+            ctx.messages().send(sender, "worldtools.mirror-usage", Msg.unparsed("transforms", all));
+        }
+        return Cmds.OK;
+    }
+
+    private MirrorTransform mirrorTransform(CommandContext<CommandSourceStack> c, String text, Player player)
+            throws CommandSyntaxException {
+        if (text != null) {
+            return MirrorTransform.parse(text).orElseThrow(() -> cmds.fail(c.getSource(),
+                    "worldtools.mirror-bad-transform", Msg.unparsed("transform", text)));
+        }
+        MirrorBuilding.Session current = mirror.session(player.getUniqueId()).orElse(null);
+        if (current != null) {
+            return current.transform();
+        }
+        return MirrorTransform.parse(config.get().mirrorDefaultTransform()).orElse(MirrorTransform.MIRROR_X);
+    }
+
+    private int mirrorOn(CommandContext<CommandSourceStack> c, @org.jspecify.annotations.Nullable String text)
+            throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (!config.get().mirrorEnabled()) {
+            throw cmds.fail(c.getSource(), "worldtools.mirror-disabled");
+        }
+        MirrorTransform transform = mirrorTransform(c, text, player);
+        Location at = player.getLocation();
+        World world = at.getWorld();
+        if (world == null) {
+            throw cmds.fail(c.getSource(), "core.player-only");
+        }
+        mirror.start(player, world.getName(), at.getBlockX(), at.getBlockY(), at.getBlockZ(), transform);
+        ctx.messages().send(player, "worldtools.mirror-on", Msg.unparsed("transform", transform.id()),
+                Msg.number("x", at.getBlockX()), Msg.number("y", at.getBlockY()),
+                Msg.number("z", at.getBlockZ()), Msg.unparsed("world", world.getName()));
+        return Cmds.OK;
+    }
+
+    private int mirrorSelection(CommandContext<CommandSourceStack> c,
+            @org.jspecify.annotations.Nullable String text) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (!config.get().mirrorEnabled()) {
+            throw cmds.fail(c.getSource(), "worldtools.mirror-disabled");
+        }
+        Cuboid cuboid = selections.selection(player.getUniqueId()).orElseThrow(() ->
+                cmds.fail(c.getSource(), "worldtools.mirror-need-selection"));
+        if (Bukkit.getWorld(cuboid.world()) == null) {
+            throw cmds.fail(c.getSource(), "worldtools.select-world-gone", Msg.unparsed("world", cuboid.world()));
+        }
+        MirrorTransform transform = mirrorTransform(c, text, player);
+        int x = (cuboid.minX() + cuboid.maxX()) / 2;
+        int y = (cuboid.minY() + cuboid.maxY()) / 2;
+        int z = (cuboid.minZ() + cuboid.maxZ()) / 2;
+        mirror.start(player, cuboid.world(), x, y, z, transform);
+        ctx.messages().send(player, "worldtools.mirror-on", Msg.unparsed("transform", transform.id()),
+                Msg.number("x", x), Msg.number("y", y), Msg.number("z", z),
+                Msg.unparsed("world", cuboid.world()));
+        return Cmds.OK;
+    }
+
+    private int mirrorCenter(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (mirror.session(player.getUniqueId()).isEmpty()) {
+            throw cmds.fail(c.getSource(), "worldtools.mirror-none");
+        }
+        Location at = player.getLocation();
+        World world = at.getWorld();
+        if (world == null) {
+            throw cmds.fail(c.getSource(), "core.player-only");
+        }
+        mirror.move(player, world.getName(), at.getBlockX(), at.getBlockY(), at.getBlockZ());
+        ctx.messages().send(player, "worldtools.mirror-center", Msg.number("x", at.getBlockX()),
+                Msg.number("y", at.getBlockY()), Msg.number("z", at.getBlockZ()));
+        return Cmds.OK;
+    }
+
+    private int mirrorCenterSelection(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (mirror.session(player.getUniqueId()).isEmpty()) {
+            throw cmds.fail(c.getSource(), "worldtools.mirror-none");
+        }
+        Cuboid cuboid = selections.selection(player.getUniqueId()).orElseThrow(() ->
+                cmds.fail(c.getSource(), "worldtools.mirror-need-selection"));
+        if (Bukkit.getWorld(cuboid.world()) == null) {
+            throw cmds.fail(c.getSource(), "worldtools.select-world-gone", Msg.unparsed("world", cuboid.world()));
+        }
+        int x = (cuboid.minX() + cuboid.maxX()) / 2;
+        int y = (cuboid.minY() + cuboid.maxY()) / 2;
+        int z = (cuboid.minZ() + cuboid.maxZ()) / 2;
+        mirror.move(player, cuboid.world(), x, y, z);
+        ctx.messages().send(player, "worldtools.mirror-center", Msg.number("x", x), Msg.number("y", y),
+                Msg.number("z", z));
+        return Cmds.OK;
+    }
+
+    private int mirrorSet(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player player = cmds.player(c.getSource());
+        if (mirror.session(player.getUniqueId()).isEmpty()) {
+            throw cmds.fail(c.getSource(), "worldtools.mirror-none");
+        }
+        String text = StringArgumentType.getString(c, "transform");
+        MirrorTransform transform = MirrorTransform.parse(text).orElseThrow(() -> cmds.fail(c.getSource(),
+                "worldtools.mirror-bad-transform", Msg.unparsed("transform", text)));
+        mirror.setTransform(player.getUniqueId(), transform);
+        ctx.messages().send(player, "worldtools.mirror-transform-set", Msg.unparsed("transform", transform.id()));
+        return Cmds.OK;
+    }
+
+    private int mirrorList(CommandContext<CommandSourceStack> c) {
+        ctx.messages().send(c.getSource().getSender(), "worldtools.mirror-list",
+                Msg.unparsed("transforms", String.join(", ", MirrorTransform.names())));
+        return Cmds.OK;
+    }
+
+    private int mirrorOff(CommandContext<CommandSourceStack> c) {
+        CommandSender sender = c.getSource().getSender();
+        if (!(sender instanceof Player player)) {
+            ctx.messages().send(sender, "worldtools.mirror-player-only");
+            return Cmds.OK;
+        }
+        boolean wasActive = mirror.stop(player.getUniqueId());
+        ctx.messages().send(player, wasActive ? "worldtools.mirror-off" : "worldtools.mirror-none");
         return Cmds.OK;
     }
 
