@@ -33,11 +33,15 @@ final class Snapshots {
     private Snapshots() {}
 
     record BlockSnapshot(String world, int x, int y, int z, String material, String data, int blockLight,
-            int skyLight, String biome, String tileEntity, List<String> tileData, String thread) {}
+            int skyLight, String biome, String tileEntity, List<String> tileData, String thread,
+            float hardness, float blastResistance, double temperature, double humidity, String hitbox,
+            String note, List<String> contents) {}
+
+    record Detail(String key, String value) {}
 
     record EntitySnapshot(String type, UUID uuid, String customName, boolean hasCustomName, boolean living,
             double health, double maxHealth, int ageTicks, boolean persistent, List<String> passengers,
-            String vehicle, String owner, String snbt, String thread) {}
+            String vehicle, String owner, String snbt, String thread, List<Detail> details) {}
 
     record ItemComponent(String key, String value) {}
 
@@ -55,7 +59,30 @@ final class Snapshots {
         return new BlockSnapshot(block.getWorld().getName(), block.getX(), block.getY(), block.getZ(),
                 shortType(block.getType().name()), InspectFormat.blockData(block.getBlockData().getAsString()),
                 block.getLightFromBlocks(), block.getLightFromSky(), block.getBiome().getKey().toString(), tile,
-                tileData(state), Thread.currentThread().getName());
+                tileData(state), Thread.currentThread().getName(), block.getType().getHardness(),
+                block.getType().getBlastResistance(), block.getTemperature(), block.getHumidity(),
+                InspectFormat.box(block.getBoundingBox()), note(block), contents(state));
+    }
+
+    private static String note(Block block) {
+        if (!(block.getBlockData() instanceof org.bukkit.block.data.type.NoteBlock noteBlock)) {
+            return "";
+        }
+        return EntityFormat.enumName(noteBlock.getInstrument()) + " " + noteBlock.getNote();
+    }
+
+    /** Chiseled bookshelf contents; every other block container is left to /blocknbt. */
+    private static List<String> contents(BlockState state) {
+        if (!(state instanceof org.bukkit.block.ChiseledBookshelf shelf)) {
+            return List.of();
+        }
+        List<String> items = new ArrayList<>();
+        for (ItemStack stack : shelf.getSnapshotInventory().getContents()) {
+            if (stack != null && !stack.getType().isAir()) {
+                items.add(shortType(stack.getType().name()) + " x" + stack.getAmount());
+            }
+        }
+        return List.copyOf(items);
     }
 
     private static List<String> tileData(BlockState state) {
@@ -147,7 +174,29 @@ final class Snapshots {
         return new EntitySnapshot(entity.getType().getKey().toString(), entity.getUniqueId(), customName,
                 custom != null, living, health, maxHealth, entity.getTicksLived(), entity.isPersistent(), passengers,
                 vehicle == null ? "" : shortType(vehicle.getType().name()) + " " + vehicle.getUniqueId(), owner, snbt,
-                Thread.currentThread().getName());
+                Thread.currentThread().getName(), details(entity));
+    }
+
+    /** Type-specific facts CMI also shows: stage, horse jump, villager trade level and colour. */
+    private static List<Detail> details(Entity entity) {
+        List<Detail> details = new ArrayList<>();
+        if (entity instanceof org.bukkit.entity.Ageable ageable) {
+            details.add(new Detail("stage", ageable.isAdult() ? "adult" : "baby"));
+        }
+        if (entity instanceof org.bukkit.entity.AbstractHorse horse) {
+            double strength = horse.getJumpStrength();
+            details.add(new Detail("jump-strength", InspectFormat.number(strength)));
+            details.add(new Detail("jump-height", EntityFormat.blocks(EntityFormat.jumpHeight(strength))));
+        }
+        if (entity instanceof org.bukkit.entity.Villager villager) {
+            details.add(new Detail("profession", EntityFormat.key(villager.getProfession())));
+            details.add(new Detail("villager-level", Integer.toString(villager.getVillagerLevel())));
+            details.add(new Detail("villager-type", EntityFormat.key(villager.getVillagerType())));
+        }
+        if (entity instanceof org.bukkit.entity.Sheep sheep) {
+            details.add(new Detail("color", EntityFormat.enumName(sheep.getColor())));
+        }
+        return List.copyOf(details);
     }
 
     /** Must run on the holder's thread. */

@@ -96,6 +96,29 @@ final class PlaytimeStore {
         });
     }
 
+    /** Day buckets in {@code [from, to]}, used by the /cplaytime calendar. */
+    CompletableFuture<Map<LocalDate, Long>> range(UUID uuid, LocalDate from, LocalDate to) {
+        return db.query(c -> {
+            Map<LocalDate, Long> days = new HashMap<>();
+            try (PreparedStatement ps = c.prepareStatement("SELECT day, seconds FROM "
+                    + db.table("playtime_daily") + " WHERE uuid = ? AND day >= ? AND day <= ?")) {
+                ps.setString(1, uuid.toString());
+                ps.setString(2, from.toString());
+                ps.setString(3, to.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        try {
+                            days.put(LocalDate.parse(rs.getString(1)), rs.getLong(2));
+                        } catch (java.time.format.DateTimeParseException e) {
+                            // A hand-edited row with a broken date must not break the whole calendar.
+                        }
+                    }
+                }
+            }
+            return Map.copyOf(days);
+        });
+    }
+
     /** Atomically adds active seconds to one day bucket. */
     CompletableFuture<Void> addSeconds(UUID uuid, LocalDate day, long seconds) {
         if (seconds <= 0) {

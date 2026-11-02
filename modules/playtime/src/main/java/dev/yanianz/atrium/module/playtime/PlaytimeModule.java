@@ -75,6 +75,7 @@ public final class PlaytimeModule implements AtriumModule, Listener, PlaytimeSer
     private PlaytimeStore store;
     private volatile ZoneId zone;
     private volatile List<PlaytimeRewards.Spec> rewards = List.of();
+    private PlaytimeCalendarMenu calendarMenu;
     private final Map<UUID, PlaytimeSession> sessions = new ConcurrentHashMap<>();
     private final Map<UUID, CompletableFuture<Void>> tails = new HashMap<>();
     private final Map<String, PendingEdit> pendingEdits = new ConcurrentHashMap<>();
@@ -107,6 +108,7 @@ public final class PlaytimeModule implements AtriumModule, Listener, PlaytimeSer
         this.rewards = parseRewards();
         ctx.migrate(PlaytimeStore.MIGRATIONS);
         this.store = new PlaytimeStore(ctx.database());
+        this.calendarMenu = new PlaytimeCalendarMenu(ctx, this, config);
         ctx.component(store.component);
         ctx.service(PlaytimeService.class, this);
         ctx.service(PlaytimeAdminService.class, this);
@@ -177,6 +179,10 @@ public final class PlaytimeModule implements AtriumModule, Listener, PlaytimeSer
         } catch (DateTimeException e) {
             throw new IllegalArgumentException("Invalid playtime timezone: " + cfg.timeZone, e);
         }
+        String firstDay = cfg.calendarFirstDay == null ? "MONDAY" : cfg.calendarFirstDay.strip();
+        if (!firstDay.equalsIgnoreCase("MONDAY") && !firstDay.equalsIgnoreCase("SUNDAY")) {
+            throw new IllegalArgumentException("playtime.calendarFirstDay must be MONDAY or SUNDAY");
+        }
         parseRewards(cfg);
     }
 
@@ -213,7 +219,22 @@ public final class PlaytimeModule implements AtriumModule, Listener, PlaytimeSer
                         .requires(Cmds.permission(PERM_OTHERS))
                         .suggests(Cmds.knownPlayers(ctx.users()))
                         .executes(this::other))
-                .build(), "Show playtime", "ptime", "cplaytime"));
+                .build(), "Show playtime", "ptime"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("cplaytime", PERM_PLAYTIME)
+                .executes(c -> {
+                    Player self = cmds.player(c.getSource());
+                    openCalendar(self, self.getUniqueId(), self.getName(), currentMonth());
+                    return Cmds.OK;
+                })
+                .then(Commands.argument("player", StringArgumentType.word())
+                        .requires(Cmds.permission(PERM_OTHERS))
+                        .suggests(Cmds.knownPlayers(ctx.users()))
+                        .executes(c -> calendar(c, null))
+                        .then(Commands.argument("month", StringArgumentType.word())
+                                .suggests(Cmds.suggest(() -> List.of(currentMonth().toString())))
+                                .executes(c -> calendar(c, StringArgumentType.getString(c, "month")))))
+                .build(), "Open a calendar of daily playtime"));
 
         ctx.command(CommandSpec.of(Cmds.literal("editplaytime", PERM_EDIT)
                 .executes(this::editUsage)
@@ -272,6 +293,61 @@ public final class PlaytimeModule implements AtriumModule, Listener, PlaytimeSer
             show(sender, found.get().uuid(), found.get().name(), false);
         }));
         return Cmds.OK;
+    }
+
+    // ---- /cplaytime ----
+
+    private int calendar(CommandContext<CommandSourceStack> c, String monthRaw) throws CommandSyntaxException {
+        Player viewer = cmds.player(c.getSource());
+        String name = StringArgumentType.getString(c, "player");
+        LocalDate month = monthRaw == null
+                ? currentMonth()
+                : PlaytimeCalendar.parseMonth(monthRaw)
+                        .orElseThrow(() -> cmds.fail(c.getSource(), "playtime.calendar-invalid-month",
+                                Msg.unparsed("input", monthRaw)));
+        if (viewer.getName().equalsIgnoreCase(name)) {
+            openCalendar(viewer, viewer.getUniqueId(), viewer.getName(), month);
+            return Cmds.OK;
+        }
+        CommandSender sender = c.getSource().getSender();
+        ctx.users().resolveAccount(name, false).whenComplete((found, failure) -> onSender(sender, () -> {
+            if (failure != null) {
+                ctx.logger().warn("Resolving the calendar target {} failed", name, failure);
+                sendCore(sender, "core.error");
+                return;
+            }
+            if (found.isEmpty()) {
+                sendCore(sender, "core.user-not-found", Msg.unparsed("name", name));
+                return;
+            }
+            openCalendar(viewer, found.get().uuid(), found.get().name(), month);
+        }));
+        return Cmds.OK;
+    }
+
+    private void openCalendar(Player viewer, UUID target, String name, LocalDate month) {
+        calendarMenu.open(viewer, target, name, month);
+    }
+
+    /** Stored day buckets of one month, with the live total of today layered on top. */
+    CompletableFuture<Map<LocalDate, Long>> calendar(UUID target, LocalDate month) {
+        LocalDate from = month.withDayOfMonth(1);
+        LocalDate to = from.withDayOfMonth(from.lengthOfMonth());
+        return store.range(target, from, to).thenApply(days -> {
+            PlaytimeSession session = sessions.get(target);
+            LocalDate today = LocalDate.now(zone);
+            if (session == null || !session.ready() || !today.equals(session.day())
+                    || today.isBefore(from) || today.isAfter(to)) {
+                return days;
+            }
+            Map<LocalDate, Long> merged = new HashMap<>(days);
+            merged.put(today, session.today());
+            return Map.copyOf(merged);
+        });
+    }
+
+    private LocalDate currentMonth() {
+        return LocalDate.now(zone).withDayOfMonth(1);
     }
 
     // ---- /editplaytime ----

@@ -34,6 +34,9 @@ public class PlaytimeConfig {
             + "move existing rows; new playtime is written under the new local date.")
     public String timeZone = "UTC";
 
+    @Comment("First weekday of the /cplaytime calendar: MONDAY or SUNDAY.")
+    public String calendarFirstDay = "MONDAY";
+
     @Comment("""
             Playtime rewards. Each entry has:
               id:         unique [A-Za-z0-9_-] id; changing the interval of a released id changes its watermark (use a new id)

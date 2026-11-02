@@ -54,4 +54,18 @@ class RankLadderTest {
         config.startingRank = "";
         assertEquals("one", RankLadder.from(config).startingRank());
     }
+
+    @Test void previousIsTheInverseOfNextAndDownCommandsAreParsed() {
+        RanksConfig config = config();
+        config.ranks.get(1).downCommands.add("say {player} left two");
+        RankLadder ladder = RankLadder.from(config);
+        RankLadder.Rank two = ladder.find("two").orElseThrow();
+        assertEquals("one", ladder.previous(two).orElseThrow().id());
+        assertEquals(java.util.List.of("say {player} left two"), two.downCommands());
+        assertTrue(ladder.previous(ladder.start()).isEmpty());
+
+        RanksConfig bad = config();
+        bad.ranks.get(1).downCommands.add("say hi\nop {player}");
+        assertThrows(IllegalArgumentException.class, () -> RankLadder.from(bad));
+    }
 }

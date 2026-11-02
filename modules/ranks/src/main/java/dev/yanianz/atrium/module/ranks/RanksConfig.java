@@ -19,6 +19,7 @@ public class RanksConfig {
               permission:      optional custom permission required to rank up
               commands:        console commands run once per rank per player; {player} is replaced with the
                                validated player name
+              down-commands:   optional console commands run when a player ranks down FROM this rank
               automatic:       allow the automatic timer to rank this player up when requirements are met
             Group names of two ranks must differ. Use a new rank id (not a renamed one) to make an old reward
             claim irrelevant.
@@ -50,6 +51,21 @@ public class RanksConfig {
 
     public boolean broadcastEnabled() { return broadcastRankup; }
 
+    @Comment("Require /rankdown confirm before lowering the rank (the rank-down commands run afterwards;\n"
+            + "money and items already paid for the current rank are never refunded).")
+    public boolean confirmRankdown = true;
+
+    @Comment("Seconds a /rankdown confirmation stays valid. 5 through 300.")
+    public int rankdownConfirmSeconds = 30;
+
+    @Comment("""
+            Vote counts used by /votetop and /voteedit. Votes are recorded from Votifier/NuVotifier when that
+            plugin is installed; without it the commands keep working on the stored counts.""")
+    public boolean votesEnabled = true;
+
+    @Comment("Entries shown per /votetop page. 5 through 50.")
+    public int voteTopPageSize = 10;
+
     @ConfigSerializable
     public static class Rank {
         public String id = "member";
@@ -59,6 +75,7 @@ public class RanksConfig {
         public String money = "0";
         public String permission = "";
         public List<String> commands = new ArrayList<>();
+        public List<String> downCommands = new ArrayList<>();
         public boolean automatic = true;
 
         static Rank of(String id, String displayName, String group, long playtimeSeconds, String money,

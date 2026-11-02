@@ -85,6 +85,14 @@ final class InspectFormat {
         return number(Math.round(fraction * 1000.0) / 10.0);
     }
 
+    /** Size of a block/entity hitbox: {@code 1 x 0.9 x 1}. */
+    static String box(org.bukkit.util.BoundingBox box) {
+        if (box == null) {
+            return "";
+        }
+        return number(box.getWidthX()) + " x " + number(box.getHeight()) + " x " + number(box.getWidthZ());
+    }
+
     /** Escapes a value for the SNBT-like diagnostic output. */
     static String snbtQuote(String value) {
         if (value == null) {
@@ -171,6 +179,48 @@ final class InspectFormat {
     /** Lower-cased, trimmed helper for permission/command/substring filters. */
     static String filter(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /** {@code walk_one_cm} becomes {@code Walk One Cm}; used for registry keys that have no display name. */
+    static String prettyKey(String key) {
+        if (key == null || key.isBlank()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(key.length());
+        boolean start = true;
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if (c == '_' || c == '.' || c == ':') {
+                out.append(' ');
+                start = true;
+            } else if (start) {
+                out.append(Character.toUpperCase(c));
+                start = false;
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * Hides the identifying part of an address for staff without the IP permission: IPv4 keeps the first
+     * octet, IPv6 the first group. A value that does not look like an address is returned as {@code hidden}.
+     */
+    static String maskAddress(String address) {
+        if (address == null || address.isBlank()) {
+            return "hidden";
+        }
+        String value = address.trim();
+        if (value.indexOf(':') >= 0) {
+            int colon = value.indexOf(':');
+            return colon <= 0 ? "hidden" : value.substring(0, colon) + ":\u2026";
+        }
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) {
+            return "hidden";
+        }
+        return parts[0] + ".*.*.*";
     }
 
     /** Builds the date formatter; throws {@link IllegalArgumentException} for an invalid pattern or zone. */

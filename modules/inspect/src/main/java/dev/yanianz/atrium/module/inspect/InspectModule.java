@@ -74,6 +74,22 @@ public final class InspectModule implements AtriumModule {
                 "Check permissions of other players");
         context.permission(InspectCommands.PERM_PERMREG, PermissionDefault.OP,
                 "List registered permission nodes");
+        context.permission(StatsCommands.PERM_STATS, PermissionDefault.TRUE,
+                "Open your own statistics menu");
+        context.permission(StatsCommands.PERM_STATS_OTHERS, PermissionDefault.OP,
+                "Open the statistics menu of another player");
+        context.permission(StatsCommands.PERM_STATSEDIT, PermissionDefault.OP,
+                "Set, add or take Bukkit statistics of a player");
+        context.permission(AdminCommands.PERM_UTIL, PermissionDefault.OP,
+                "Dump commands, permissions or materials to a file");
+        context.permission(AdminCommands.PERM_SAMEIP, PermissionDefault.OP,
+                "Group online players that share an address");
+        context.permission(AdminCommands.PERM_SAMEIP_IP, PermissionDefault.OP,
+                "See the unmasked address in /sameip");
+        context.permission(AdminCommands.PERM_REMOVEUSER, PermissionDefault.OP,
+                "Delete every Atrium row of an account or clean duplicate names");
+        context.permission(AdminCommands.PERM_RESETDBFIELDS, PermissionDefault.OP,
+                "Reset one Atrium dataset of an offline account");
     }
 
     @Override

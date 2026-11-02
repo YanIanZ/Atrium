@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class RankProgressTest {
     private static RankLadder.Rank rank(long playtime, String money, String permission) {
         return new RankLadder.Rank("id", "Rank", "group", playtime, new BigDecimal(money), permission,
-                List.of(), true);
+                List.of(), List.of(), true);
     }
 
     @Test void reportsEachRequirementIndependently() {

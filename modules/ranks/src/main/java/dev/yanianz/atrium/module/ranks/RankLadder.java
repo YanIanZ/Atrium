@@ -13,9 +13,10 @@ import java.util.Set;
 /** Validated, immutable rank ladder. The configured list order is the ladder order. */
 final class RankLadder {
     record Rank(String id, String displayName, String group, long playtimeSeconds, BigDecimal money,
-            String permission, List<String> commands, boolean autoRankup) {
+            String permission, List<String> commands, List<String> downCommands, boolean autoRankup) {
         Rank {
             commands = List.copyOf(commands);
+            downCommands = List.copyOf(downCommands);
         }
     }
 
@@ -73,26 +74,15 @@ final class RankLadder {
             if (!permission.isEmpty() && !permission.matches("[A-Za-z0-9_.*-]{1,128}")) {
                 throw new IllegalArgumentException("Rank " + id + " has an invalid permission: " + permission);
             }
-            List<String> commands = new ArrayList<>();
-            if (source.commands != null) {
-                for (String raw : source.commands) {
-                    if (raw == null || raw.isBlank()) {
-                        continue;
-                    }
-                    String command = raw.strip();
-                    if (command.length() > 1_000 || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0) {
-                        throw new IllegalArgumentException("Rank " + id + " has an invalid command");
-                    }
-                    commands.add(command);
-                }
-            }
+            List<String> commands = parseCommands(id, "commands", source.commands);
+            List<String> downCommands = parseCommands(id, "down-commands", source.downCommands);
             String display = source.displayName == null || source.displayName.isBlank()
                     ? id : source.displayName.strip();
             if (display.length() > 64) {
                 throw new IllegalArgumentException("Rank " + id + " has a display name longer than 64 characters");
             }
             parsed.add(new Rank(id, display, group, source.playtimeSeconds, money, permission, commands,
-                    source.automatic));
+                    downCommands, source.automatic));
         }
         String start = config.startingRank == null ? "" : config.startingRank.strip();
         RankLadder ladder = new RankLadder(parsed, start.isEmpty() ? parsed.getFirst().id() : start);
@@ -104,6 +94,24 @@ final class RankLadder {
 
     List<Rank> ranks() {
         return ranks;
+    }
+
+    private static List<String> parseCommands(String id, String field, List<String> source) {
+        List<String> commands = new ArrayList<>();
+        if (source == null) {
+            return commands;
+        }
+        for (String raw : source) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            String command = raw.strip();
+            if (command.length() > 1_000 || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0) {
+                throw new IllegalArgumentException("Rank " + id + " has an invalid " + field + " entry");
+            }
+            commands.add(command);
+        }
+        return commands;
     }
 
     String startingRank() {

@@ -26,4 +26,23 @@ public class PlaceholdersConfig {
 
     @Comment("Text returned by boolean placeholders (afk, vanished, muted, shadow_muted) when false.")
     public String falseText = "false";
+
+    @Comment("""
+            Expose Bukkit statistics as %atrium_stat_<name>% (raw) and %atrium_stat_<name>_formatted%
+            (duration for time statistics, metres/kilometres for distances). Values are read on each
+            player's own thread and only cached; a request never touches the player.""")
+    public boolean statisticsEnabled = true;
+
+    @Comment("Seconds between statistics reads per player (10-600). Only the plain counters are read by\n"
+            + "default, so this is a few dozen cheap lookups per interval.")
+    public int statisticsRefreshSeconds = 60;
+
+    @Comment("""
+            Also sum statistics Bukkit stores per material or entity (mine_block, break_item, kill_entity,
+            ...). This touches every registry entry for each player and interval; leave it off unless a
+            scoreboard really needs those totals.""")
+    public boolean statisticsTypedTotals = false;
+
+    @Comment("Expose custom player metadata as %atrium_user_meta_<key>% (managed with /usermeta).")
+    public boolean userMetaEnabled = true;
 }

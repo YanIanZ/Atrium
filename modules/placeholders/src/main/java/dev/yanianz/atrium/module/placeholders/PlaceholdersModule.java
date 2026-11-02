@@ -19,6 +19,8 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -68,10 +70,14 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
     private final ConcurrentHashMap<UUID, String> ranks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, BigDecimal> balances = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> storageFetchedAt = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Map<String, Long>> statistics = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> statisticsFetchedAt = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Map<String, String>> userMeta = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, TaskHandle> timers = new ConcurrentHashMap<>();
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
     private volatile OnlineCounts counts = new OnlineCounts(0, 0);
     private TaskHandle countTask = TaskHandle.NOOP;
+    private UserMetaStore metaStore;
 
     @Override
     public String id() {
@@ -94,12 +100,19 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         this.stopping = false;
         this.config = context.config(PlaceholdersConfig.class, PlaceholdersConfig::new);
         validate(config.get());
+        context.migrate(UserMetaStore.MIGRATIONS);
+        this.metaStore = new UserMetaStore(ctx.database());
         context.listen(this);
 
         context.permission(PERM_STATUS, PermissionDefault.OP, "Show the Atrium placeholder expansion status");
+        context.permission(UserMetaCommand.PERM_USE, PermissionDefault.OP,
+                "Manage custom player metadata");
+        context.permission(UserMetaCommand.PERM_OTHERS, PermissionDefault.OP,
+                "Manage another player's custom metadata");
         context.command(CommandSpec.of(Cmds.literal("atriumplaceholders", PERM_STATUS)
                 .executes(this::status)
                 .build(), "Show the Atrium placeholder expansion status"));
+        new UserMetaCommand(context, metaStore, this::refreshUserMeta).register();
 
         refreshCounts();
         countTask = context.track(context.scheduler().globalTimer(this::refreshCounts,
@@ -121,6 +134,9 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         ranks.clear();
         balances.clear();
         storageFetchedAt.clear();
+        statistics.clear();
+        statisticsFetchedAt.clear();
+        userMeta.clear();
         tryHook();
         if (hook != null) {
             for (Player player : List.copyOf(Bukkit.getOnlinePlayers())) {
@@ -143,6 +159,9 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         ranks.clear();
         balances.clear();
         storageFetchedAt.clear();
+        statistics.clear();
+        statisticsFetchedAt.clear();
+        userMeta.clear();
 
         PlaceholderHook current = hook;
         hook = null;
@@ -194,6 +213,19 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
             PlaceholdersConfig cfg = config.get();
             PlaceholderValues.Texts texts =
                     new PlaceholderValues.Texts(cfg.fallback, cfg.trueText, cfg.falseText);
+            UUID id = player == null ? null : player.getUniqueId();
+            if (cfg.statisticsEnabled && StatisticsPlaceholders.handles(key)) {
+                return StatisticsPlaceholders.resolve(key,
+                        id == null ? Map.of() : statistics.getOrDefault(id, Map.of()), texts.fallback());
+            }
+            if (cfg.userMetaEnabled && UserMetaValues.handles(key)) {
+                Optional<String> metaKey = UserMetaValues.keyFromPlaceholder(key);
+                if (metaKey.isEmpty() || id == null) {
+                    return texts.fallback();
+                }
+                String value = userMeta.getOrDefault(id, Map.of()).get(metaKey.get());
+                return value == null ? texts.fallback() : PlaceholderValues.sanitizePlayerText(value);
+            }
             if (ProfilePlaceholders.handles(key)) {
                 return ProfilePlaceholders.resolve(key, activeProfile(player), texts.fallback());
             }
@@ -376,6 +408,9 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         ranks.remove(id);
         balances.remove(id);
         storageFetchedAt.remove(id);
+        statistics.remove(id);
+        statisticsFetchedAt.remove(id);
+        userMeta.remove(id);
     }
 
     private void refresh(Player player) {
@@ -388,6 +423,19 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         long now = System.currentTimeMillis();
         long ttl = (Math.max(1, cfg.refreshIntervalSeconds) + Math.max(0, cfg.cacheGraceSeconds)) * 1000L;
         snapshots.put(id, capture(player), now + ttl);
+
+        if (cfg.statisticsEnabled) {
+            long statsInterval = Math.max(10, cfg.statisticsRefreshSeconds) * 1000L;
+            Long lastStats = statisticsFetchedAt.get(id);
+            if (lastStats == null || now - lastStats >= statsInterval) {
+                statisticsFetchedAt.put(id, now);
+                try {
+                    statistics.put(id, StatisticReader.read(player, cfg.statisticsTypedTotals));
+                } catch (RuntimeException e) {
+                    logBackgroundFailure("statistics", id, e);
+                }
+            }
+        }
 
         long interval = Math.max(5, cfg.storageRefreshSeconds) * 1000L;
         Long last = storageFetchedAt.get(id);
@@ -473,6 +521,36 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
                 logBackgroundFailure("rank", id, e);
             }
         }
+
+        if (config.get().userMetaEnabled) {
+            fetchUserMeta(id);
+        }
+    }
+
+    /** Reloads the metadata cache of one player (after /usermeta changed a value). */
+    void refreshUserMeta(UUID id) {
+        if (config.get().userMetaEnabled && timers.containsKey(id)) {
+            fetchUserMeta(id);
+        }
+    }
+
+    private void fetchUserMeta(UUID id) {
+        UserMetaStore store = metaStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            store.load(id).thenAccept(values -> {
+                if (timers.containsKey(id)) {
+                    userMeta.put(id, values);
+                }
+            }).exceptionally(failure -> {
+                logBackgroundFailure("user metadata", id, failure);
+                return null;
+            });
+        } catch (RuntimeException e) {
+            logBackgroundFailure("user metadata", id, e);
+        }
     }
 
     private void logBackgroundFailure(String what, UUID id, Throwable failure) {
@@ -526,7 +604,9 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         ctx.messages().send(sender, "placeholders.status-cached", Msg.number("count", snapshots.size()));
         ctx.messages().send(sender, "placeholders.status-list",
                 Msg.unparsed("placeholders", String.join(", ", PlaceholderValues.KEYS) + ", "
-                        + String.join(", ", ProfilePlaceholders.KEYS)));
+                        + String.join(", ", ProfilePlaceholders.KEYS)
+                        + ", stat_<name> (" + dev.yanianz.atrium.api.statistics.StatisticsCatalog.entries().size()
+                        + "), user_meta_<key>"));
         return Cmds.OK;
     }
 
@@ -541,6 +621,9 @@ public final class PlaceholdersModule implements AtriumModule, Listener {
         }
         if (cfg.storageRefreshSeconds < 5 || cfg.storageRefreshSeconds > 300) {
             throw new IllegalArgumentException("placeholders.storageRefreshSeconds must be 5-300");
+        }
+        if (cfg.statisticsRefreshSeconds < 10 || cfg.statisticsRefreshSeconds > 600) {
+            throw new IllegalArgumentException("placeholders.statisticsRefreshSeconds must be 10-600");
         }
         if (cfg.fallback == null) {
             cfg.fallback = "";

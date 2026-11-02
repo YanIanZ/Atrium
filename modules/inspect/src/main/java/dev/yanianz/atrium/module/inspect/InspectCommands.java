@@ -75,6 +75,8 @@ final class InspectCommands {
     private final ModuleContext ctx;
     private final Cmds cmds;
     private final ConfigHandle<InspectConfig> config;
+    private final StatsCommands stats;
+    private final AdminCommands admin;
     private volatile DateTimeFormatter dates = InspectFormat.formatter(DEFAULT_DATE_FORMAT, "");
 
     private record ExpView(int level, float progress) {}
@@ -89,6 +91,8 @@ final class InspectCommands {
         this.ctx = ctx;
         this.cmds = ctx.commands();
         this.config = config;
+        this.stats = new StatsCommands(ctx, config);
+        this.admin = new AdminCommands(ctx, config);
     }
 
     private InspectConfig cfg() {
@@ -197,6 +201,8 @@ final class InspectCommands {
                                 .executes(c -> permissionRegistry(c, StringArgumentType.getString(c, "filter"),
                                         IntegerArgumentType.getInteger(c, "page")))))
                 .build(), "List registered permission nodes"));
+        stats.register();
+        admin.register();
     }
 
     // ---- blocks ---------------------------------------------------------------------------------
@@ -261,6 +267,20 @@ final class InspectCommands {
                 Msg.component("tile", snapshot.tileEntity().isEmpty()
                         ? ctx.messages().render(sender, "inspect.none")
                         : Component.text(snapshot.tileEntity())));
+        ctx.messages().send(sender, "inspect.block-hardness",
+                Msg.unparsed("hardness", InspectFormat.number(snapshot.hardness())),
+                Msg.unparsed("blast", InspectFormat.number(snapshot.blastResistance())));
+        ctx.messages().send(sender, "inspect.block-hitbox", Msg.unparsed("box", snapshot.hitbox()));
+        ctx.messages().send(sender, "inspect.block-environment",
+                Msg.unparsed("temperature", InspectFormat.number(snapshot.temperature())),
+                Msg.unparsed("humidity", InspectFormat.number(snapshot.humidity())));
+        if (!snapshot.note().isEmpty()) {
+            ctx.messages().send(sender, "inspect.block-note", Msg.unparsed("note", snapshot.note()));
+        }
+        ctx.messages().send(sender, "inspect.block-contents",
+                Msg.component("value", snapshot.contents().isEmpty()
+                        ? ctx.messages().render(sender, "inspect.none")
+                        : Component.text(String.join(" | ", snapshot.contents()))));
         ctx.messages().send(sender, "inspect.block-thread", Msg.unparsed("thread", snapshot.thread()));
     }
 
@@ -271,6 +291,15 @@ final class InspectCommands {
         lines.add("data: " + snapshot.data());
         lines.add("biome: " + snapshot.biome());
         lines.add("light: block=" + snapshot.blockLight() + ", sky=" + snapshot.skyLight());
+        lines.add("hardness: " + snapshot.hardness() + ", blast-resistance: " + snapshot.blastResistance());
+        lines.add("hitbox: " + snapshot.hitbox());
+        lines.add("temperature: " + snapshot.temperature() + ", humidity: " + snapshot.humidity());
+        if (!snapshot.note().isEmpty()) {
+            lines.add("note: " + snapshot.note());
+        }
+        if (!snapshot.contents().isEmpty()) {
+            lines.add("contents: " + String.join(", ", snapshot.contents()));
+        }
         lines.add("tile: " + (snapshot.tileEntity().isEmpty() ? "none" : snapshot.tileEntity()));
         lines.add("thread: " + snapshot.thread());
         lines.addAll(snapshot.tileData());
@@ -345,6 +374,11 @@ final class InspectCommands {
                 Msg.component("value", snapshot.owner().isEmpty()
                         ? ctx.messages().render(sender, "inspect.none")
                         : Component.text(snapshot.owner())));
+        for (Snapshots.Detail detail : snapshot.details()) {
+            ctx.messages().send(sender, "inspect.entity-detail",
+                    Msg.unparsed("key", InspectFormat.prettyKey(detail.key())),
+                    Msg.unparsed("value", detail.value()));
+        }
     }
 
     // ---- items ----------------------------------------------------------------------------------

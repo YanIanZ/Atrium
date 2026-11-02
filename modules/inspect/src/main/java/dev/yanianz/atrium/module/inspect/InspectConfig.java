@@ -30,6 +30,16 @@ public class InspectConfig {
     @Comment("Time zone of absolute dates (e.g. Asia/Jakarta, UTC); empty = the server's time zone.")
     public String timeZone = "";
 
+    @Comment("""
+            /stats also sums statistics that Bukkit stores per material or entity (mine_block, break_item,
+            kill_entity, ...). The sum walks every registry entry once per menu opening and the first such
+            call may initialize Bukkit's legacy material table (a multi-second cold start); keep it off on
+            live servers unless those totals are really needed.""")
+    public boolean statsIncludeTypedTotals = false;
+
+    @Comment("Seconds a destructive command (/removeuser, /resetdbfields) waits for its confirmation. 5-300.")
+    public int confirmSeconds = 30;
+
     int blockDistance() {
         return Math.max(1, Math.min(256, maxBlockDistance));
     }
@@ -52,5 +62,9 @@ public class InspectConfig {
 
     int dumpLength() {
         return Math.max(256, Math.min(32768, maxDumpLength));
+    }
+
+    int confirmSeconds() {
+        return Math.max(5, Math.min(300, confirmSeconds));
     }
 }

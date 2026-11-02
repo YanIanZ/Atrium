@@ -14,6 +14,7 @@ import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
+import dev.yanianz.atrium.core.storage.Migration;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import java.math.BigDecimal;
@@ -53,6 +54,8 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
     private static final String PERM_RANKS = "atrium.ranks";
     private static final String PERM_RANKINFO = "atrium.rankinfo";
     private static final String PERM_SET = "atrium.rank.set";
+    private static final String PERM_RANKDOWN = "atrium.rankdown";
+    private static final String PERM_RANKDOWN_OTHERS = "atrium.rankdown.others";
 
     private ModuleContext ctx;
     private Cmds cmds;
@@ -61,10 +64,15 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
     private RankStore store;
     private PlaytimeService playtime;
     private GroupBridge groups;
+    private VoteStore voteStore;
+    private VotifierHook votifier;
     private final Map<UUID, PendingRankup> confirmations = new ConcurrentHashMap<>();
+    private final Map<String, PendingRankdown> downConfirmations = new ConcurrentHashMap<>();
     private final Set<UUID> processing = ConcurrentHashMap.newKeySet();
 
     private record PendingRankup(String targetRank, long expiresNanos) {}
+
+    private record PendingRankdown(String leavingRank, long expiresNanos) {}
 
     private static final class RankFailure extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -99,8 +107,11 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
         validate(config.get());
         this.ladder = RankLadder.from(config.get());
         this.playtime = ctx.services().require(PlaytimeService.class);
-        ctx.migrate(RankStore.MIGRATIONS);
+        List<Migration> migrations = new ArrayList<>(RankStore.MIGRATIONS);
+        migrations.addAll(VoteStore.MIGRATIONS);
+        ctx.migrate(migrations);
         this.store = new RankStore(ctx.database(), () -> ladder.startingRank());
+        this.voteStore = new VoteStore(ctx.database());
         ctx.component(store.component);
         ctx.service(RankService.class, this);
         ctx.listen(this);
@@ -109,6 +120,11 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
         ctx.permission(PERM_RANKS, PermissionDefault.TRUE, "List ranks and requirement progress");
         ctx.permission(PERM_RANKINFO, PermissionDefault.TRUE, "View details of a rank");
         ctx.permission(PERM_SET, PermissionDefault.OP, "Set any player's rank");
+        ctx.permission(PERM_RANKDOWN, PermissionDefault.TRUE, "Lower your own rank");
+        ctx.permission(PERM_RANKDOWN_OTHERS, PermissionDefault.OP, "Lower another player's rank");
+        ctx.permission(VoteCommands.PERM_VOTETOP, PermissionDefault.TRUE, "View the vote leaderboard");
+        ctx.permission(VoteCommands.PERM_VOTEEDIT, PermissionDefault.OP,
+                "Set, add, take or inspect stored vote counts");
 
         if (ctx.plugin().getServer().getPluginManager().isPluginEnabled("LuckPerms")) {
             try {
@@ -121,8 +137,28 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
         }
 
         registerCommands();
+        new VoteCommands(ctx, voteStore, config).register();
+        if (config.get().votesEnabled) {
+            this.votifier = new VotifierHook(ctx.plugin(), this::recordVote);
+            if (votifier.register()) {
+                ctx.logger().info("Votifier detected: votes are recorded for /votetop");
+            } else {
+                ctx.logger().info("Votifier is not installed; /votetop and /voteedit still use stored counts");
+            }
+        }
         ctx.track(ctx.scheduler().globalTimer(this::autoCycle, 20L * 20,
                 20L * Math.max(10, config.get().autoRankupSeconds)));
+    }
+
+    private void recordVote(String playerName) {
+        try {
+            voteStore.increment(playerName).exceptionally(error -> {
+                ctx.logger().warn("Recording a vote of {} failed", playerName, error);
+                return null;
+            });
+        } catch (RuntimeException e) {
+            ctx.logger().warn("Recording a vote of {} failed", playerName, e);
+        }
     }
 
     @Override
@@ -131,12 +167,23 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
         RankLadder next = RankLadder.from(config.get());
         this.ladder = next;
         confirmations.clear();
+        downConfirmations.clear();
+    }
+
+    @Override
+    public void disable() {
+        if (votifier != null) {
+            votifier.unregister();
+            votifier = null;
+        }
     }
 
     private void validate(RanksConfig cfg) {
         if (cfg.autoRankupSeconds < 10 || cfg.autoRankupSeconds > 3600
-                || cfg.confirmSeconds < 5 || cfg.confirmSeconds > 300) {
-            throw new IllegalArgumentException("Invalid ranks timer or confirmation timeout");
+                || cfg.confirmSeconds < 5 || cfg.confirmSeconds > 300
+                || cfg.rankdownConfirmSeconds < 5 || cfg.rankdownConfirmSeconds > 300
+                || cfg.voteTopPageSize < 5 || cfg.voteTopPageSize > 50) {
+            throw new IllegalArgumentException("Invalid ranks timer, confirmation timeout or vote page size");
         }
         RankLadder.from(cfg);
     }
@@ -157,6 +204,16 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
                         .suggests(Cmds.suggest(() -> ladder.ids()))
                         .executes(c -> rankInfo(c, StringArgumentType.getString(c, "rank"))))
                 .build(), "Show one rank's requirements"));
+        ctx.command(CommandSpec.of(Cmds.literal("rankdown", PERM_RANKDOWN)
+                .executes(c -> rankdown(c, null, false))
+                .then(Cmds.literal("confirm").executes(c -> rankdown(c, null, true)))
+                .then(Commands.argument("player", StringArgumentType.word())
+                        .requires(Cmds.permission(PERM_RANKDOWN_OTHERS))
+                        .suggests(Cmds.knownPlayers(ctx.users()))
+                        .executes(c -> rankdown(c, StringArgumentType.getString(c, "player"), false))
+                        .then(Cmds.literal("confirm").executes(c -> rankdown(c,
+                                StringArgumentType.getString(c, "player"), true))))
+                .build(), "Lower a player's rank by one step (no refund)"));
         ctx.command(CommandSpec.of(Cmds.literal("rank", PERM_SET)
                 .executes(c -> { throw cmds.fail(c.getSource(), "ranks.usage"); })
                 .then(Cmds.literal("set")
@@ -167,6 +224,17 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
                                         .suggests(Cmds.suggest(() -> ladder.ids()))
                                         .executes(this::setRank))))
                 .build(), "Set a player's rank"));
+        ctx.command(CommandSpec.of(Cmds.literal("rankset", PERM_SET)
+                .executes(c -> {
+                    ctx.messages().send(c.getSource().getSender(), "ranks.rankset-usage");
+                    return Cmds.OK;
+                })
+                .then(Commands.argument("player", StringArgumentType.word())
+                        .suggests(Cmds.knownPlayers(ctx.users()))
+                        .then(Commands.argument("rank", StringArgumentType.word())
+                                .suggests(Cmds.suggest(() -> ladder.ids()))
+                                .executes(this::setRank)))
+                .build(), "Set a player's rank without charging anything", "setrank"));
     }
 
     private int rankup(CommandContext<CommandSourceStack> c, boolean confirm) throws CommandSyntaxException {
@@ -226,6 +294,91 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
                 failed(player, failure);
             }
         });
+    }
+
+    // ---- /rankdown ----
+
+    /**
+     * Lowers a rank one step. No money or item is refunded: the player already used the previous rank and
+     * its rewards. The {@code down-commands} of the rank being left run afterwards; a confirmation is used by
+     * default so a mistyped command cannot drop someone by accident.
+     */
+    private int rankdown(CommandContext<CommandSourceStack> c, String targetName, boolean confirm)
+            throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        Player self = cmds.player(c.getSource());
+        Player target = self;
+        if (targetName != null) {
+            target = Bukkit.getPlayerExact(targetName);
+            if (target == null) {
+                throw cmds.fail(c.getSource(), "core.player-not-found");
+            }
+            if (!target.equals(self) && !sender.hasPermission(PERM_RANKDOWN_OTHERS)) {
+                throw cmds.fail(c.getSource(), "core.no-permission-others",
+                        Msg.unparsed("permission", PERM_RANKDOWN_OTHERS));
+            }
+        }
+        RankLadder currentLadder = ladder;
+        RankLadder.Rank current = currentLadder.resolve(profile(target.getUniqueId()).rankId());
+        RankLadder.Rank previous = currentLadder.previous(current).orElse(null);
+        if (previous == null) {
+            send(sender, "down-lowest", Msg.unparsed("rank", current.displayName()));
+            return Cmds.OK;
+        }
+        String key = sender.getName() + "|" + target.getUniqueId();
+        if (config.get().confirmRankdown) {
+            if (confirm) {
+                PendingRankdown pending = downConfirmations.remove(key);
+                if (pending == null || pending.expiresNanos() < System.nanoTime()
+                        || !pending.leavingRank().equalsIgnoreCase(current.id())) {
+                    send(sender, "down-expired");
+                    return Cmds.OK;
+                }
+            } else {
+                downConfirmations.put(key, new PendingRankdown(current.id(),
+                        System.nanoTime() + TimeUnit.SECONDS.toNanos(config.get().rankdownConfirmSeconds)));
+                String command = target.equals(self)
+                        ? "/rankdown confirm" : "/rankdown " + target.getName() + " confirm";
+                Component prompt = ctx.messages().render(sender, "ranks.down-confirm",
+                                Msg.unparsed("player", target.getName()),
+                                Msg.unparsed("rank", current.displayName()),
+                                Msg.unparsed("next", previous.displayName()),
+                                Msg.number("seconds", config.get().rankdownConfirmSeconds))
+                        .clickEvent(ClickEvent.runCommand(command))
+                        .hoverEvent(HoverEvent.showText(ctx.messages().render(sender, "ranks.down-confirm-hover")));
+                onSender(sender, () -> sender.sendMessage(prompt));
+                return Cmds.OK;
+            }
+        }
+        applyRankDown(sender, target, current, previous);
+        return Cmds.OK;
+    }
+
+    private void applyRankDown(CommandSender sender, Player target, RankLadder.Rank current,
+            RankLadder.Rank previous) {
+        if (!processing.add(target.getUniqueId())) {
+            send(sender, "busy");
+            return;
+        }
+        AtriumUser user = ctx.users().user(target);
+        setGroup(target.getUniqueId(), previous).thenCompose(ignored -> {
+            user.update(store.component, profile -> profile.withRank(previous.id()));
+            return ctx.users().saveNow(target.getUniqueId());
+        }).thenCompose(ignored -> runRankCommands(target, current.downCommands()))
+                .whenComplete((value, failure) -> {
+                    processing.remove(target.getUniqueId());
+                    if (failure != null) {
+                        failed(sender, failure);
+                        return;
+                    }
+                    onSender(sender, () -> send(sender, "down-success",
+                            Msg.unparsed("player", target.getName()),
+                            Msg.unparsed("rank", previous.displayName())));
+                    if (!(sender instanceof Player viewer && viewer.equals(target))) {
+                        onPlayer(target, () -> send(target, "down-target",
+                                Msg.unparsed("rank", previous.displayName())));
+                    }
+                });
     }
 
     /** Manual and automatic paths both land here; requirements are checked again for TOCTOU safety. */
@@ -311,7 +464,7 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
                         return null;
                     })
                     .thenCompose(value -> deliverCommands
-                            ? runRankCommands(player, target)
+                            ? runRankCommands(player, target.commands())
                             : CompletableFuture.completedFuture(null))
                     .thenRun(() -> {
                         if (saveFailed.get()) {
@@ -331,19 +484,19 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
     }
 
     /** Commands are best effort: a broken admin command must not undo a paid, granted rank. */
-    private CompletableFuture<Void> runRankCommands(Player player, RankLadder.Rank target) {
+    private CompletableFuture<Void> runRankCommands(Player player, List<String> commands) {
         String name = player.getName();
         if (!name.matches("[A-Za-z0-9_]{1,16}")) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid player name"));
         }
         CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
-        for (String template : target.commands()) {
+        for (String template : commands) {
             String command = template.replace("{player}", name);
             chain = chain.thenCompose(v -> dispatch(command, player).handle((ok, failure) -> {
                 if (failure != null) {
-                    ctx.logger().warn("Rank-up command for {} failed: {}", player.getName(), command, failure);
+                    ctx.logger().warn("Rank command for {} failed: {}", player.getName(), command, failure);
                 } else if (!ok) {
-                    ctx.logger().warn("Rank-up command for {} returned false: {}", player.getName(), command);
+                    ctx.logger().warn("Rank command for {} returned false: {}", player.getName(), command);
                 }
                 return null;
             }));
@@ -721,5 +874,7 @@ public final class RanksModule implements AtriumModule, Listener, RankService {
     @EventHandler
     public void quit(PlayerQuitEvent event) {
         confirmations.remove(event.getPlayer().getUniqueId());
+        String suffix = "|" + event.getPlayer().getUniqueId();
+        downConfirmations.keySet().removeIf(key -> key.endsWith(suffix));
     }
 }
