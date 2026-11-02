@@ -45,6 +45,21 @@ public class TeleportConfig {
     @Comment("/spawn, first-join spawn and respawn.")
     public Spawn spawn = new Spawn();
 
+    @Comment("Sign elevator: click an indicator block to rise to the next one (sneak-click to sink).")
+    public Elevator elevator = new Elevator();
+
+    @Comment("Launchpads: pressure plates that throw a player up and protect them from fall damage.")
+    public Launchpads launchpads = new Launchpads();
+
+    @Comment("/jump: leap to the block you are looking at.")
+    public Jump jump = new Jump();
+
+    @Comment("Move a player to the nearest safe spot when they join inside blocks.")
+    public SafeLogin safeLogin = new SafeLogin();
+
+    @Comment("Carry a ridden vehicle through a teleport (dismount, move, remount).")
+    public Vehicle vehicle = new Vehicle();
+
     private static Map<String, Integer> defaults(int value, Map<String, Integer> overrides) {
         Map<String, Integer> map = new LinkedHashMap<>();
         for (TeleportCause cause : TeleportCause.values()) {
@@ -95,6 +110,10 @@ public class TeleportConfig {
                 + "(a small spiral), up to this many blocks away. 0 = only the destination column. Maximum 8.")
         public int searchRadius = 2;
 
+        @Comment("After a teleport failed because the destination was unsafe, /tpbypass may force that exact spot for\n"
+                + "this many seconds (players also need atrium.tpbypass). 0 = /tpbypass is disabled.")
+        public int bypassWindowSeconds = 15;
+
         boolean appliesTo(TeleportCause cause) {
             return causes != null && causes.stream().anyMatch(c -> c != null && c.trim().equalsIgnoreCase(cause.name()));
         }
@@ -107,6 +126,14 @@ public class TeleportConfig {
 
         @Comment("Allow requests between players in different worlds.")
         public boolean allowCrossWorld = true;
+
+        @Comment("Longest distance (in blocks) between the two players of a /tpa. 0 = no limit.\n"
+                + "A limit can be raised per player with atrium.tpa.max.<n> or removed with atrium.tpa.max.unlimited.")
+        public int maxDistance = 0;
+
+        @Comment("Items that may not be held while sending a request (material names, e.g. ENDER_PEARL).\n"
+                + "Useful against exploits that hand an item over right after the teleport.")
+        public List<String> blockedMaterials = new ArrayList<>();
     }
 
     @ConfigSerializable
@@ -145,10 +172,102 @@ public class TeleportConfig {
         @Comment("Send new players to the first-join spawn (or the default spawn when no first-join spawn is set).")
         public boolean teleportOnFirstJoin = true;
 
-        @Comment("Respawn players at the spawn when they have no bed or respawn anchor.")
+        @Comment("Choose the respawn point with the order below instead of leaving it to the server.")
         public boolean respawnAtSpawn = true;
+
+        @Comment("Respawn order per world (world name, or \"*\" for every world without its own entry).\n"
+                + "Tokens: anchor (respawn anchor), bed, spawn (a spawn set with /setspawn), home, warp:<name>,\n"
+                + "worldspawn (the vanilla world spawn). The first token that is available wins.")
+        public Map<String, List<String>> respawnOrder = new LinkedHashMap<>(Map.of("*",
+                List.of("anchor", "bed", "spawn", "home", "worldspawn")));
 
         @Comment("Also move the vanilla world spawn point when /setspawn sets a world spawn (compasses, new chunks).")
         public boolean syncWorldSpawn = true;
+    }
+
+    @ConfigSerializable
+    public static class Elevator {
+        @Comment("Enable the sign elevator. Off by default: every click on a matching block would teleport.")
+        public boolean enabled = false;
+
+        @Comment("Blocks that work as elevator stops: material names; a trailing '*' matches a prefix\n"
+                + "(e.g. \"*_SIGN\" for every sign, \"LODESTONE\" for one material).")
+        public List<String> blocks = new ArrayList<>(List.of("*_SIGN"));
+
+        @Comment("Only these worlds have elevators (empty = every world).")
+        public List<String> worlds = new ArrayList<>();
+
+        @Comment("Blocks skipped between two stops, so the destination is never the block you stand on.")
+        public int minGap = 2;
+
+        @Comment("How far up and down a click searches for the next stop.")
+        public int searchRange = 128;
+
+        @Comment("Milliseconds between two elevator rides of one player (spam protection).")
+        public long cooldownMillis = 500;
+    }
+
+    @ConfigSerializable
+    public static class Launchpads {
+        @Comment("Enable launchpads. Off by default; configure the plate types below, then turn this on.")
+        public boolean enabled = false;
+
+        @Comment("Vertical launch per block type (material name -> upward velocity).\n"
+                + "A value around 1.2 lifts a player roughly two blocks, 2.0 roughly six.")
+        public Map<String, Double> power = new LinkedHashMap<>(Map.of(
+                "LIGHT_WEIGHTED_PRESSURE_PLATE", 1.2,
+                "HEAVY_WEIGHTED_PRESSURE_PLATE", 0.8,
+                "STONE_PRESSURE_PLATE", 1.5));
+
+        @Comment("Forward push in the direction the player is looking, as a share of the vertical power (0 = none).")
+        public double forwardShare = 0.0;
+
+        @Comment("Seconds without fall damage after a launch.")
+        public int fallImmunitySeconds = 15;
+
+        @Comment("Milliseconds between two launches of one player (spam protection).")
+        public long cooldownMillis = 500;
+
+        @Comment("Only these worlds have launchpads (empty = every world).")
+        public List<String> worlds = new ArrayList<>();
+    }
+
+    @ConfigSerializable
+    public static class Jump {
+        @Comment("Furthest block /jump looks at, in blocks. Players raise it with atrium.jump.distance.<n>.")
+        public int maxDistance = 50;
+    }
+
+    @ConfigSerializable
+    public static class SafeLogin {
+        @Comment("Relocate a player who joins inside blocks to the nearest safe spot (stops suffocation on login).")
+        public boolean enabled = true;
+
+        @Comment("Blocks searched up and down from the join location.")
+        public int searchUp = 6;
+
+        @Comment("Blocks searched down from the join location.")
+        public int searchDown = 6;
+
+        @Comment("Columns searched to the sides when the join column has no safe spot. Maximum 8.")
+        public int searchRadius = 2;
+    }
+
+    @ConfigSerializable
+    public static class Vehicle {
+        @Comment("Carry a ridden vehicle through a teleport: dismount, move the player, move the vehicle and remount.\n"
+                + "Off by default. Players also need atrium.teleport.vehicle.")
+        public boolean enabled = false;
+
+        @Comment("Vehicle types that are carried (entity type names). Empty = every rideable entity.")
+        public List<String> types = new ArrayList<>(List.of("HORSE", "DONKEY", "MULE", "CAMEL", "LLAMA",
+                "TRADER_LLAMA", "SKELETON_HORSE", "ZOMBIE_HORSE", "PIG", "STRIDER"));
+
+        boolean allows(String entityType) {
+            if (types == null || types.isEmpty()) {
+                return true;
+            }
+            return types.stream().anyMatch(type -> type != null && type.trim().equalsIgnoreCase(entityType));
+        }
     }
 }

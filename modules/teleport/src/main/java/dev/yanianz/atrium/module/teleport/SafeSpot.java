@@ -77,4 +77,18 @@ final class SafeSpot {
         }
         return OptionalInt.empty();
     }
+
+    /**
+     * Lowest safe spot at or below {@code startY} (for /down): the bottom of the cave or shaft the player
+     * is standing over. Empty when the whole column below is unsafe (lava, void, solid rock).
+     */
+    static OptionalInt lowest(Column column, int startY, int minY, int maxY, boolean waterOk) {
+        int top = Math.min(startY, maxY - 2);
+        for (int y = minY + 1; y <= top; y++) {
+            if (isSafe(column, y, minY, maxY, waterOk)) {
+                return OptionalInt.of(y);
+            }
+        }
+        return OptionalInt.empty();
+    }
 }

@@ -20,7 +20,9 @@ public final class TeleportModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "Teleports: /tp /tphere /tpall /tpa /tpahere /tpaccept /tpdeny /tpacancel /tptoggle /back /top /spawn /setspawn";
+        return "Teleports: /tp /tphere /tpall /tppos /tpo /tpallworld /tpbypass /jump /down /tpa /tpahere /tpaall "
+                + "/tpaccept /tpdeny /tpacancel /tptoggle /back /dback /resetback /top /spawn /setspawn, "
+                + "sign elevators and launchpads";
     }
 
     @Override
@@ -46,6 +48,9 @@ public final class TeleportModule implements AtriumModule {
         SpawnCommands spawns = new SpawnCommands(ctx, service, config);
         spawns.register();
         ctx.listen(spawns);
+        new NavigationCommands(ctx, service, config).register();
+        ctx.listen(new ElevatorListener(ctx, service, config));
+        ctx.listen(new LaunchpadListener(config));
 
         ctx.track(ctx.scheduler().asyncTimer(() -> {
             try {
@@ -84,15 +89,40 @@ public final class TeleportModule implements AtriumModule {
         ctx.permission(TeleportCommands.PERM_TOGGLE_BYPASS, PermissionDefault.OP, "Teleport to players who disabled teleports");
         ctx.permission(RequestCommands.PERM_TPA, PermissionDefault.TRUE, "Request to teleport to a player");
         ctx.permission(RequestCommands.PERM_TPAHERE, PermissionDefault.TRUE, "Request a player to teleport to you");
+        ctx.permission(RequestCommands.PERM_TPAALL, PermissionDefault.OP, "Ask every online player to teleport to you");
         ctx.permission(RequestCommands.PERM_TPACCEPT, PermissionDefault.TRUE, "Accept teleport requests");
         ctx.permission(RequestCommands.PERM_TPDENY, PermissionDefault.TRUE, "Deny teleport requests");
         ctx.permission(RequestCommands.PERM_TPACANCEL, PermissionDefault.TRUE, "Cancel own teleport requests");
         ctx.permission(RequestCommands.PERM_TPTOGGLE, PermissionDefault.TRUE, "Refuse or allow teleport requests");
+        ctx.permission(RequestCommands.PERM_TPA_MAX + ".unlimited", PermissionDefault.OP,
+                "Send /tpa requests without a distance limit");
         ctx.permission(SpawnCommands.PERM_SPAWN, PermissionDefault.TRUE, "Teleport to the spawn");
         ctx.permission(SpawnCommands.PERM_SPAWN_OTHERS, PermissionDefault.OP, "Send other players to the spawn");
         ctx.permission(SpawnCommands.PERM_SETSPAWN, PermissionDefault.OP, "Set spawn points");
         ctx.permission(TeleportServiceImpl.PERM_WARMUP_BYPASS, PermissionDefault.OP, "Skip the teleport warmup");
         ctx.permission(TeleportServiceImpl.PERM_COOLDOWN_BYPASS, PermissionDefault.OP, "Ignore teleport cooldowns");
+        ctx.permission(TeleportServiceImpl.PERM_TPBYPASS, PermissionDefault.OP,
+                "Force the destination of a teleport that was refused as unsafe");
+        ctx.permission(TeleportServiceImpl.PERM_VEHICLE, PermissionDefault.TRUE,
+                "Take a ridden vehicle along through a teleport");
+        ctx.permission(NavigationCommands.PERM_JUMP, PermissionDefault.TRUE, "Leap to the block you are looking at");
+        ctx.permission(NavigationCommands.PERM_DOWN, PermissionDefault.TRUE, "Teleport to the lowest safe spot below you");
+        ctx.permission(NavigationCommands.PERM_TPPOS, PermissionDefault.OP, "Teleport to coordinates");
+        ctx.permission(NavigationCommands.PERM_TPO, PermissionDefault.OP, "Force a teleport without the safety check");
+        ctx.permission(NavigationCommands.PERM_TPALLWORLD, PermissionDefault.OP,
+                "Send every player of your world to another world");
+        ctx.permission(TeleportCommands.PERM_DBACK, PermissionDefault.OP, "Return without the safety check (/dback)");
+        ctx.permission(TeleportCommands.PERM_DBACK_OTHERS, PermissionDefault.OP, "Use /dback on other players");
+        ctx.permission(TeleportCommands.PERM_RESETBACK, PermissionDefault.OP, "Forget your /back history");
+        ctx.permission(TeleportCommands.PERM_RESETBACK_OTHERS, PermissionDefault.OP,
+                "Forget the /back history of other players");
+        ctx.permission(ElevatorListener.PERM_ELEVATOR, PermissionDefault.TRUE, "Use the sign elevator");
+        ctx.permission(LaunchpadListener.PERM_LAUNCHPADS, PermissionDefault.TRUE, "Use launchpads");
+        // A cause whose destination is not safe may still be forced with atrium.teleport.safe.bypass.<cause>.
+        for (TeleportService.TeleportCause cause : TeleportService.TeleportCause.values()) {
+            ctx.permission(SafetyBypass.node(cause), PermissionDefault.OP,
+                    "Teleport with " + cause.name() + " even when the destination is not safe");
+        }
     }
 
     @Override

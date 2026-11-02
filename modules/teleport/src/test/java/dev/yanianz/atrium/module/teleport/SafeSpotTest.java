@@ -141,4 +141,32 @@ class SafeSpotTest {
         assertEquals(OptionalInt.of(10), SafeSpot.highest(grid, MIN, 25, false));
         assertEquals(OptionalInt.empty(), SafeSpot.highest(new Grid(), MIN, MAX, false));
     }
+
+    @Test
+    void lowestFindsTheBottomOfTheShaft() {
+        // Floors at 4 (spot 5) and 20 (spot 21); the lowest spot below 25 is the bottom one.
+        Grid grid = new Grid().fill(0, 4, Kind.SOLID).fill(5, 19, Kind.EMPTY).set(20, Kind.SOLID);
+        assertEquals(OptionalInt.of(5), SafeSpot.lowest(grid, 25, MIN, MAX, false));
+        // At 22 the bottom of the shaft is still the lowest safe spot at or below the player.
+        assertEquals(OptionalInt.of(5), SafeSpot.lowest(grid, 22, MIN, MAX, false));
+        // Above the upper floor only, the lowest spot is the one on that floor.
+        assertEquals(OptionalInt.of(5), SafeSpot.lowest(grid, 21, MIN, MAX, false));
+    }
+
+    @Test
+    void lowestIgnoresItsOwnFloorWhenItIsTheOnlyOne() {
+        Grid grid = new Grid().fill(0, 9, Kind.SOLID);
+        // Standing at 10: the lowest spot at or below 10 is 10 itself.
+        assertEquals(OptionalInt.of(10), SafeSpot.lowest(grid, 10, MIN, MAX, false));
+        // A solid column has no safe spot at all.
+        assertEquals(OptionalInt.empty(), SafeSpot.lowest(new Grid().fill(0, 60, Kind.SOLID), 40, MIN, MAX, false));
+    }
+
+    @Test
+    void lowestNeedsWaterPermissionForAWaterFloor() {
+        Grid grid = new Grid().fill(0, 5, Kind.SOLID).fill(6, 12, Kind.WATER);
+        // The lowest safe spot is inside the water, right above the floor.
+        assertEquals(OptionalInt.of(6), SafeSpot.lowest(grid, 20, MIN, MAX, true));
+        assertEquals(OptionalInt.empty(), SafeSpot.lowest(grid, 20, MIN, MAX, false));
+    }
 }

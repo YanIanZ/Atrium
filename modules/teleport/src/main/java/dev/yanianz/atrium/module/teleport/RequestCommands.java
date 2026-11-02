@@ -2,6 +2,7 @@ package dev.yanianz.atrium.module.teleport;
 
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import dev.yanianz.atrium.api.chat.IgnoreService;
 import dev.yanianz.atrium.api.teleport.TeleportOptions;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportCause;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportResult;
@@ -11,6 +12,7 @@ import dev.yanianz.atrium.core.config.ConfigHandle;
 import dev.yanianz.atrium.core.message.Messages;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.ModuleContext;
+import dev.yanianz.atrium.core.permission.Permissions;
 import dev.yanianz.atrium.module.teleport.RequestBook.Request;
 import dev.yanianz.atrium.module.teleport.RequestBook.Type;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -31,14 +33,17 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 
-/** /tpa, /tpahere, /tpaccept, /tpdeny, /tpacancel, /tptoggle. */
+/** /tpa, /tpahere, /tpaall, /tpaccept, /tpdeny, /tpacancel, /tptoggle. */
 final class RequestCommands implements Listener {
     static final String PERM_TPA = "atrium.tpa";
     static final String PERM_TPAHERE = "atrium.tpahere";
+    static final String PERM_TPAALL = "atrium.tpaall";
     static final String PERM_TPACCEPT = "atrium.tpaccept";
     static final String PERM_TPDENY = "atrium.tpdeny";
     static final String PERM_TPACANCEL = "atrium.tpacancel";
     static final String PERM_TPTOGGLE = "atrium.tptoggle";
+    /** Numeric: atrium.tpa.max.<n> raises the /tpa reach. */
+    static final String PERM_TPA_MAX = "atrium.tpa.max";
 
     private final ModuleContext ctx;
     private final Cmds cmds;
@@ -66,6 +71,9 @@ final class RequestCommands implements Listener {
                 .executes(c -> usage(c, "teleport.usage-tpahere"))
                 .then(Commands.argument("target", ArgumentTypes.player()).executes(c -> request(c, Type.TPAHERE)))
                 .build(), "Ask a player to teleport to you"));
+        ctx.command(CommandSpec.of(Cmds.literal("tpaall", PERM_TPAALL)
+                .executes(this::tpaAll)
+                .build(), "Ask every online player to teleport to you"));
         ctx.command(CommandSpec.of(Cmds.literal("tpaccept", PERM_TPACCEPT)
                 .executes(this::accept)
                 .then(Commands.argument("player", ArgumentTypes.player()).executes(this::accept))
@@ -115,18 +123,83 @@ final class RequestCommands implements Listener {
         if (!accepts && !self.hasPermission(TeleportCommands.PERM_TOGGLE_BYPASS)) {
             throw cmds.fail(c.getSource(), "teleport.target-toggled", Msg.unparsed("player", target.getName()));
         }
-        if (!config.get().requests.allowCrossWorld && !self.getWorld().equals(target.getWorld())) {
+        TeleportConfig.Requests cfg = config.get().requests;
+        if (!cfg.allowCrossWorld && !self.getWorld().equals(target.getWorld())) {
             throw cmds.fail(c.getSource(), "teleport.request-other-world");
+        }
+        Optional<IgnoreService> ignored = ctx.services().get(IgnoreService.class);
+        if (ignored.isPresent() && ignored.get().isIgnoring(target.getUniqueId(), self.getUniqueId())) {
+            throw cmds.fail(c.getSource(), "teleport.request-ignored", Msg.unparsed("player", target.getName()));
+        }
+        if (ignored.isPresent() && ignored.get().isIgnoring(self.getUniqueId(), target.getUniqueId())) {
+            throw cmds.fail(c.getSource(), "teleport.request-you-ignore", Msg.unparsed("player", target.getName()));
+        }
+        String held = self.getInventory().getItemInMainHand().getType().name();
+        if (RequestRules.blockedItem(cfg.blockedMaterials, held)) {
+            throw cmds.fail(c.getSource(), "teleport.request-blocked-item", Msg.unparsed("item", held));
         }
         if (book.hasPending(self.getUniqueId(), target.getUniqueId(), type)) {
             throw cmds.fail(c.getSource(), "teleport.request-already", Msg.unparsed("player", target.getName()));
         }
+        int configured = Math.max(0, cfg.maxDistance);
+        int limit = configured <= 0 ? 0 : Permissions.limit(self, PERM_TPA_MAX, configured);
+        if (limit <= 0 || !self.getWorld().equals(target.getWorld())) {
+            sendRequest(self, target, type);
+            return Cmds.OK;
+        }
+        // Both locations are read on their own threads, then the reach is checked before anything is stored.
+        ctx.scheduler().supplyOnEntity(self, self::getLocation)
+                .thenCombine(ctx.scheduler().supplyOnEntity(target, target::getLocation),
+                        (from, to) -> RequestRules.withinDistance(from.distance(to), limit))
+                .whenComplete((allowed, error) -> {
+                    if (error != null) {
+                        ctx.logger().warn("Could not read the locations of {} and {} for /tpa", self.getName(),
+                                target.getName(), error);
+                        return;
+                    }
+                    if (!Boolean.TRUE.equals(allowed)) {
+                        messages.send(self, "teleport.request-too-far", Msg.number("distance", limit),
+                                Msg.unparsed("player", target.getName()));
+                        return;
+                    }
+                    sendRequest(self, target, type);
+                });
+        return Cmds.OK;
+    }
+
+    /** Stores the request and tells both sides. Also used by /tpaall. */
+    private void sendRequest(Player self, Player target, Type type) {
         Request request = book.add(self.getUniqueId(), target.getUniqueId(), type);
         long seconds = Duration.between(request.created(), request.expires()).toSeconds();
         messages.send(self, "teleport.request-sent", Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
         messages.send(target, type == Type.TPA ? "teleport.tpa-received" : "teleport.tpahere-received",
                 Msg.unparsed("player", self.getName()), Msg.number("seconds", seconds));
         target.sendMessage(buttons(target, self.getName()));
+    }
+
+    /** /tpaall: asks every online player who accepts requests to come to the sender. */
+    private int tpaAll(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        Player self = cmds.player(c.getSource());
+        TeleportConfig.Requests cfg = config.get().requests;
+        Optional<IgnoreService> ignored = ctx.services().get(IgnoreService.class);
+        int sent = 0;
+        for (Player other : Bukkit.getOnlinePlayers()) {
+            if (other.equals(self)) {
+                continue;
+            }
+            if (!cfg.allowCrossWorld && !self.getWorld().equals(other.getWorld())) {
+                continue;
+            }
+            if (!service.state(other).map(TeleportState::acceptsRequests).orElse(true)) {
+                continue;
+            }
+            if (ignored.isPresent() && ignored.get().isIgnoring(other.getUniqueId(), self.getUniqueId())) {
+                continue;
+            }
+            sendRequest(self, other, Type.TPAHERE);
+            sent++;
+        }
+        messages.send(self, "teleport.tpaall", Msg.number("count", sent));
         return Cmds.OK;
     }
 

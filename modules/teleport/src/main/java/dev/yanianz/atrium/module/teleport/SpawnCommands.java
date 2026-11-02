@@ -2,10 +2,12 @@ package dev.yanianz.atrium.module.teleport;
 
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import dev.yanianz.atrium.api.homes.HomeService;
 import dev.yanianz.atrium.api.teleport.StoredLocation;
 import dev.yanianz.atrium.api.teleport.TeleportOptions;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportCause;
 import dev.yanianz.atrium.api.teleport.TeleportService.TeleportResult;
+import dev.yanianz.atrium.api.warps.WarpService;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.command.CommandSpec;
 import dev.yanianz.atrium.core.config.ConfigHandle;
@@ -16,7 +18,12 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.event.player.AsyncPlayerSpawnLocationEvent;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
@@ -24,9 +31,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 
-/** /spawn, /setspawn, first-join spawn and respawn at spawn. */
+/** /spawn, /setspawn, first-join spawn and the respawn order. */
 final class SpawnCommands implements Listener {
     static final String PERM_SPAWN = "atrium.spawn";
     static final String PERM_SPAWN_OTHERS = "atrium.spawn.others";
@@ -37,6 +46,11 @@ final class SpawnCommands implements Listener {
     private final Messages messages;
     private final TeleportServiceImpl service;
     private final ConfigHandle<TeleportConfig> config;
+    /**
+     * Homes loaded when their owner died (the respawn event itself cannot wait for storage). A home is only
+     * remembered when the configured order can actually use it.
+     */
+    private final Map<UUID, StoredLocation> homeAtDeath = new ConcurrentHashMap<>();
 
     SpawnCommands(ModuleContext ctx, TeleportServiceImpl service, ConfigHandle<TeleportConfig> config) {
         this.ctx = ctx;
@@ -126,12 +140,81 @@ final class SpawnCommands implements Listener {
         service.firstJoinSpawn().ifPresent(event::setSpawnLocation);
     }
 
+    /**
+     * Loads the home of a dying player ahead of the respawn, because {@link PlayerRespawnEvent} has to answer
+     * immediately and cannot wait for storage.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onDeath(PlayerDeathEvent event) {
+        Player player = event.getEntity();
+        UUID uuid = player.getUniqueId();
+        homeAtDeath.remove(uuid);
+        TeleportConfig.Spawn cfg = config.get().spawn;
+        if (!cfg.respawnAtSpawn) {
+            return;
+        }
+        List<String> order = RespawnPriority.orderFor(cfg.respawnOrder, player.getWorld().getName());
+        if (!order.contains(RespawnPriority.HOME)) {
+            return;
+        }
+        Optional<HomeService> homes = ctx.services().get(HomeService.class);
+        if (homes.isEmpty()) {
+            return;
+        }
+        homes.get().homes(uuid).whenComplete((list, error) -> {
+            if (error != null) {
+                ctx.logger().warn("Reading the homes of {} for the respawn order failed", player.getName(), error);
+                return;
+            }
+            list.stream()
+                    .filter(home -> home.location().toLocation().isPresent())
+                    .sorted((a, b) -> Boolean.compare(!a.name().equalsIgnoreCase("home"), !b.name().equalsIgnoreCase("home")))
+                    .findFirst()
+                    .ifPresent(home -> homeAtDeath.put(uuid, home.location()));
+        });
+    }
+
+    /** Chooses the respawn point with the configured per-world order; falls back to the vanilla choice. */
     @EventHandler(priority = EventPriority.HIGH)
     public void onRespawn(PlayerRespawnEvent event) {
-        if (!config.get().spawn.respawnAtSpawn || event.isBedSpawn() || event.isAnchorSpawn()) {
+        TeleportConfig.Spawn cfg = config.get().spawn;
+        Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
+        StoredLocation storedHome = homeAtDeath.remove(uuid);
+        if (!cfg.respawnAtSpawn) {
             return;
         }
         World world = event.getRespawnLocation().getWorld();
-        service.spawnLocation(world).ifPresent(event::setRespawnLocation);
+        Map<String, Location> available = new LinkedHashMap<>();
+        if (event.isAnchorSpawn()) {
+            available.put(RespawnPriority.ANCHOR, event.getRespawnLocation());
+        }
+        if (event.isBedSpawn()) {
+            available.put(RespawnPriority.BED, event.getRespawnLocation());
+        }
+        service.storedSpawn(world).flatMap(StoredLocation::toLocation)
+                .ifPresent(location -> available.put(RespawnPriority.SPAWN, location));
+        if (storedHome != null) {
+            storedHome.toLocation().ifPresent(location -> available.put(RespawnPriority.HOME, location));
+        }
+        List<String> order = RespawnPriority.orderFor(cfg.respawnOrder, world.getName());
+        Optional<WarpService> warps = ctx.services().get(WarpService.class);
+        if (warps.isPresent()) {
+            for (String token : order) {
+                RespawnPriority.warpName(token)
+                        .flatMap(warps.get()::location)
+                        .flatMap(StoredLocation::toLocation)
+                        .ifPresent(location -> available.putIfAbsent(token, location));
+            }
+        }
+        available.putIfAbsent(RespawnPriority.WORLD_SPAWN, world.getSpawnLocation());
+        RespawnPriority.choose(order, available::containsKey)
+                .map(available::get)
+                .ifPresent(event::setRespawnLocation);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onQuit(PlayerQuitEvent event) {
+        homeAtDeath.remove(event.getPlayer().getUniqueId());
     }
 }

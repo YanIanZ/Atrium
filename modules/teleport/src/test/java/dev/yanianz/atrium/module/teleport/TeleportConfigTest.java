@@ -45,4 +45,39 @@ class TeleportConfigTest {
         assertTrue(config.back.recordDeath);
         assertEquals(5, config.back.historySize);
     }
+
+    @Test
+    void automaticFeaturesStartOff() {
+        TeleportConfig config = new TeleportConfig();
+        assertFalse(config.elevator.enabled, "clicking a sign must not teleport until the elevator is enabled");
+        assertFalse(config.launchpads.enabled);
+        assertFalse(config.vehicle.enabled);
+        assertEquals(50, config.jump.maxDistance);
+        assertEquals(15, config.safeLanding.bypassWindowSeconds);
+        assertTrue(config.safeLogin.enabled, "moving a player out of blocks is a safety fix");
+    }
+
+    @Test
+    void requestReachAndItemListHaveSafeDefaults() {
+        TeleportConfig config = new TeleportConfig();
+        assertEquals(0, config.requests.maxDistance, "no reach limit unless configured");
+        assertTrue(config.requests.blockedMaterials.isEmpty());
+        assertTrue(RequestRules.withinDistance(1_000, config.requests.maxDistance));
+    }
+
+    @Test
+    void respawnOrderDefaultsToTheVanillaOrderPlusHome() {
+        TeleportConfig config = new TeleportConfig();
+        assertEquals(List.of("anchor", "bed", "spawn", "home", "worldspawn"),
+                RespawnPriority.orderFor(config.spawn.respawnOrder, "world"));
+    }
+
+    @Test
+    void vehicleTypesAreCheckedCaseInsensitively() {
+        TeleportConfig.Vehicle vehicle = new TeleportConfig.Vehicle();
+        assertTrue(vehicle.allows("HORSE"));
+        assertFalse(vehicle.allows("MINECART"));
+        vehicle.types = List.of();
+        assertTrue(vehicle.allows("MINECART"), "an empty list carries every rideable entity");
+    }
 }

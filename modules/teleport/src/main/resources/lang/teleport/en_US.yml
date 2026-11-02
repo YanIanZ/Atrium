@@ -21,7 +21,7 @@ cannot-self: "<prefix><error>You cannot teleport to yourself."
 target-toggled: "<prefix><error><highlight><player></highlight> does not accept teleports."
 position-out-of-range: "<prefix><error>Those coordinates are outside the world."
 # Usage lines for a bare root command
-usage-tp: "<prefix><muted>Usage: <highlight>/tp <player></highlight>, <highlight>/tp <x> <y> <z> [world]</highlight>, or <highlight>/tp <player> <destination></highlight>."
+usage-tp: "<prefix><muted>Usage: <highlight>/tp <player></highlight>, <highlight>/tp <x> <y> <z> [world]</highlight>, or <highlight>/tp <player> <destination></highlight> (your own name first brings that player to you)."
 usage-tphere: "<prefix><muted>Usage: <highlight>/tphere <player></highlight>."
 usage-tpa: "<prefix><muted>Usage: <highlight>/tpa <player></highlight>."
 usage-tpahere: "<prefix><muted>Usage: <highlight>/tpahere <player></highlight>."
@@ -83,3 +83,35 @@ spawn-none: "<prefix><error>No spawn is available."
 setspawn-world: "<prefix><success>Spawn of <highlight><world></highlight> set to <highlight><at_x> <at_y> <at_z></highlight>."
 setspawn-default: "<prefix><success>Default spawn set to <highlight><at_x> <at_y> <at_z></highlight> in <highlight><world></highlight>."
 setspawn-first-join: "<prefix><success>First-join spawn set to <highlight><at_x> <at_y> <at_z></highlight> in <highlight><world></highlight>."
+# Safe landing, /tpbypass and safe login
+unsafe-can-bypass: "<prefix><error>The destination is not safe, so you were not teleported. Use <highlight>/tpbypass</highlight> within <highlight><seconds></highlight>s to force it."
+tpbypass: "<prefix><warning>Forced the unsafe destination."
+tpbypass-none: "<prefix><error>You have no recent unsafe teleport to force."
+safe-login: "<prefix><muted>You joined inside blocks, so you were moved to the nearest safe spot."
+# Sign elevator
+elevator-none-up: "<prefix><error>There is no elevator stop above you."
+elevator-none-down: "<prefix><error>There is no elevator stop below you."
+elevator-blocked: "<prefix><error>The next elevator stop has no room to stand."
+elevator-ride: "<muted>Elevator: <highlight><y></highlight>"
+# Launchpads
+# (no messages: a launch is silent)
+# /jump and /down
+jump: "<prefix><success>Jumped to the block you were looking at."
+jump-none: "<prefix><error>Look at a block within reach to jump to it."
+down: "<prefix><success>Teleported to the lowest safe spot below you."
+down-none: "<prefix><error>There is no safe spot below you."
+# /tppos, /tpo, /tpallworld
+usage-tppos: "<prefix><muted>Usage: <highlight>/tppos <x> <y> <z> [world]</highlight> or <highlight>/tppos <player> <x> <y> <z> [world]</highlight>."
+usage-tpo: "<prefix><muted>Usage: <highlight>/tpo <x> <y> <z> [world]</highlight> or <highlight>/tpo <player> <target|coords></highlight>."
+usage-tpallworld: "<prefix><muted>Usage: <highlight>/tpallworld <world></highlight>."
+tpallworld: "<prefix><muted>Moved <highlight><count></highlight> player(s) from your world to <highlight><world></highlight>."
+tpallworld-target: "<prefix><muted>You were moved to <highlight><world></highlight>."
+# /resetback
+resetback: "<prefix><success>Forgot your /back history."
+resetback-other: "<prefix><success>Forgot the /back history of <highlight><player></highlight>."
+# Requests: reach, ignore list and item block list
+request-too-far: "<prefix><error><highlight><player></highlight> is too far away. The limit is <highlight><distance></highlight> blocks."
+request-ignored: "<prefix><error><highlight><player></highlight> ignores you, so the request was not sent."
+request-you-ignore: "<prefix><error>You ignore <highlight><player></highlight>. Stop ignoring them to send a request."
+request-blocked-item: "<prefix><error>You cannot send a teleport request while holding <highlight><item></highlight>."
+tpaall: "<prefix><muted>Asked <highlight><count></highlight> player(s) to teleport to you."

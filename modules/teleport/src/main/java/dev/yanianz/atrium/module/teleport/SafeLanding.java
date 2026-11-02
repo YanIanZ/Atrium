@@ -129,9 +129,29 @@ final class SafeLanding {
         });
     }
 
+    /** Lowest safe spot at or below {@code at} (for /down). Must not be used for unloaded chunks. */
+    CompletableFuture<Optional<Location>> down(Location at, TeleportConfig.SafeLanding config) {
+        World world = at.getWorld();
+        if (world == null) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        return scheduler.supplyAt(at, () -> {
+            if (!world.isChunkLoaded(at.getBlockX() >> 4, at.getBlockZ() >> 4)) {
+                return Optional.<Location>empty();
+            }
+            int minY = world.getMinHeight();
+            int maxY = ceiling(world, config);
+            SafeSpot.Column column = columnOf(world, at.getBlockX(), at.getBlockZ());
+            OptionalInt y = SafeSpot.lowest(column, at.getBlockY(), minY, maxY, config.allowWater);
+            if (y.isEmpty()) {
+                return Optional.<Location>empty();
+            }
+            return Optional.of(new Location(world, at.getX(), y.getAsInt(), at.getZ(), at.getYaw(), at.getPitch()));
+        });
+    }
+
     /** Runs on the region thread. Returns null when the chunk is not loaded (caller retries). */
-    private static Optional<Location> search(Location target, TeleportConfig.SafeLanding config) {
-        World world = target.getWorld();
+    private static Optional<Location> search(Location target, TeleportConfig.SafeLanding config) {        World world = target.getWorld();
         int bx = target.getBlockX();
         int bz = target.getBlockZ();
         if (!world.isChunkLoaded(bx >> 4, bz >> 4)) {

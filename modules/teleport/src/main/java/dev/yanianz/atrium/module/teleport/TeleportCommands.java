@@ -48,6 +48,10 @@ final class TeleportCommands {
     static final String PERM_TOP = "atrium.top";
     static final String PERM_BACK = "atrium.back";
     static final String PERM_BACK_OTHERS = "atrium.back.others";
+    static final String PERM_DBACK = "atrium.dback";
+    static final String PERM_DBACK_OTHERS = "atrium.dback.others";
+    static final String PERM_RESETBACK = "atrium.resetback";
+    static final String PERM_RESETBACK_OTHERS = "atrium.resetback.others";
     static final String PERM_TOGGLE_BYPASS = "atrium.tptoggle.bypass";
 
     /** Player names are [A-Za-z0-9_]{1,16}; anything else cannot be a stored account. */
@@ -71,10 +75,8 @@ final class TeleportCommands {
         ctx.command(CommandSpec.of(Cmds.literal("tp", PERM_TP)
                 .executes(c -> usage(c, "teleport.usage-tp"))
                 .then(Commands.argument("target", ArgumentTypes.player()).executes(this::tpToPlayer)
-                        .then(Commands.argument("destination", ArgumentTypes.player())
-                                .requires(Cmds.permission(PERM_TP_OTHERS)).executes(this::tpOtherToPlayer))
-                        .then(Commands.argument("position", new PositionArgument())
-                                .requires(Cmds.permission(PERM_TP_OTHERS)).executes(this::tpOtherToPosition)
+                        .then(Commands.argument("destination", ArgumentTypes.player()).executes(this::tpOtherToPlayer))
+                        .then(Commands.argument("position", new PositionArgument()).executes(this::tpOtherToPosition)
                                 .then(Commands.argument("world", ArgumentTypes.world()).executes(this::tpOtherToPosition))))
                 .then(Commands.argument("position", new PositionArgument()).executes(this::tpToPosition)
                         .then(Commands.argument("world", ArgumentTypes.world()).executes(this::tpToPosition)))
@@ -97,12 +99,12 @@ final class TeleportCommands {
                 .then(Cmds.literal("list")
                         .executes(c -> listBack(c, null))
                         .then(Commands.argument("target", StringArgumentType.word())
-                                .suggests(backTargets())
+                                .suggests(backTargets(PERM_BACK_OTHERS))
                                 .executes(c -> listBack(c, StringArgumentType.getString(c, "target")))))
                 .then(Commands.argument("n", IntegerArgumentType.integer(1, BackHistory.MAX_CAPACITY))
                         .executes(c -> back(c, null, IntegerArgumentType.getInteger(c, "n"))))
                 .then(Commands.argument("target", StringArgumentType.word())
-                        .suggests(backTargets())
+                        .suggests(backTargets(PERM_BACK_OTHERS))
                         .executes(c -> back(c, StringArgumentType.getString(c, "target"), 1))
                         .then(Cmds.literal("list")
                                 .executes(c -> listBack(c, StringArgumentType.getString(c, "target"))))
@@ -110,6 +112,19 @@ final class TeleportCommands {
                                 .executes(c -> back(c, StringArgumentType.getString(c, "target"),
                                         IntegerArgumentType.getInteger(c, "n")))))
                 .build(), "Return to a previous location: /back [n], /back list, /back <player> [n|list]"));
+        ctx.command(CommandSpec.of(Cmds.literal("dback", PERM_DBACK)
+                .executes(c -> back(c, null, 1, true))
+                .then(Commands.argument("target", StringArgumentType.word())
+                        .suggests(backTargets(PERM_DBACK_OTHERS))
+                        .executes(c -> back(c, StringArgumentType.getString(c, "target"), 1, true)))
+                .build(), "Return to your previous location without the safety check",
+                "backunsafe"));
+        ctx.command(CommandSpec.of(Cmds.literal("resetback", PERM_RESETBACK)
+                .executes(c -> resetBack(c, null))
+                .then(Commands.argument("target", StringArgumentType.word())
+                        .suggests(backTargets(PERM_RESETBACK_OTHERS))
+                        .executes(c -> resetBack(c, StringArgumentType.getString(c, "target"))))
+                .build(), "Forget the /back history of a player"));
     }
 
     /** A bare root command explains itself instead of failing silently. */
@@ -118,10 +133,10 @@ final class TeleportCommands {
         return Cmds.OK;
     }
 
-    /** Suggests known players only to staff who may use /back on someone else. */
-    private SuggestionProvider<CommandSourceStack> backTargets() {
+    /** Suggests known players only to staff who may act on someone else. */
+    private SuggestionProvider<CommandSourceStack> backTargets(String othersPermission) {
         return (c, builder) -> {
-            if (!c.getSource().getSender().hasPermission(PERM_BACK_OTHERS)) {
+            if (!c.getSource().getSender().hasPermission(othersPermission)) {
                 return builder.buildFuture();
             }
             String typed = builder.getRemainingLowerCase();
@@ -153,13 +168,25 @@ final class TeleportCommands {
         return Cmds.OK;
     }
 
+    /**
+     * /tp &lt;player&gt; &lt;destination&gt;. When the first argument is the sender ({@code /tp <you> <player>})
+     * the two are swapped, so the other player is brought to the sender; moving someone else always needs
+     * {@code atrium.tp.others}.
+     */
     private int tpOtherToPlayer(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         CommandSender sender = c.getSource().getSender();
-        Player who = cmds.argPlayer(c, "target");
-        Player destination = cmds.argPlayer(c, "destination");
-        if (who.equals(destination)) {
+        Player first = cmds.argPlayer(c, "target");
+        Player second = cmds.argPlayer(c, "destination");
+        if (first.equals(second)) {
             throw cmds.fail(c.getSource(), "teleport.cannot-self");
         }
+        Player who = first;
+        Player destination = second;
+        if (sender instanceof Player self && first.equals(self)) {
+            who = second;
+            destination = first;
+        }
+        requireOthers(c, who);
         checkAccepts(c, sender, destination);
         moveToPlayer(sender, who, destination);
         return Cmds.OK;
@@ -171,6 +198,14 @@ final class TeleportCommands {
         boolean accepts = service.state(target).map(TeleportState::acceptsRequests).orElse(true);
         if (!accepts && !sender.hasPermission(PERM_TOGGLE_BYPASS) && !sender.equals(target)) {
             throw cmds.fail(c.getSource(), "teleport.target-toggled", Msg.unparsed("player", target.getName()));
+        }
+    }
+
+    /** A player may always move themselves; anyone else needs the "others" permission. */
+    private void requireOthers(CommandContext<CommandSourceStack> c, Player who) throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        if (!who.equals(sender) && !sender.hasPermission(PERM_TP_OTHERS)) {
+            throw cmds.fail(c.getSource(), "core.no-permission-others", Msg.unparsed("permission", PERM_TP_OTHERS));
         }
     }
 
@@ -200,6 +235,7 @@ final class TeleportCommands {
 
     private int tpOtherToPosition(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         Player who = cmds.argPlayer(c, "target");
+        requireOthers(c, who);
         moveToPosition(c, c.getSource().getSender(), who);
         return Cmds.OK;
     }
@@ -241,6 +277,7 @@ final class TeleportCommands {
         if (target.equals(self)) {
             throw cmds.fail(c.getSource(), "teleport.cannot-self");
         }
+        checkAccepts(c, self, target);
         Location here = self.getLocation();
         service.teleport(target, here, TeleportCause.COMMAND, TeleportOptions.IMMEDIATE).thenAccept(result -> {
             if (result == TeleportResult.SUCCESS) {
@@ -303,19 +340,50 @@ final class TeleportCommands {
     /** /back [n] and /back <player> [n]: entry n of the history, 1 = newest. */
     private int back(CommandContext<CommandSourceStack> c, @Nullable String targetName, int n)
             throws CommandSyntaxException {
+        return back(c, targetName, n, false);
+    }
+
+    /**
+     * /back (safety checked) and /dback ({@code unsafe}: the exact stored spot, so lava or void is possible).
+     */
+    private int back(CommandContext<CommandSourceStack> c, @Nullable String targetName, int n, boolean unsafe)
+            throws CommandSyntaxException {
         CommandSender sender = c.getSource().getSender();
-        withBackTarget(c, targetName, target -> sendBack(sender, target, n));
+        withBackTarget(c, targetName, unsafe ? PERM_DBACK_OTHERS : PERM_BACK_OTHERS,
+                target -> sendBack(sender, target, n, unsafe));
         return Cmds.OK;
     }
 
     /** /back list and /back <player> list. */
     private int listBack(CommandContext<CommandSourceStack> c, @Nullable String targetName) throws CommandSyntaxException {
         CommandSender sender = c.getSource().getSender();
-        withBackTarget(c, targetName, target -> sendBackList(sender, target));
+        withBackTarget(c, targetName, PERM_BACK_OTHERS, target -> sendBackList(sender, target));
         return Cmds.OK;
     }
 
-    private void sendBack(CommandSender sender, BackTarget target, int n) {
+    /** /resetback [player]: drops the whole history, including death locations. */
+    private int resetBack(CommandContext<CommandSourceStack> c, @Nullable String targetName)
+            throws CommandSyntaxException {
+        CommandSender sender = c.getSource().getSender();
+        withBackTarget(c, targetName, PERM_RESETBACK_OTHERS, target -> service.clearBack(target.uuid())
+                .whenComplete((cleared, error) -> {
+                    if (error != null) {
+                        ctx.logger().error("Forgetting the /back history of {} failed", target.name(), error);
+                        reply(sender, "core.error");
+                        return;
+                    }
+                    if (!Boolean.TRUE.equals(cleared)) {
+                        reply(sender, target.self() ? "teleport.back-none" : "teleport.back-none-other",
+                                Msg.unparsed("player", target.name()));
+                        return;
+                    }
+                    reply(sender, target.self() ? "teleport.resetback" : "teleport.resetback-other",
+                            Msg.unparsed("player", target.name()));
+                }));
+        return Cmds.OK;
+    }
+
+    private void sendBack(CommandSender sender, BackTarget target, int n, boolean unsafe) {
         BackHistory history = service.historyOf(target.user());
         if (history.isEmpty()) {
             reply(sender, target.self() ? "teleport.back-none" : "teleport.back-none-other",
@@ -340,8 +408,10 @@ final class TeleportCommands {
         StoredLocation stored = entry.location();
         Optional<Location> destination = stored.toLocation();
         TeleportCause cause = entry.death() ? TeleportCause.DEATH_BACK : TeleportCause.BACK;
-        // Staff sending someone back: no warmup or cooldown for the target.
-        TeleportOptions options = target.self() ? TeleportOptions.DEFAULT : TeleportOptions.IMMEDIATE;
+        // Staff sending someone back: no warmup or cooldown for the target. /dback never checks safety.
+        TeleportOptions options = unsafe
+                ? TeleportOptions.IMMEDIATE.withSafety(TeleportOptions.Safety.SKIP)
+                : target.self() ? TeleportOptions.DEFAULT : TeleportOptions.IMMEDIATE;
         java.util.concurrent.CompletableFuture<TeleportResult> move;
         if (destination.isPresent()) {
             move = service.teleport(online, destination.get(), cause, options);
@@ -419,8 +489,8 @@ final class TeleportCommands {
      * Resolves the sender (or a name, online or offline) and hands the loaded user to {@code action}.
      * Offline players are loaded through the user service; only going /back needs them online.
      */
-    private void withBackTarget(CommandContext<CommandSourceStack> c, @Nullable String rawName, Consumer<BackTarget> action)
-            throws CommandSyntaxException {
+    private void withBackTarget(CommandContext<CommandSourceStack> c, @Nullable String rawName,
+            String othersPermission, Consumer<BackTarget> action) throws CommandSyntaxException {
         CommandSender sender = c.getSource().getSender();
         if (rawName == null) {
             action.accept(selfTarget(c.getSource(), cmds.player(c.getSource())));
@@ -430,8 +500,8 @@ final class TeleportCommands {
             action.accept(selfTarget(c.getSource(), self));
             return;
         }
-        if (!sender.hasPermission(PERM_BACK_OTHERS)) {
-            throw cmds.fail(c.getSource(), "core.no-permission-others", Msg.unparsed("permission", PERM_BACK_OTHERS));
+        if (!sender.hasPermission(othersPermission)) {
+            throw cmds.fail(c.getSource(), "core.no-permission-others", Msg.unparsed("permission", othersPermission));
         }
         if (!PLAYER_NAME.matcher(rawName).matches()) {
             throw cmds.fail(c.getSource(), "core.user-not-found", Msg.unparsed("name", rawName));

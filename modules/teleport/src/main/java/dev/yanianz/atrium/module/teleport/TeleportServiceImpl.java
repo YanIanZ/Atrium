@@ -24,15 +24,18 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.util.BoundingBox;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -51,6 +54,8 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
     static final String PERM_WARMUP_BYPASS = "atrium.teleport.warmup.bypass";
     static final String PERM_COOLDOWN_BYPASS = "atrium.teleport.cooldown.bypass";
     static final String PERM_BACK_ON_DEATH = "atrium.back.ondeath";
+    static final String PERM_TPBYPASS = "atrium.tpbypass";
+    static final String PERM_VEHICLE = "atrium.teleport.vehicle";
 
     private final ModuleContext ctx;
     private final Scheduler scheduler;
@@ -62,9 +67,13 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
     private final Cooldowns cooldowns;
     private final Map<UUID, Warmup> warmups = new ConcurrentHashMap<>();
     private final Map<UUID, Long> invulnerableUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, FailedSpot> failedSpots = new ConcurrentHashMap<>();
     private final Map<String, StoredLocation> spawns = new ConcurrentHashMap<>();
     /** Teleports this module started: the Bukkit listener must not record them in /back a second time. */
     private final StartedTeleports startedTeleports = new StartedTeleports();
+
+    /** The exact destination of a teleport that failed because it was unsafe, for /tpbypass. */
+    private record FailedSpot(Location location, long expiresAt) {}
 
     private static final class Warmup {
         final CompletableFuture<TeleportResult> result;
@@ -176,6 +185,33 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
         });
     }
 
+    /**
+     * Forgets the whole /back history of a player (/resetback). Completes with {@code false} when there was
+     * nothing to forget; a loaded user is written through before the future completes.
+     */
+    CompletableFuture<Boolean> clearBack(UUID player) {
+        Optional<AtriumUser> loaded = ctx.users().cached(player);
+        if (loaded.isPresent()) {
+            try {
+                if (loaded.get().get(store.component).back().isEmpty()) {
+                    return CompletableFuture.completedFuture(false);
+                }
+                loaded.get().update(store.component, s -> s.withBack(BackHistory.EMPTY));
+                return ctx.users().saveNow(player).thenApply(ignored -> true);
+            } catch (IllegalStateException e) {
+                logger.warn("Cannot clear the /back history of {}: teleport data not loaded", player, e);
+                return CompletableFuture.failedFuture(e);
+            }
+        }
+        return store.load(player).thenCompose(stored -> {
+            TeleportState state = stored == null ? TeleportState.DEFAULT : stored;
+            if (state.back().isEmpty()) {
+                return CompletableFuture.completedFuture(false);
+            }
+            return store.save(player, state.withBack(BackHistory.EMPTY)).thenApply(ignored -> true);
+        });
+    }
+
     Optional<TeleportState> state(Player player) {
         return ctx.users().cached(player.getUniqueId()).flatMap(user -> {
             try {
@@ -245,6 +281,18 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
         }
         List<World> worlds = Bukkit.getWorlds();
         return worlds.isEmpty() ? Optional.empty() : Optional.of(worlds.getFirst().getSpawnLocation());
+    }
+
+    /** A spawn set with /setspawn (world or default) only; the vanilla fallback is left out (respawn order). */
+    Optional<StoredLocation> storedSpawn(@Nullable World world) {
+        TeleportConfig cfg = config.get();
+        if (cfg.spawn.perWorld && world != null) {
+            Optional<StoredLocation> own = spawn(TeleportStore.worldSpawnId(world.getName()));
+            if (own.isPresent()) {
+                return own;
+            }
+        }
+        return spawn(TeleportStore.DEFAULT_SPAWN);
     }
 
     /** First-join spawn, falling back to the default spawn. */
@@ -347,12 +395,15 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
                 fail(player, result, error, "searching a safe spot at " + describe(to));
                 return;
             }
-            if (found.isEmpty()) {
-                messages.send(player, "teleport.unsafe");
+            if (found.isEmpty() && !SafetyBypass.allows(player, cause)) {
+                rememberFailed(player, to, cfg);
+                messages.send(player, hasBypass(player, cfg) ? "teleport.unsafe-can-bypass" : "teleport.unsafe",
+                        Msg.number("seconds", Math.max(0, cfg.safeLanding.bypassWindowSeconds)));
                 result.complete(TeleportResult.UNSAFE);
                 return;
             }
-            Location destination = found.get();
+            // No safe spot but the cause is bypassed: use the exact destination.
+            Location destination = found.orElseGet(to::clone);
             scheduler.entity(player, () -> {
                 if (!player.isOnline()) {
                     result.complete(TeleportResult.FAILED);
@@ -361,12 +412,14 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
                 // /back must lead to the spot the player leaves: read on its own thread, right before the move.
                 Location from = player.getLocation();
                 UUID uuid = player.getUniqueId();
+                Entity vehicle = carryVehicle(player, cfg);
                 startedTeleports.begin(uuid);
                 CompletableFuture<Boolean> move;
                 try {
                     move = player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN);
                 } catch (RuntimeException e) {
                     startedTeleports.end(uuid);
+                    remount(vehicle, player);
                     fail(player, result, e, "teleporting to " + describe(destination));
                     return;
                 }
@@ -374,20 +427,94 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
                     // The Bukkit event already ran and skipped this teleport, so only succeeded() records /back.
                     startedTeleports.end(uuid);
                     if (teleportError != null) {
+                        remount(vehicle, player);
                         fail(player, result, teleportError, "teleporting to " + describe(destination));
                         return;
                     }
                     if (!Boolean.TRUE.equals(ok)) {
                         // Another plugin cancelled the Bukkit teleport event, or the player left.
+                        remount(vehicle, player);
                         messages.send(player, "teleport.failed");
                         result.complete(TeleportResult.FAILED);
                         return;
                     }
                     succeeded(player, from, cause, opts);
+                    bringVehicle(vehicle, destination, player);
                     result.complete(TeleportResult.SUCCESS);
                 });
             }, () -> result.complete(TeleportResult.FAILED));
         });
+    }
+
+    private static boolean hasBypass(Player player, TeleportConfig cfg) {
+        return cfg.safeLanding.bypassWindowSeconds > 0 && player.hasPermission(PERM_TPBYPASS);
+    }
+
+    /** Remembers the exact destination of an unsafe teleport so /tpbypass can force it for a short while. */
+    private void rememberFailed(Player player, Location to, TeleportConfig cfg) {
+        if (!hasBypass(player, cfg)) {
+            return;
+        }
+        long window = cfg.safeLanding.bypassWindowSeconds * 1000L;
+        failedSpots.put(player.getUniqueId(), new FailedSpot(to.clone(), System.currentTimeMillis() + window));
+    }
+
+    /** The destination of the last failed teleport, consumed once and only while the window is open. */
+    Optional<Location> takeFailedSpot(UUID player) {
+        FailedSpot spot = failedSpots.remove(player);
+        if (spot == null || spot.expiresAt() < System.currentTimeMillis()) {
+            return Optional.empty();
+        }
+        return Optional.of(spot.location());
+    }
+
+    /**
+     * Dismounts the ridden vehicle when it may be carried through the teleport. Returns the vehicle, or
+     * {@code null} when the player stays mounted (feature off, wrong type, no permission).
+     */
+    private @Nullable Entity carryVehicle(Player player, TeleportConfig cfg) {
+        Entity vehicle = player.getVehicle();
+        if (vehicle == null || !cfg.vehicle.enabled || !player.hasPermission(PERM_VEHICLE)
+                || !cfg.vehicle.allows(vehicle.getType().name())) {
+            return null;
+        }
+        player.leaveVehicle();
+        return vehicle;
+    }
+
+    /** Puts the player back on their vehicle after a failed teleport (on the vehicle's own thread). */
+    private void remount(@Nullable Entity vehicle, Player player) {
+        if (vehicle == null || !vehicle.isValid()) {
+            return;
+        }
+        scheduler.entity(vehicle, () -> {
+            if (vehicle.isValid() && player.isOnline() && player.getVehicle() == null) {
+                vehicle.addPassenger(player);
+            }
+        }, null);
+    }
+
+    /** Moves a carried vehicle to the destination and remounts the player once it arrived. */
+    private void bringVehicle(@Nullable Entity vehicle, Location destination, Player player) {
+        if (vehicle == null || !vehicle.isValid()) {
+            return;
+        }
+        scheduler.entity(vehicle, () -> {
+            if (!vehicle.isValid()) {
+                return;
+            }
+            vehicle.teleportAsync(destination).whenComplete((moved, error) -> {
+                if (error != null || !Boolean.TRUE.equals(moved)) {
+                    logger.warn("Could not move the vehicle of {} through the teleport", player.getName(), error);
+                    return;
+                }
+                scheduler.entity(player, () -> {
+                    if (player.isOnline() && player.getVehicle() == null && player.getWorld().equals(vehicle.getWorld())) {
+                        vehicle.addPassenger(player);
+                    }
+                }, null);
+            });
+        }, null);
     }
 
     /** Side effects that only apply to a teleport that really happened (the only place that records it). */
@@ -536,6 +663,7 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
             abort(uuid, warmup, TeleportResult.FAILED, null, null);
         }
         invulnerableUntil.remove(uuid);
+        failedSpots.remove(uuid);
         startedTeleports.clear(uuid);
     }
 
@@ -590,6 +718,72 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
         cooldowns.purge();
         long now = System.currentTimeMillis();
         invulnerableUntil.values().removeIf(until -> until <= now);
+        failedSpots.values().removeIf(spot -> spot.expiresAt() <= now);
+    }
+
+    // ---- safe login ----
+
+    /**
+     * A player who joins inside blocks (a bed in a wall, a world reset) is moved to the nearest safe spot
+     * after one tick. Runs only when the hitbox really collides with blocks, so ordinary logins are untouched.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onJoin(PlayerJoinEvent event) {
+        TeleportConfig.SafeLogin cfg = config.get().safeLogin;
+        if (!cfg.enabled) {
+            return;
+        }
+        Player player = event.getPlayer();
+        scheduler.entityLater(player, () -> relocateIfStuck(player, cfg), null, 1L);
+    }
+
+    private void relocateIfStuck(Player player, TeleportConfig.SafeLogin cfg) {
+        if (!player.isOnline()) {
+            return;
+        }
+        Location at = player.getLocation();
+        World world = at.getWorld();
+        if (world == null || !insideBlocks(world, at)) {
+            return;
+        }
+        TeleportConfig.SafeLanding window = new TeleportConfig.SafeLanding();
+        window.searchUp = Math.max(0, cfg.searchUp);
+        window.searchDown = Math.max(0, cfg.searchDown);
+        window.searchRadius = Math.max(0, Math.min(Spiral.MAX_RADIUS, cfg.searchRadius));
+        window.allowWater = config.get().safeLanding.allowWater;
+        landing.find(at, window).whenComplete((found, error) -> {
+            if (error != null) {
+                logger.error("Searching a safe login spot for {} at {} failed", player.getName(), describe(at), error);
+                return;
+            }
+            if (found.isEmpty()) {
+                logger.warn("{} joined inside blocks at {} and no safe spot was found", player.getName(), describe(at));
+                return;
+            }
+            Location destination = found.get();
+            UUID uuid = player.getUniqueId();
+            scheduler.entity(player, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                startedTeleports.begin(uuid);
+                player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((moved, moveError) -> {
+                    startedTeleports.end(uuid);
+                    if (moveError != null || !Boolean.TRUE.equals(moved)) {
+                        logger.warn("Could not move {} out of blocks at {}", player.getName(), describe(at),
+                                moveError == null ? null : moveError);
+                        return;
+                    }
+                    messages.send(player, "teleport.safe-login");
+                });
+            }, null);
+        });
+    }
+
+    private static boolean insideBlocks(World world, Location at) {
+        BoundingBox box = new BoundingBox(at.getX() - 0.3, at.getY() + 0.001, at.getZ() - 0.3,
+                at.getX() + 0.3, at.getY() + 1.8, at.getZ() + 0.3);
+        return world.hasCollisionsIn(box);
     }
 
     /** Module disable: stops every warmup. */
@@ -598,5 +792,6 @@ final class TeleportServiceImpl implements ExtendedTeleportService, Listener {
             abort(entry.getKey(), entry.getValue(), TeleportResult.FAILED, null, null);
         }
         startedTeleports.clearAll();
+        failedSpots.clear();
     }
 }
