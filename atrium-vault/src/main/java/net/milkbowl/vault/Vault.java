@@ -69,6 +69,7 @@ public final class Vault extends JavaPlugin {
                     ? new StackCallerResolver(getClass().getClassLoader()) : CallerResolver.NONE;
             guard = new GuardedEconomy(() -> VaultInfo.registrations(services, Economy.class).stream()
                     .map(RegisteredServiceProvider::getProvider).toList(), settings, log, audit, callers);
+            guard.slowCallThresholdMillis(config.getLong("guard.slow-call-warn-millis", 50L));
             services.register(Economy.class, guard, this, ServicePriority.Highest);
         }
         getServer().getPluginManager().registerEvents(new ServiceListener(guard, getLogger()), this);

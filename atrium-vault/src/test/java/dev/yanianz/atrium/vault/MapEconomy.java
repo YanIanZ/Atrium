@@ -18,6 +18,7 @@ class MapEconomy extends AbstractEconomy {
     volatile RuntimeException failWith;
     volatile boolean allowNegative;
     volatile int digits = 2;
+    volatile long delayMillis;
 
     MapEconomy(String name) {
         this.name = name;
@@ -27,6 +28,13 @@ class MapEconomy extends AbstractEconomy {
         calls.incrementAndGet();
         RuntimeException failure = failWith;
         if (failure != null) throw failure;
+        if (delayMillis > 0) {
+            try {
+                Thread.sleep(delayMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @Override public boolean isEnabled() { touch(); return true; }

@@ -59,7 +59,8 @@ public final class VaultInfo {
             out.add("Guard: enabled, delegate=" + (delegate == null ? "none (economy reported as disabled)"
                     : name(delegate) + " (" + delegate.getClass().getName() + ")")
                     + ", max-amount=" + guard.settings().maxAmount()
-                    + ", rejected=" + guard.rejectedCount() + ", provider-errors=" + guard.failureCount());
+                    + ", rejected=" + guard.rejectedCount() + ", provider-errors=" + guard.failureCount()
+                    + ", slow-tick-calls=" + guard.slowTickCallCount());
             out.add("Audit: " + (audit == null ? "off" : "on, dir=" + audit.directory() + ", written=" + audit.written()
                     + ", queued=" + audit.queued() + ", dropped=" + audit.dropped()));
         }

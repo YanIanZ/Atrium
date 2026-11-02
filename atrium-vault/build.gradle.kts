@@ -8,7 +8,7 @@ plugins {
 
 description = "Atrium Vault: Folia-supporting, guarded drop-in replacement for the Vault plugin."
 // Vault's version format: plugins that parse the leading "1.7" keep working.
-version = "1.7.3-atrium.1"
+version = "1.7.3-atrium.2"
 
 val vaultApiVersion = libs.versions.vault.get()
 

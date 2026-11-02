@@ -175,4 +175,24 @@ class GuardedEconomyTest {
         assertThrows(IllegalArgumentException.class, () -> new GuardSettings(0));
         assertThrows(IllegalArgumentException.class, () -> new GuardSettings(Double.POSITIVE_INFINITY));
     }
+
+    @Test
+    void reportsSlowCallsOnlyOnTickThreads() {
+        real.delayMillis = 30;
+        guard.slowCallThresholdMillis(10);
+        guard.tickThreadProbe(() -> false);
+        guard.getBalance("alice");
+        assertEquals(0, guard.slowTickCallCount(), "a slow call off the tick thread is fine");
+
+        guard.tickThreadProbe(() -> true);
+        assertEquals(100.0, guard.getBalance("alice"));
+        guard.depositPlayer("alice", 1);
+        assertEquals(2, guard.slowTickCallCount());
+        assertTrue(logged.stream().anyMatch(r -> r.getMessage().contains("on tick thread")
+                && r.getMessage().contains("caller: TestPlugin")), "names the calling plugin");
+
+        guard.slowCallThresholdMillis(0);
+        guard.getBalance("alice");
+        assertEquals(2, guard.slowTickCallCount(), "0 disables the report");
+    }
 }

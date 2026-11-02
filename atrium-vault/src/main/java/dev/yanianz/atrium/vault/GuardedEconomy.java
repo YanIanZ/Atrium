@@ -44,6 +44,11 @@ public final class GuardedEconomy implements Economy {
     private final AtomicReference<Resolved> cache = new AtomicReference<>(new Resolved(null, false));
     private final LongAdder rejected = new LongAdder();
     private final LongAdder failures = new LongAdder();
+    private final LongAdder slowTickCalls = new LongAdder();
+    /** Calls slower than this on a server tick thread are reported (0 = off). */
+    private volatile long slowCallNanos = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(50);
+    /** Paper and Folia report every tick thread (Folia: each region thread) as the "primary" thread. */
+    private volatile java.util.function.BooleanSupplier tickThread = GuardedEconomy::onTickThread;
     private volatile GuardSettings settings;
 
     public GuardedEconomy(EconomyCandidates candidates, GuardSettings settings, RateLimitedLog log,
@@ -95,6 +100,45 @@ public final class GuardedEconomy implements Economy {
 
     public long rejectedCount() {
         return rejected.sum();
+    }
+
+    /** Number of provider calls that blocked a server tick thread longer than the slow-call threshold. */
+    public long slowTickCallCount() {
+        return slowTickCalls.sum();
+    }
+
+    /** Sets the slow tick-thread call threshold in milliseconds; 0 disables the report. */
+    public void slowCallThresholdMillis(long millis) {
+        this.slowCallNanos = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(0, millis));
+    }
+
+    void tickThreadProbe(java.util.function.BooleanSupplier probe) {
+        this.tickThread = probe;
+    }
+
+    private static boolean onTickThread() {
+        try {
+            return org.bukkit.Bukkit.isPrimaryThread();
+        } catch (RuntimeException | LinkageError e) {
+            return false; // no server (unit tests) or an early/late lifecycle phase
+        }
+    }
+
+    /**
+     * Folia: Vault is a blocking API, so a provider that waits on I/O stalls the region that called it. The guard
+     * cannot make the call asynchronous, but it names the calling plugin so the cause can be fixed.
+     */
+    private void reportIfSlow(String operation, Economy delegate, long startNanos) {
+        long threshold = slowCallNanos;
+        if (threshold <= 0) return;
+        long elapsed = System.nanoTime() - startNanos;
+        if (elapsed < threshold || !tickThread.getAsBoolean()) return;
+        slowTickCalls.increment();
+        log.log(Level.WARNING, "slow:" + operation,
+                "Vault " + operation + " took " + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(elapsed)
+                        + " ms on tick thread '" + Thread.currentThread().getName() + "' (caller: " + callers.caller()
+                        + ", provider: " + safeName(delegate) + "). The calling plugin should not use Vault on a region"
+                        + " thread for players whose data is not loaded.", null);
     }
 
     public long failureCount() {
@@ -157,12 +201,15 @@ public final class GuardedEconomy implements Economy {
     private <T> T query(String operation, T fallback, Function<Economy, T> call) {
         Economy delegate = delegate();
         if (delegate == null) return fallback;
+        long start = System.nanoTime();
         try {
             T value = call.apply(delegate);
             return value != null ? value : fallback;
         } catch (RuntimeException e) {
             failure(operation, delegate, e);
             return fallback;
+        } finally {
+            reportIfSlow(operation, delegate, start);
         }
     }
 
@@ -187,6 +234,7 @@ public final class GuardedEconomy implements Economy {
     private EconomyResponse respond(String operation, Function<Economy, EconomyResponse> call) {
         Economy delegate = delegate();
         if (delegate == null) return fail(NO_PROVIDER);
+        long start = System.nanoTime();
         try {
             EconomyResponse response = call.apply(delegate);
             if (response == null) {
@@ -199,6 +247,8 @@ public final class GuardedEconomy implements Economy {
         } catch (RuntimeException e) {
             failure(operation, delegate, e);
             return fail("Economy provider error: " + e.getClass().getSimpleName());
+        } finally {
+            reportIfSlow(operation, delegate, start);
         }
     }
 

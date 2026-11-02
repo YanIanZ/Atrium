@@ -7,8 +7,12 @@ guard:
   enabled: true
   # Largest amount accepted for a single withdraw/deposit. NaN, infinite and negative amounts are always rejected.
   max-amount: 1.0E12
-  # Minimum seconds between two identical warnings (rejected input, provider exceptions).
+  # Minimum seconds between two identical warnings (rejected input, provider exceptions, slow calls).
   error-log-interval-seconds: 30
+  # Folia/Paper: report provider calls that block a server tick thread (on Folia: a region thread) for longer than
+  # this many milliseconds, naming the calling plugin. Vault is a blocking API; this finds the plugin to fix.
+  # 0 disables the report.
+  slow-call-warn-millis: 50
 
 audit:
   # Log every withdraw/deposit going through the guard to plugins/Vault/audit/audit.log (tab-separated:
