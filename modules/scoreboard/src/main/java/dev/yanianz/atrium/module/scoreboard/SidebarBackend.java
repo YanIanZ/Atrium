@@ -13,9 +13,38 @@ import org.bukkit.entity.Player;
  * it unconditionally.
  */
 interface SidebarBackend {
-    enum Kind { NONE, BUKKIT, PACKETS }
+    enum Kind {
+        NONE, BUKKIT, PACKETS, TAB;
+
+        String id() {
+            return name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
 
     Kind kind();
+
+    /**
+     * Global thread, at the start of every update cycle: backends that hand their work to another plugin apply
+     * what the player threads recorded since the previous cycle. The others draw directly and do nothing here.
+     */
+    default void flush() {
+    }
+
+    /** Global thread: false when the backend can no longer work (its plugin or feature went away). */
+    default boolean usable() {
+        return true;
+    }
+
+    /**
+     * Global thread: removes everything this backend created for every player at once. Backends that draw on
+     * player threads do that through {@link #hide(Player)} instead and do nothing here.
+     */
+    default void stop() {
+    }
+
+    /** The plugin behind this backend is being disabled: forget all state without calling into it. */
+    default void detach() {
+    }
 
     /**
      * Player thread. Whether this player may show our sidebar: another plugin's private scoreboard is

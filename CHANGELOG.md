@@ -50,10 +50,15 @@ Initial feature set.
 - Holograms, NPCs (Paper mannequins), tab list, sidebar (PacketEvents on Folia), boss bars, custom text pages,
   dialogs (Paper Dialog API), interactive blocks and entities, custom command aliases, admin action lines, particles
   and effects, armour stand editor.
+- Selectable tab list engine (`engine: auto|native|tab`) and sidebar backend (`backend: auto|bukkit|packets|tab`):
+  with the TAB plugin, Atrium still renders headers, footers, list names, sorting and sidebars per player and hands
+  them to TAB's API instead of sending its own packets. Parts whose TAB feature is disabled are left to TAB; Atrium
+  falls back to its own engines when TAB is missing, and removes everything it created in TAB on reload or disable.
+  `/tablist engine` and `/sidebar engine` show the active engine and what it supports.
 
 ### Integrations
 - Optional hooks for Vault, LuckPerms, PlaceholderAPI, DecentHolograms, FancyHolograms, Citizens, FancyNpcs,
-  WorldGuard, GriefPrevention, Lands, Towny, BlueMap, squaremap, dynmap, PacketEvents and Floodgate.
+  WorldGuard, GriefPrevention, Lands, Towny, BlueMap, squaremap, dynmap, PacketEvents, TAB and Floodgate.
 - Velocity/BungeeCord messaging with HMAC authentication (`/server`, `/glist`, cross-server chat and staff features).
 - Discord webhook relay (mention-safe, rate-limited).
 - SourbyCraft support: profile-scoped data for MultiProfile, on-demand AWF world loading, region metrics.

@@ -19,7 +19,7 @@ while [ -z "$SLOT" ]; do
   done
   [ -z "$SLOT" ] && { echo "smoke: waiting for a free server slot..."; sleep 5; }
 done
-JAR="$(ls "$ROOT"/atrium-plugin/build/libs/Atrium-*.jar | grep -v sources | head -1)"
+JAR="$(ls -t "$ROOT"/atrium-plugin/build/libs/Atrium-*.jar | grep -v sources | head -1)"  # newest build
 SERVER_JAR="$(ls "$DIR"/*.jar | head -1)"
 cp "$JAR" "$DIR/plugins/Atrium.jar"
 rm -f "$DIR/plugins/Atrium-"*.jar

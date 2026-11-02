@@ -20,6 +20,7 @@ dependencyResolutionManagement {
                 includeGroup("com.github.decentsoftware-eu")
                 includeGroupAndSubgroups("com.github.GriefPrevention")
                 includeGroupAndSubgroups("com.github.angeschossen")
+                includeGroup("com.github.NEZNAMY")
             }
         }
         maven("https://repo.fancyinnovations.com/releases") {

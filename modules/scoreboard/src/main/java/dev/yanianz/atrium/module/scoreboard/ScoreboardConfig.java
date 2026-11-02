@@ -20,11 +20,18 @@ public class ScoreboardConfig {
     public int updateIntervalTicks = 10;
 
     @Comment("""
-            Rendering backend:
-              auto    - the Bukkit scoreboard API on Paper; PacketEvents on Folia when that plugin is installed;
+            Rendering backend (engine):
+              auto    - tab when the TAB plugin runs its scoreboard feature; otherwise the Bukkit scoreboard API on
+                        Paper, or PacketEvents on Folia when that plugin is installed;
               bukkit  - always the Bukkit scoreboard API (not available on Folia);
-              packets - always PacketEvents packets, also on Paper (requires the packetevents plugin).
-            Folia has no scoreboard API, so without PacketEvents sidebars stay hidden there.""")
+              packets - always PacketEvents packets, also on Paper (requires the packetevents plugin);
+              tab     - the TAB plugin's scoreboard API: Atrium renders the boards below per player and TAB shows
+                        them. Needs TAB with its scoreboard feature enabled in TAB's config; otherwise Atrium falls
+                        back to the auto choice without TAB and logs why once. When Atrium hides its sidebar (no
+                        matching board, or /sidebar toggle), TAB's own scoreboards take the slot back; the score
+                        number format follows TAB's config.
+            Folia has no scoreboard API, so without PacketEvents or TAB sidebars stay hidden there.
+            /sidebar engine shows the active backend. Changes apply on /atrium reload.""")
     public String backend = "auto";
 
     @Comment("""

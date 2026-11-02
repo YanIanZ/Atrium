@@ -12,6 +12,18 @@ import org.spongepowered.configurate.objectmapping.meta.Comment;
 @ConfigSerializable
 public class TablistConfig {
     @Comment("""
+            Engine that shows the tab list:
+              auto   - tab when the TAB plugin (by NEZNAMY) is enabled, otherwise native;
+              native - Atrium sends the header, footer, list names and list order itself;
+              tab    - Atrium renders everything below and hands it to TAB through TAB's API; Atrium then sends
+                       none of it itself. Each part needs the matching TAB feature (header-footer,
+                       tablist-name-formatting, sorting through scoreboard-teams); a part whose TAB feature is
+                       disabled is left to TAB's own config (logged once). Falls back to native when TAB is missing.
+            With tab, list names replace TAB's prefix/name/suffix for each player, and sorting uses TAB team names.
+            Check the active engine with /tablist engine. Changes apply on /atrium reload.""")
+    public String engine = "auto";
+
+    @Comment("""
             Ticks between tab list updates (20 ticks = 1 second), 2 through 1200. One global timer advances the
             animations; each player is then rendered on their own thread and only receives packets when their
             header, footer, list name or order actually changed.""")

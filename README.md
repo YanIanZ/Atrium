@@ -96,6 +96,7 @@ implementation or turns off cleanly.
 | WorldGuard / GriefPrevention / Lands / Towny | Protection checks for spawn, replace and edit tools |
 | BlueMap / squaremap / dynmap | Warp, spawn and portal markers; vanished players are hidden |
 | PacketEvents | Sidebar scoreboards on Folia |
+| TAB (by NEZNAMY) | Alternative tab list and sidebar engine: Atrium renders, TAB displays (`modules/tablist.yml` → `engine`, `modules/scoreboard.yml` → `backend`; `/tablist engine`, `/sidebar engine`) |
 | Floodgate (Geyser) | Dialogs shown as native Bedrock forms |
 | Velocity / BungeeCord | `/server`, `/glist`, cross-server chat, staff chat, helpop and punishment sync over HMAC-authenticated plugin messages |
 

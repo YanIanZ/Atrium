@@ -407,7 +407,7 @@ Commands disabled in `config.yml` are marked ~~struck through~~.
 
 | Command | Aliases | Description | Usage |
 |---|---|---|---|
-| `/sidebar` |  | Toggle your sidebar | `/sidebar`<br>`/sidebar toggle` |
+| `/sidebar` |  | Toggle your sidebar | `/sidebar`<br>`/sidebar toggle`<br>`/sidebar engine` |
 
 ## search
 
@@ -461,7 +461,7 @@ Commands disabled in `config.yml` are marked ~~struck through~~.
 
 | Command | Aliases | Description | Usage |
 |---|---|---|---|
-| `/tablist` |  | Tab list administration | `/tablist`<br>`/tablist refresh` |
+| `/tablist` |  | Tab list administration | `/tablist`<br>`/tablist refresh`<br>`/tablist engine` |
 
 ## teleport
 

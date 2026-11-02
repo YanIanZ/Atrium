@@ -12,4 +12,6 @@ dependencies {
     // Optional backend used on Folia, where there is no scoreboard API. The packetevents plugin
     // provides these classes at runtime; the jar is never bundled.
     compileOnly("com.github.retrooper:packetevents-api:2.14.0")
+    // Optional backend through the TAB plugin's scoreboard API; only TabSidebarBackend references it.
+    compileOnly("com.github.NEZNAMY:TAB-API:5.5.0") { isTransitive = false }
 }
