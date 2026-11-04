@@ -23,7 +23,7 @@ final class VaultStore {
     static final List<Migration> MIGRATIONS = List.of(new Migration(4, "player vaults", dialect -> {
         String blob = dialect == Dialect.SQLITE ? "BLOB" : "MEDIUMBLOB";
         return List.of("CREATE TABLE {prefix}inventories_vaults (uuid CHAR(36) NOT NULL, vault INT NOT NULL"
-                + ", rows INT NOT NULL, size INT NOT NULL, updated BIGINT NOT NULL, items " + blob + " NOT NULL"
+                + ", `rows` INT NOT NULL, size INT NOT NULL, updated BIGINT NOT NULL, items " + blob + " NOT NULL"
                 + ", PRIMARY KEY (uuid, vault))");
     }));
 
@@ -50,8 +50,8 @@ final class VaultStore {
             return CompletableFuture.completedFuture(true);
         }
         String sql = db.dialect().upsert(db.table("inventories_vaults"),
-                "uuid, vault, rows, size, updated, items", "?, ?, ?, ?, ?, ?", "uuid, vault",
-                "rows, size, updated, items");
+                "uuid, vault, `rows`, size, updated, items", "?, ?, ?, ?, ?, ?", "uuid, vault",
+                "`rows`, size, updated, items");
         return db.transaction(c -> {
             if (!replace) {
                 try (PreparedStatement ps = c.prepareStatement(
@@ -80,7 +80,7 @@ final class VaultStore {
 
     CompletableFuture<Optional<Stored>> load(UUID owner, int vault) {
         return db.query(c -> {
-            try (PreparedStatement ps = c.prepareStatement("SELECT rows, size, items, updated FROM "
+            try (PreparedStatement ps = c.prepareStatement("SELECT `rows`, size, items, updated FROM "
                     + db.table("inventories_vaults") + " WHERE uuid = ? AND vault = ?")) {
                 ps.setString(1, owner.toString());
                 ps.setInt(2, vault);
@@ -97,8 +97,8 @@ final class VaultStore {
     /** Writes the whole vault in one statement (insert or replace). */
     CompletableFuture<Void> save(UUID owner, int vault, int rows, int size, byte[] items) {
         String sql = db.dialect().upsert(db.table("inventories_vaults"),
-                "uuid, vault, rows, size, updated, items", "?, ?, ?, ?, ?, ?", "uuid, vault",
-                "rows, size, updated, items");
+                "uuid, vault, `rows`, size, updated, items", "?, ?, ?, ?, ?, ?", "uuid, vault",
+                "`rows`, size, updated, items");
         return db.query(c -> {
             try (PreparedStatement ps = c.prepareStatement(sql)) {
                 Database.bind(ps, owner.toString(), vault, rows, size, System.currentTimeMillis(), items);
