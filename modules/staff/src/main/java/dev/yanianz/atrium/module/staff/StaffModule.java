@@ -34,8 +34,12 @@ public final class StaffModule implements AtriumModule {
     public void enable(ModuleContext ctx) throws Exception {
         this.ctx = ctx;
         ConfigHandle<StaffConfig> config = ctx.config(StaffConfig.class, StaffConfig::new);
+        if (config.get().serverId == null || !config.get().serverId.matches("[A-Za-z0-9_.-]{1,128}")) {
+            throw new IllegalArgumentException("staff.server-id must be a unique backend name (1-128 letters/digits/_.-)");
+        }
+        final String backendId = config.get().serverId;
         ctx.migrate(StaffStore.MIGRATIONS);
-        StaffStore store = new StaffStore(ctx.database(), ctx.logger());
+        StaffStore store = new StaffStore(ctx.database(), ctx.logger(), () -> backendId);
         ctx.component(store.preferences);
         ctx.component(store.spectate);
 
@@ -45,7 +49,7 @@ public final class StaffModule implements AtriumModule {
         ctx.listen(new StaffListener(ctx, config, manager, tools, store, spectate));
         Patrol patrol = new Patrol(ctx, config::get);
         this.speed = new SpeedMeter(ctx, config::get);
-        new StaffCommands(ctx, manager, spectate, store, patrol, speed).register();
+        new StaffCommands(ctx, manager, spectate, store, patrol, speed, backendId).register();
         StaffCommands.registerPermissions(ctx);
 
         // Module (re)load while players are online: sessions left by the previous instance (disable only

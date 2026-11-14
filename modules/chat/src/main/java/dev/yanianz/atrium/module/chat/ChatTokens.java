@@ -6,17 +6,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Finds {@code [item]}, {@code [item:slot]} and {@code [sprite:name]} tokens in player text and replaces
- * them with a private-use sentinel that survives MiniMessage parsing. The caller renders the sentinel
- * from a server-side value, so no item or sprite data is ever taken from the typed text.
+ * Finds {@code [item]}, {@code [item:slot]}, {@code [sprite:name]}, {@code [inv]} and {@code [ender]} tokens
+ * in player text and replaces them with a private-use sentinel that survives MiniMessage parsing. The caller
+ * renders the sentinel from a server-side value, so no item, sprite or snapshot data is ever taken from the
+ * typed text.
  */
 final class ChatTokens {
     private ChatTokens() {}
 
     private static final Pattern TOKEN = Pattern.compile(
-            "\\[item(?::([A-Za-z0-9_]+))?\\]|\\[sprite:(?:([A-Za-z0-9_.-]+):)?([A-Za-z0-9_./-]+)\\]");
+            "\\[item(?::([A-Za-z0-9_]+))?\\]|\\[sprite:(?:([A-Za-z0-9_.-]+):)?([A-Za-z0-9_./-]+)\\]"
+                    + "|\\[(inv|ender)\\]");
 
-    sealed interface Token permits Item, Sprite {
+    sealed interface Token permits Item, Sprite, Showcase {
         String raw();
 
         String sentinel();
@@ -25,6 +27,9 @@ final class ChatTokens {
     record Item(String slot, String raw, String sentinel) implements Token {}
 
     record Sprite(String atlas, String name, String raw, String sentinel) implements Token {}
+
+    /** {@code kind} is {@code inv} or {@code ender}; the id is resolved when the token is rendered. */
+    record Showcase(String kind, String raw, String sentinel) implements Token {}
 
     record Parsed(String text, List<Token> tokens) {
         Parsed {
@@ -56,6 +61,8 @@ final class ChatTokens {
             if (matched.startsWith("[item")) {
                 String slot = matcher.group(1);
                 tokens.add(new Item(slot == null ? "" : slot, matched, sentinel));
+            } else if (matcher.group(4) != null) {
+                tokens.add(new Showcase(matcher.group(4), matched, sentinel));
             } else {
                 String atlas = matcher.group(2);
                 String name = matcher.group(3);

@@ -8,6 +8,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ChatFilterTest {
     @Test
+    void canonicalAccentsCannotBypassLiteralRulesAndCensorUsesOriginalOffsets() {
+        ChatConfig.Filter config = new ChatConfig.Filter();
+        config.rules = List.of(new ChatConfig.FilterRule("literal", "WORD", "cafe", "CENSOR"));
+        List<ChatFilter.Rule> rules = ChatFilter.compile(config, message -> fail(message));
+        assertEquals("a *** b", ChatFilter.apply("a café b", rules, "***").text());
+        assertEquals("a *** b", ChatFilter.apply("a cafe\u0301 b", rules, "***").text());
+        assertEquals("cafe", ChatFilter.normalize("café").text());
+        assertEquals("cafe", ChatFilter.normalize("cafe\u0301").text());
+    }
+
+    @Test
     void normalisationDefeatsColourSpacingLeetAndRepeatBypasses() {
         assertEquals("fuck", ChatFilter.normalize("F U C K").text());
         assertEquals("fuck", ChatFilter.normalize("f.u.c.k").text());

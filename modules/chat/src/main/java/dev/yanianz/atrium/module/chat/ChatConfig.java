@@ -11,10 +11,15 @@ import org.spongepowered.configurate.objectmapping.meta.Comment;
 @ConfigSerializable
 public class ChatConfig {
     @Comment("Chat formats, first entry whose permission the sender has wins. Empty permission means everyone. "
-            + "Placeholders: <player>, <display_name>, <world>, <message>, <tag_prefix>, <tag_suffix>.")
+            + "Placeholders: <player>, <display_name>, <world>, <message>, <tag_prefix>, <tag_suffix> and "
+            + "<papi:token> when PlaceholderAPI is installed.")
     public List<FormatEntry> formats = new ArrayList<>(List.of(
             entry("atrium.chat.format.staff", "<dark_red>[STAFF] <white><player><dark_gray> » <white><message>"),
             entry("", "<gray><player><dark_gray> » <white><message>")));
+
+    @Comment("Hover card shown when a player hovers the sender name in chat. One MiniMessage line per entry;\n"
+            + "<papi:token> is resolved for the sender. Empty (default) keeps the plain name without a hover.")
+    public List<String> nameHover = new ArrayList<>();
 
     @Comment("Per-player default chat colour picked with /chatcolor. Only colours listed here can be used.")
     public ChatColors chatColors = new ChatColors();
@@ -31,6 +36,22 @@ public class ChatConfig {
 
     @Comment("Rules are matched against normalised plain text, never against raw MiniMessage or colour codes.")
     public Filter filter = new Filter();
+
+    @Comment("Apply the same advertisement and word rules to player-authored signs, books and anvil renames. "
+            + "Opt-in; does not scan existing items or change server-created content.")
+    public Content content = new Content();
+
+    @ConfigSerializable
+    public static class Content {
+        @Comment("Filter sign edits. A blocked line rejects the entire edit.")
+        public boolean signs = false;
+
+        @Comment("Filter book pages and the title when signing. A blocked field rejects the entire edit.")
+        public boolean books = false;
+
+        @Comment("Filter anvil result names during preview and recheck when taking the result.")
+        public boolean anvils = false;
+    }
 
     @Comment("Highlight @name (or plain names) and play a sound for the mentioned player.")
     public Mentions mentions = new Mentions();
@@ -56,6 +77,9 @@ public class ChatConfig {
     @Comment("[item] and [item:slot] hover in chat.")
     public Items items = new Items();
 
+    @Comment("[inv] and [ender] links: a short-lived inventory snapshot other players can view with /chatview.")
+    public Showcase showcase = new Showcase();
+
     @Comment("Admin-whitelisted [sprite:...] tags. Unknown sprites stay literal text.")
     public Sprites sprites = new Sprites();
 
@@ -77,7 +101,7 @@ public class ChatConfig {
         public String permission = "";
 
         @Comment("Trusted MiniMessage format. Placeholders: <player>, <display_name>, <world>, <message>,\n"
-                + "<tag_prefix> and <tag_suffix>.")
+                + "<tag_prefix>, <tag_suffix> and <papi:token>.")
         public String format = "<gray><tag_prefix><player><tag_suffix><dark_gray> » <white><message>";
 
         public FormatEntry() {}
@@ -101,6 +125,10 @@ public class ChatConfig {
 
         @Comment("Also reject messages similar to recent ones (Levenshtein similarity). Default off.")
         public boolean similarityEnabled = false;
+
+        @Comment("Similarity history window in seconds. -1 inherits duplicateWindowSeconds for compatibility; "
+                + "0 disables similarity history. Can stay enabled when exact duplicate checking is off.")
+        public long similarityWindowSeconds = -1L;
 
         @Comment("Similarity percentage above which two messages count as similar (1-100).")
         public int similarityPercentage = 80;
@@ -131,7 +159,8 @@ public class ChatConfig {
         @Comment("Name used in staff alerts.")
         public String id = "rule";
 
-        @Comment("WORD matches the normalised literal word; REGEX matches Java regular expressions.")
+        @Comment("WORD matches the normalised literal word, including canonical accent stripping; "
+                + "REGEX matches Java regular expressions without accent stripping.")
         public String type = "WORD";
 
         @Comment("Word or regular expression to look for.")
@@ -308,6 +337,13 @@ public class ChatConfig {
 
         @Comment("Require atrium.chat.item to render item tags.")
         public boolean requirePermission = true;
+    }
+
+    @ConfigSerializable
+    public static class Showcase {
+        @Comment("Enable [inv] and [ender]. Requires atrium.chat.showcase. The snapshot is stored in the shared\n"
+                + "database for 15 minutes; at most one per player and kind is taken every 10 seconds.")
+        public boolean enabled = true;
     }
 
     @ConfigSerializable
@@ -494,6 +530,10 @@ public class ChatConfig {
 
         @Comment("Allow /msg and /reply to players on another server using the cached network player list.")
         public boolean privateMessages = true;
+
+        @Comment("Prefix added to a line received from another server. <server> is the origin label;\n"
+                + "an empty value disables the badge. MiniMessage.")
+        public String serverBadge = "<dark_gray>[<server>]</dark_gray> ";
     }
 
     private static ColorEntry color(String name, String value) {

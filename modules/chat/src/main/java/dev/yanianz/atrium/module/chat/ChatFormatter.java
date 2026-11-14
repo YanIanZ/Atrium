@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -31,15 +32,17 @@ final class ChatFormatter {
     private final Messages messages;
     private final ChatConfig config;
     private final TokenRenderer tokenRenderer;
+    private final ChatPapi papi;
     private final MiniMessage full;
     private final MiniMessage colorOnly;
     private final MiniMessage formatOnly;
     private final MiniMessage colorAndFormat;
 
-    ChatFormatter(Messages messages, ChatConfig config, TokenRenderer tokenRenderer) {
+    ChatFormatter(Messages messages, ChatConfig config, TokenRenderer tokenRenderer, ChatPapi papi) {
         this.messages = messages;
         this.config = config;
         this.tokenRenderer = tokenRenderer;
+        this.papi = papi;
         this.full = MiniMessage.miniMessage();
         this.colorOnly = restricted(StandardTags.color());
         this.formatOnly = restricted(StandardTags.decorations());
@@ -84,10 +87,16 @@ final class ChatFormatter {
 
     private ChatTokens.Parsed parseTokens(String raw) {
         ChatConfig.Items items = config.items;
-        if (tokenRenderer == null || items == null || !items.enabled) {
+        if (tokenRenderer == null) {
             return new ChatTokens.Parsed(raw == null ? "" : raw, List.of());
         }
-        return ChatTokens.parse(raw, items.maxPerMessage);
+        boolean itemsEnabled = items != null && items.enabled;
+        boolean showcaseEnabled = config.showcase != null && config.showcase.enabled;
+        if (!itemsEnabled && !showcaseEnabled) {
+            return new ChatTokens.Parsed(raw == null ? "" : raw, List.of());
+        }
+        int max = items == null ? 5 : Math.max(1, items.maxPerMessage);
+        return ChatTokens.parse(raw, max);
     }
 
     private Component renderTokens(Component message, Player sender, ChatTokens.Parsed parsed) {
@@ -123,13 +132,46 @@ final class ChatFormatter {
             Component tagPrefix, Component tagSuffix) {
         Component highlighted = withMentions(message, mentions);
         ChatConfig.FormatEntry entry = pick(sender);
+        Component player = playerName(sender);
         return messages.parseTrusted(entry.format,
-                Msg.unparsed("player", sender.getName()),
+                player == null ? Msg.unparsed("player", sender.getName()) : Msg.component("player", player),
                 Msg.component("display_name", sender.displayName()),
                 Msg.unparsed("world", world == null || world.isBlank() ? "?" : world),
                 Msg.component("tag_prefix", tagPrefix == null ? Component.empty() : tagPrefix),
                 Msg.component("tag_suffix", tagSuffix == null ? Component.empty() : tagSuffix),
-                Msg.component("message", highlighted));
+                Msg.component("message", highlighted),
+                papi.resolver(sender));
+    }
+
+    /**
+     * The sender name with the configured hover card and a click that suggests {@code /msg <player> }.
+     * {@code null} keeps the plain unparsed name so the default format output does not change.
+     */
+    private @Nullable Component playerName(Player sender) {
+        List<String> lines = config.nameHover;
+        if (lines == null || lines.isEmpty()) {
+            return null;
+        }
+        Component card = Component.empty();
+        boolean first = true;
+        for (String line : lines) {
+            if (line == null || line.isBlank()) {
+                continue;
+            }
+            Component parsed = messages.parseTrusted(line, papi.resolver(sender),
+                    Msg.unparsed("player", sender.getName()));
+            if (!first) {
+                card = card.append(Component.text("\n"));
+            }
+            card = card.append(parsed);
+            first = false;
+        }
+        if (first) {
+            return null;
+        }
+        return Component.text(sender.getName())
+                .hoverEvent(HoverEvent.showText(card))
+                .clickEvent(ClickEvent.suggestCommand("/msg " + sender.getName() + " "));
     }
 
     private ChatConfig.FormatEntry pick(Player sender) {

@@ -7,6 +7,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ChatHistoryTest {
     @Test
+    void resizingOnReloadKeepsMessageIdsAndTrimsOnlyOldestEntries() {
+        ChatHistory history = new ChatHistory(3);
+        ChatHistory.Entry oldest = history.add(UUID.randomUUID(), "A", "one", null, 0);
+        ChatHistory.Entry middle = history.add(UUID.randomUUID(), "B", "two", null, 1);
+        ChatHistory.Entry newest = history.add(UUID.randomUUID(), "C", "three", null, 2);
+        history.resize(2);
+        assertTrue(history.get(oldest.id()).isEmpty());
+        assertEquals(middle, history.get(middle.id()).orElseThrow());
+        assertEquals(newest, history.get(newest.id()).orElseThrow());
+        history.resize(5);
+        history.add(UUID.randomUUID(), "D", "four", null, 3);
+        assertEquals(3, history.size());
+        assertEquals(middle, history.remove(middle.id()).orElseThrow());
+    }
+
+    @Test
     void keepsOnlyTheNewestEntries() {
         ChatHistory history = new ChatHistory(2);
         ChatHistory.Entry first = history.add(UUID.randomUUID(), "Alice", "one", null, 0);

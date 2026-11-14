@@ -8,6 +8,41 @@ version; patch releases with no notable change are not listed separately.
 
 ## [Unreleased]
 
+### Webstore
+- New `webstore` module (opt-in: `enabledByDefault` is false, enable it on ONE server): delivers store orders
+  that the website inserts into `{prefix}webstore_deliveries`. A tracked timer (default every 10 s) claims up to
+  20 pending rows with a conditional `pending → processing` update (claims recorded in
+  `{prefix}webstore_claims`, stale ones requeued), runs the package's console commands (`{uuid}`, `{player}`,
+  `{buyer}`, `{package}`, values validated before insertion) on the global region thread, then marks the row
+  `delivered`. Failures retry up to `max-attempts`, unknown packages fail at once, `require-online` holds orders
+  until the recipient joins. Online recipients get a chat message and a title (gifts show the buyer and the gift
+  message as plain text); an online buyer of a gift is told it arrived; optional broadcast. Example packages
+  `vip` … `zenith` use `lp user {uuid} parent add <group>`. `/webstore status|retry <order_id>`
+  (`atrium.webstore.admin`). Ported from `feat/weblink-webstore` onto 1.0.2-wureta without `weblink`
+  (WuretaAuth owns `/link`).
+
+### Staff inventory recovery
+- Return teleports complete before pre-staff inventory/state is applied on the entity scheduler. Failed
+  moves retain the snapshot; normal exit, join and reviewed recovery use the same ordered path.
+- Shared SQL transitions/finish operations bind to an immutable snapshot token and creation stamp.
+  Finishing archives the exact snapshot transactionally before removing its active row.
+- New `staff.server-id` identifies the backend. Foreign and pre-ownership rows are retained rather
+  than automatically applied on another backend. Configure distinct values on a shared network.
+- Source and regression tests compile; no test execution or game-client validation is implied.
+
+### Chat
+- Optional word/advertisement filtering for sign edits, book pages/titles and anvil result names;
+  blocked signs/books reject the entire edit, and anvil results are checked again when taken.
+  Replacement text stays literal; unchanged components retain their formatting.
+- Literal word rules and duplicate checks normalise canonical accents while keeping original censor offsets.
+  Regex rules retain their existing accent semantics.
+- Similarity checks can use their own history window, even with exact duplicate detection disabled.
+- Chat deletion history survives reload, trimming only the oldest entries when its capacity shrinks.
+- Ignore, PM/staff/spy toggles confirm success after storage completes. Remote PM echoes explicitly say
+  queued, because the existing proxy transport does not acknowledge delivery.
+- Behavioural reference: static reports for the supplied ChatControl 12.2.20 artifact; independent Atrium
+  implementation, with configuration and limitations in [Chat](docs/CHAT.md).
+
 ### Atrium Vault 2.20.0-atrium.3
 - Vault v2 support: bundles VaultUnlockedAPI 2.20 (`net.milkbowl.vault2.*`, LGPL-3.0) unmodified next to VaultAPI
   1.7.1, declares `provides: [VaultUnlocked]` and reports version `2.20.0-atrium.3` (was `1.7.3-atrium.2`) so plugins

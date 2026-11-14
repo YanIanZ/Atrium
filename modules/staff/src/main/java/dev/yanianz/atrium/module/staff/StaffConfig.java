@@ -8,6 +8,10 @@ import org.spongepowered.configurate.objectmapping.meta.Comment;
 /** plugins/Atrium/modules/staff.yml */
 @ConfigSerializable
 public class StaffConfig {
+    @Comment("RESTART_REQUIRED. Unique backend identity for shared SQL staff snapshots. Set a different value on Hub and Island. "
+            + "Foreign or legacy snapshots are retained for review rather than automatically restored.")
+    public String serverId = "local";
+
     @Comment("What happens to items picked up, crafted or taken while staff mode is active.\n"
             + "CLEAR deletes them (default), KEEP moves them into free slots of the restored inventory\n"
             + "and DROP throws them on the ground when staff mode ends. Staff tools are always deleted.\n"

@@ -3,6 +3,7 @@ package dev.yanianz.atrium.module.chat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.text.Normalizer;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -243,6 +244,27 @@ final class ChatFilter {
             }
 
             char mapped = leet(input, i, !keepPunctuation);
+            if (!keepPunctuation && mapped > 127) {
+                int type = Character.getType(mapped);
+                if (type == Character.NON_SPACING_MARK || type == Character.COMBINING_SPACING_MARK
+                        || type == Character.ENCLOSING_MARK) {
+                    if (!ends.isEmpty()) ends.set(ends.size() - 1, i);
+                    i++;
+                    continue;
+                }
+                // Canonical decomposition only: no transliteration or confusable-character guessing.
+                String decomposed = Normalizer.normalize(String.valueOf(mapped), Normalizer.Form.NFD);
+                if (decomposed.length() > 1 && Character.isLetter(decomposed.charAt(0))) {
+                    boolean marksOnly = true;
+                    for (int mark = 1; mark < decomposed.length(); mark++) {
+                        int typeOfMark = Character.getType(decomposed.charAt(mark));
+                        if (typeOfMark != Character.NON_SPACING_MARK
+                                && typeOfMark != Character.COMBINING_SPACING_MARK
+                                && typeOfMark != Character.ENCLOSING_MARK) marksOnly = false;
+                    }
+                    if (marksOnly) mapped = decomposed.charAt(0);
+                }
+            }
             if (Character.isLetterOrDigit(mapped)) {
                 int last = out.length() - 1;
                 if (last >= 0 && out.charAt(last) == mapped) {

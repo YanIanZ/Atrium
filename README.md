@@ -50,6 +50,7 @@ Its scope is comparable to CMI; it is a separate, independent implementation (se
 | `lang/<locale>/<module>.yml` | MiniMessage texts. Missing keys are added automatically on load. |
 
 The full key reference is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Chat filtering, content surfaces and relay limitations are described in [docs/CHAT.md](docs/CHAT.md).
 
 ### Admin commands
 

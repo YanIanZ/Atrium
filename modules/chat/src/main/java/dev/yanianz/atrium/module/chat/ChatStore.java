@@ -17,7 +17,8 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>v2 adds the persisted staff-chat toggle, v3 the chat colour and the name of an offline/remote reply
  * target, v4 the active room, selected tag and range-spy toggle. Migrations only ever run once per database,
- * so old rows keep the column defaults and no released migration is edited.
+ * so old rows keep the column defaults and no released migration is edited. v6 adds the shared chat snapshot
+ * table used by {@link ChatSnapshotStore}.
  */
 final class ChatStore {
     static final List<Migration> MIGRATIONS = List.of(Migration.of(1, "chat_user",
@@ -36,7 +37,17 @@ final class ChatStore {
             Migration.of(5, "chat rooms",
                     "CREATE TABLE {prefix}chat_room (name_lower VARCHAR(32) NOT NULL PRIMARY KEY, "
                             + "owner CHAR(36) NOT NULL, members TEXT NOT NULL, invited TEXT NOT NULL, "
-                            + "locked BOOLEAN NOT NULL DEFAULT FALSE, updated_at BIGINT NOT NULL)"));
+                            + "locked BOOLEAN NOT NULL DEFAULT FALSE, updated_at BIGINT NOT NULL)"),
+            new Migration(6, "chat inventory snapshots", dialect -> {
+                // MEDIUMBLOB is MariaDB/MySQL only; SQLite has a single unrestricted BLOB type.
+                String blob = dialect == dev.yanianz.atrium.core.storage.Dialect.SQLITE ? "BLOB" : "MEDIUMBLOB";
+                return List.of(
+                        "CREATE TABLE {prefix}chat_snapshots (id CHAR(12) NOT NULL PRIMARY KEY, "
+                                + "owner CHAR(36) NOT NULL, owner_name VARCHAR(16) NOT NULL, "
+                                + "kind VARCHAR(8) NOT NULL, created_at BIGINT NOT NULL, "
+                                + "payload " + blob + " NOT NULL)",
+                        "CREATE INDEX {prefix}chat_snapshots_created ON {prefix}chat_snapshots (created_at)");
+            }));
 
     private final Database db;
     final UserComponentType<ChatUser> component;

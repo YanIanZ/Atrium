@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import net.kyori.adventure.text.Component;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Cross-server chat transport on top of the optional {@link ProxyService}.
@@ -60,19 +62,25 @@ final class ChatRelay {
         return name != null && !name.isBlank() && !"unknown".equalsIgnoreCase(name);
     }
 
-    boolean publishGlobal(UUID sender, String senderName, String text) {
+    boolean publishGlobal(UUID sender, String senderName, String text, @Nullable Component line,
+            List<String> mentions) {
         return publish(new CrossServerChat.Payload(CrossServerChat.Kind.GLOBAL, sender, senderName, "",
-                CrossServerChat.outgoingText(text)));
+                CrossServerChat.outgoingText(text), server(), line, mentions));
     }
 
-    boolean publishStaff(UUID sender, String senderName, String text) {
+    boolean publishStaff(UUID sender, String senderName, String text, @Nullable Component body) {
         return publish(new CrossServerChat.Payload(CrossServerChat.Kind.STAFF, sender, senderName, "",
-                CrossServerChat.outgoingText(text)));
+                CrossServerChat.outgoingText(text), server(), body, List.of()));
     }
 
-    boolean publishPrivate(UUID sender, String senderName, String targetName, String text) {
+    boolean publishPrivate(UUID sender, String senderName, String targetName, String text,
+            @Nullable Component body, List<String> mentions) {
         return publish(new CrossServerChat.Payload(CrossServerChat.Kind.PRIVATE, sender, senderName, targetName,
-                CrossServerChat.outgoingText(text)));
+                CrossServerChat.outgoingText(text), server(), body, mentions));
+    }
+
+    private String server() {
+        return CrossServerChat.serverLabel(proxy.serverName());
     }
 
     private boolean publish(CrossServerChat.Payload payload) {

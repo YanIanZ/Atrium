@@ -27,9 +27,14 @@ final class SpamGuard {
                 return new Settings(false, 0, 0);
             }
             return new Settings(config.enabled, Math.max(0, config.minimumIntervalMillis),
-                    Math.max(0, config.duplicateWindowSeconds) * 1000L,
+                    secondsToMillis(config.duplicateWindowSeconds),
                     config.similarityEnabled, config.similarityPercentage, config.similarityMinAmount,
-                    Math.max(0, config.duplicateWindowSeconds) * 1000L);
+                    secondsToMillis(config.similarityWindowSeconds < 0
+                            ? config.duplicateWindowSeconds : config.similarityWindowSeconds));
+        }
+
+        private static long secondsToMillis(long seconds) {
+            return Math.min(Long.MAX_VALUE / 1000L, Math.max(0, seconds)) * 1000L;
         }
     }
 

@@ -19,6 +19,7 @@ import dev.yanianz.atrium.api.user.AtriumUser;
 import dev.yanianz.atrium.api.vanish.VanishService;
 import dev.yanianz.atrium.core.command.Cmds;
 import dev.yanianz.atrium.core.config.ConfigHandle;
+import dev.yanianz.atrium.core.menu.Menu;
 import dev.yanianz.atrium.core.message.Msg;
 import dev.yanianz.atrium.core.module.AtriumModule;
 import dev.yanianz.atrium.core.module.ModuleContext;
@@ -26,6 +27,8 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -60,6 +63,7 @@ import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.permissions.PermissionDefault;
 import org.jspecify.annotations.Nullable;
 
@@ -70,11 +74,20 @@ import org.jspecify.annotations.Nullable;
  */
 public final class ChatModule implements AtriumModule, Listener {
     private static final UUID CONSOLE_SENDER = UUID.nameUUIDFromBytes("atrium:console".getBytes(StandardCharsets.UTF_8));
+    private static final long SNAPSHOT_TTL_MILLIS = TimeUnit.MINUTES.toMillis(15);
+    private static final long SNAPSHOT_MIN_INTERVAL_MILLIS = TimeUnit.SECONDS.toMillis(10);
+    private static final long SNAPSHOT_PURGE_PERIOD_MILLIS = TimeUnit.MINUTES.toMillis(1);
+    private static final Pattern SNAPSHOT_ID = Pattern.compile("[A-Za-z0-9]{12}");
+    private static final String SNAPSHOT_ALPHABET =
+            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    private static final SecureRandom SNAPSHOT_RANDOM = new SecureRandom();
 
     private ModuleContext ctx;
     private Cmds cmds;
     private ConfigHandle<ChatConfig> configHandle;
     private ChatStore store;
+    private ChatSnapshotStore snapshots;
+    private volatile ChatPapi papi;
     private volatile ChatFormatter formatter;
     private volatile ChatColorPalette palette = new ChatColorPalette(List.of());
     private volatile EmojiReplacer.Table emoji = EmojiReplacer.Table.EMPTY;
@@ -91,10 +104,14 @@ public final class ChatModule implements AtriumModule, Listener {
     private volatile ChatRelay relay;
     private final SpamGuard spam = new SpamGuard();
     private final CommandSpamGuard commandSpam = new CommandSpamGuard();
-    private volatile ChatHistory history = new ChatHistory(200);
+    private final ChatHistory history = new ChatHistory(200);
     /** World names and block positions are cached on the player's own thread so chat never reads a world. */
     private final java.util.Map<UUID, String> worldNames = new ConcurrentHashMap<>();
     private final java.util.Map<UUID, RangeTable.Position> positions = new ConcurrentHashMap<>();
+    /** Last snapshot id per player and kind; key is {@code uuid|kind}. */
+    private final Map<String, SnapshotRef> snapshotRefs = new ConcurrentHashMap<>();
+
+    private record SnapshotRef(String id, long createdAt) {}
 
     @Override
     public String id() {
@@ -115,20 +132,24 @@ public final class ChatModule implements AtriumModule, Listener {
     public void enable(ModuleContext ctx) throws Exception {
         this.ctx = ctx;
         this.cmds = ctx.commands();
+        this.papi = new ChatPapi(ctx.logger());
         this.configHandle = ctx.config(ChatConfig.class, ChatConfig::new);
         ctx.migrate(ChatStore.MIGRATIONS);
         this.store = new ChatStore(ctx.database());
+        this.snapshots = new ChatSnapshotStore(ctx.database());
         this.roomStore = new ChatRoomStore(ctx.database());
         ctx.component(store.component);
         ctx.service(IgnoreService.class, new ChatIgnoreService(uuid -> cachedUser(uuid).ignored()));
         ctx.service(IgnoreAdminService.class, new ChatIgnoreAdminService(ctx.users(), store.component));
         rebuild();
+        startSnapshotCleanup();
         try {
             roomStore.install(roomStore.loadAll().get(30, TimeUnit.SECONDS));
         } catch (Exception e) {
             ctx.logger().error("Cannot load chat rooms", e);
         }
         ctx.listen(this);
+        ctx.listen(new ChatContentListener(this));
         new ChatCommands(this).register();
 
         ctx.permission("atrium.chat.msg", PermissionDefault.TRUE, "Send private messages");
@@ -153,6 +174,8 @@ public final class ChatModule implements AtriumModule, Listener {
         ctx.permission("atrium.chat.caps.bypass", PermissionDefault.OP, "Bypass the anti-caps filter");
         ctx.permission("atrium.chat.item", PermissionDefault.TRUE, "Use [item] and [item:slot] in chat");
         ctx.permission("atrium.chat.sprite", PermissionDefault.FALSE, "Use [sprite:...] tags in chat");
+        ctx.permission("atrium.chat.showcase", PermissionDefault.TRUE, "Use [inv] and [ender] in chat");
+        ctx.permission("atrium.chat.view", PermissionDefault.TRUE, "Open a shared /chatview snapshot");
         ctx.permission("atrium.chat.shout", PermissionDefault.TRUE, "Use the shout prefix");
         ctx.permission("atrium.chat.range.bypass", PermissionDefault.FALSE, "Always receive ranged chat");
         ctx.permission("atrium.chat.range.spy", PermissionDefault.OP, "Toggle range spy with /rangespy");
@@ -175,7 +198,6 @@ public final class ChatModule implements AtriumModule, Listener {
         rebuild();
         spam.clear();
         commandSpam.clear();
-        history.clear();
         for (ChatColorPalette.Choice choice : palette.choices()) {
             ctx.permission(ChatColorPalette.permission(choice.name()), PermissionDefault.TRUE,
                     "Use the '" + choice.name() + "' chat colour");
@@ -192,6 +214,7 @@ public final class ChatModule implements AtriumModule, Listener {
         spam.clear();
         commandSpam.clear();
         history.clear();
+        snapshotRefs.clear();
         ctx.services().get(TabListService.class).ifPresent(tab -> {
             tab.clearNameTags("chat-prefix");
             tab.clearNameTags("chat-suffix");
@@ -200,7 +223,9 @@ public final class ChatModule implements AtriumModule, Listener {
 
     private void rebuild() {
         ChatConfig config = configHandle.get();
-        this.formatter = new ChatFormatter(ctx.messages(), config, this::renderToken);
+        ChatPapi current = papi == null ? new ChatPapi(ctx.logger()) : papi;
+        this.papi = current;
+        this.formatter = new ChatFormatter(ctx.messages(), config, this::renderToken, current);
         this.palette = ChatColorPalette.compile(config.chatColors, message -> ctx.logger().warn(message));
         this.emoji = EmojiReplacer.compile(config.emoji == null ? null : config.emoji.codes,
                 message -> ctx.logger().warn(message));
@@ -211,7 +236,7 @@ public final class ChatModule implements AtriumModule, Listener {
         this.tags = ChatTags.compile(config.tags, message -> ctx.logger().warn(message));
         this.sprites = config.sprites == null || config.sprites.entries == null
                 ? List.of() : List.copyOf(config.sprites.entries);
-        this.history = new ChatHistory(config.deleteButton == null ? 200 : config.deleteButton.historySize);
+        this.history.resize(config.deleteButton == null ? 200 : config.deleteButton.historySize);
         this.deleteHover = config.deleteButton == null || config.deleteButton.hover == null
                 ? Component.text("Delete") : ctx.messages().parseTrusted(config.deleteButton.hover);
         this.mentionSound = parseSound(config.mentions);
@@ -255,6 +280,31 @@ public final class ChatModule implements AtriumModule, Listener {
         if (current != null) {
             current.close();
         }
+    }
+
+    /** Deletes expired snapshots on enable and then once a minute, always on an async thread. */
+    private void startSnapshotCleanup() {
+        purgeSnapshots();
+        ctx.track(ctx.scheduler().asyncTimer(this::purgeSnapshots,
+                Duration.ofMillis(SNAPSHOT_PURGE_PERIOD_MILLIS),
+                Duration.ofMillis(SNAPSHOT_PURGE_PERIOD_MILLIS)));
+    }
+
+    private void purgeSnapshots() {
+        ChatSnapshotStore store = snapshots;
+        if (store == null) {
+            return;
+        }
+        store.purgeOlderThan(System.currentTimeMillis() - SNAPSHOT_TTL_MILLIS)
+                .thenAccept(removed -> {
+                    if (removed != null && removed > 0) {
+                        ctx.logger().debug("Removed {} expired chat snapshots", removed);
+                    }
+                })
+                .exceptionally(throwable -> {
+                    ctx.logger().warn("Could not purge expired chat snapshots", throwable);
+                    return null;
+                });
     }
 
     private ChatConfig config() {
@@ -401,11 +451,12 @@ public final class ChatModule implements AtriumModule, Listener {
             removeOutOfRange(event, sender, range);
         }
 
+        List<String> mentionNames = mentionNames(names);
         List<String> mentioned = config.mentions.enabled
-                ? MentionDetector.find(text, names, config.mentions.requireAtSign)
+                ? MentionDetector.find(text, mentionNames, config.mentions.requireAtSign)
                 : List.of();
-        Pattern mentionPattern = config.mentions.enabled && !names.isEmpty()
-                ? MentionDetector.pattern(names, config.mentions.requireAtSign)
+        Pattern mentionPattern = config.mentions.enabled && !mentionNames.isEmpty()
+                ? MentionDetector.pattern(mentionNames, config.mentions.requireAtSign)
                 : null;
         List<Player> mentionTargets = new ArrayList<>();
         for (Audience audience : event.viewers()) {
@@ -470,11 +521,21 @@ public final class ChatModule implements AtriumModule, Listener {
         if (isShadowMuted(senderId) || isMuted(senderId)) {
             return;
         }
-        String text = relayText(sender, event.originalMessage());
-        if (text == null || text.isBlank()) {
+        RelayLine relayed = relayLine(sender, event.originalMessage());
+        if (relayed == null || relayed.text().isBlank()) {
             return;
         }
-        current.publishGlobal(senderId, sender.getName(), text);
+        List<String> mentionNames = mentionNames(
+                ctx.users().online().stream().map(AtriumUser::name).toList());
+        Pattern mentionPattern = config.mentions.enabled && !mentionNames.isEmpty()
+                ? MentionDetector.pattern(mentionNames, config.mentions.requireAtSign)
+                : null;
+        Component line = formatter.format(sender, relayed.body(), mentionPattern,
+                worldNames.getOrDefault(senderId, "?"), tagPrefix(sender), tagSuffix(sender));
+        List<String> mentions = config.mentions.enabled
+                ? MentionDetector.find(relayed.text(), mentionNames, config.mentions.requireAtSign)
+                : List.of();
+        current.publishGlobal(senderId, sender.getName(), plain(relayed.body()), line, mentions);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -677,8 +738,8 @@ public final class ChatModule implements AtriumModule, Listener {
         return false;
     }
 
-    /** The final plain text a viewer would see, or {@code null} when the filter blocks it. */
-    private String relayText(Player sender, Component original) {
+    /** The filtered message body and its rendered component; {@code null} when the filter blocks it. */
+    private @Nullable RelayLine relayLine(Player sender, Component original) {
         String plain = plain(original);
         String expanded = applyEmoji(sender, plain);
         if (!sender.hasPermission("atrium.chat.filter.bypass")) {
@@ -697,8 +758,10 @@ public final class ChatModule implements AtriumModule, Listener {
         }
         Component message = formatter.playerMessage(sender, original, verdict.text(),
                 !verdict.text().equals(plain), chatColor(sender));
-        return plain(message);
+        return new RelayLine(verdict.text(), message);
     }
+
+    private record RelayLine(String text, Component body) {}
 
     private void removeIgnoredViewers(AsyncChatEvent event, UUID senderId) {
         event.viewers().removeIf(audience -> audience instanceof Player viewer
@@ -721,7 +784,88 @@ public final class ChatModule implements AtriumModule, Listener {
         if (token instanceof ChatTokens.Sprite sprite) {
             return renderSprite(sender, sprite);
         }
+        if (token instanceof ChatTokens.Showcase showcase) {
+            return Optional.of(renderShowcase(sender, showcase));
+        }
         return Optional.empty();
+    }
+
+    /**
+     * {@code [inv]} and {@code [ender]} become a clickable link to a database snapshot. The inventory itself
+     * is read on the sender's own thread; the database write is async, so a chat line is never blocked by
+     * storage. A second token of the same kind within ten seconds reuses the first snapshot.
+     */
+    private Component renderShowcase(Player sender, ChatTokens.Showcase token) {
+        ChatConfig.Showcase settings = config().showcase;
+        if (settings == null || !settings.enabled || !sender.hasPermission("atrium.chat.showcase")) {
+            return Component.text(token.raw());
+        }
+        boolean ender = "ender".equals(token.kind());
+        Optional<String> id = snapshotId(sender,
+                ender ? ChatSnapshotStore.KIND_ENDER : ChatSnapshotStore.KIND_INVENTORY);
+        if (id.isEmpty()) {
+            return Component.text(token.raw());
+        }
+        Component label = ctx.messages().render(sender,
+                ender ? "chat.showcase-ender" : "chat.showcase-inventory",
+                Msg.unparsed("name", sender.getName()));
+        Component hover = ctx.messages().render(sender, "chat.showcase-hover");
+        return label.clickEvent(ClickEvent.runCommand("/chatview " + id.get()))
+                .hoverEvent(HoverEvent.showText(hover));
+    }
+
+    private Optional<String> snapshotId(Player sender, String kind) {
+        String key = sender.getUniqueId() + "|" + kind;
+        long now = System.currentTimeMillis();
+        SnapshotRef previous = snapshotRefs.get(key);
+        if (previous != null && now - previous.createdAt() < SNAPSHOT_MIN_INTERVAL_MILLIS) {
+            return Optional.of(previous.id());
+        }
+        byte[] payload;
+        try {
+            payload = ctx.scheduler().supplyOnEntity(sender, () -> captureSnapshot(sender, kind))
+                    .get(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
+        } catch (Exception e) {
+            ctx.logger().warn("Cannot capture a chat snapshot for {}", sender.getName(), e);
+            return Optional.empty();
+        }
+        ChatSnapshotStore store = snapshots;
+        if (store == null || payload == null || payload.length == 0) {
+            return Optional.empty();
+        }
+        String id = newSnapshotId();
+        snapshotRefs.put(key, new SnapshotRef(id, now));
+        store.insert(id, sender.getUniqueId(), sender.getName(), kind, now, payload)
+                .exceptionally(throwable -> {
+                    ctx.logger().warn("Cannot store a chat snapshot for {}", sender.getName(), throwable);
+                    return null;
+                });
+        return Optional.of(id);
+    }
+
+    /** Player's own thread only. The 41 slots use the vanilla player-inventory order. */
+    private static byte[] captureSnapshot(Player player, String kind) {
+        if (ChatSnapshotStore.KIND_ENDER.equals(kind)) {
+            return ItemStack.serializeItemsAsBytes(player.getEnderChest().getContents());
+        }
+        ItemStack[] combined = new ItemStack[41];
+        ItemStack[] storage = player.getInventory().getStorageContents();
+        System.arraycopy(storage, 0, combined, 0, Math.min(storage.length, 36));
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        System.arraycopy(armor, 0, combined, 36, Math.min(armor.length, 4));
+        combined[40] = player.getInventory().getItemInOffHand();
+        return ItemStack.serializeItemsAsBytes(combined);
+    }
+
+    private static String newSnapshotId() {
+        char[] id = new char[ChatSnapshotStore.ID_CHARS];
+        for (int i = 0; i < id.length; i++) {
+            id[i] = SNAPSHOT_ALPHABET.charAt(SNAPSHOT_RANDOM.nextInt(SNAPSHOT_ALPHABET.length()));
+        }
+        return new String(id);
     }
 
     private Optional<Component> renderSprite(Player sender, ChatTokens.Sprite token) {
@@ -904,6 +1048,22 @@ public final class ChatModule implements AtriumModule, Listener {
         return names;
     }
 
+    /**
+     * Local recipients plus every name the proxy reports, so a mention of a player on another server is
+     * highlighted and travels with the relayed line.
+     */
+    private List<String> mentionNames(List<String> local) {
+        List<String> names = new ArrayList<>(local == null ? List.of() : local);
+        ctx.services().get(ProxyService.class).ifPresent(proxy -> {
+            for (NetworkPlayer candidate : proxy.networkPlayers()) {
+                if (candidate != null && CrossServerChat.validName(candidate.name())) {
+                    names.add(candidate.name());
+                }
+            }
+        });
+        return names;
+    }
+
     private boolean ignores(Player viewer, UUID senderId) {
         return cachedUser(viewer.getUniqueId()).ignores(senderId);
     }
@@ -1063,6 +1223,7 @@ public final class ChatModule implements AtriumModule, Listener {
         if (ads.blocked()) {
             ctx.messages().send(player, blockKey);
             notifyStaff(player, raw, List.of("ad"));
+            runFilterActions(player, raw, List.of("ad"), List.of());
             return null;
         }
         if (!ads.matches().isEmpty()) {
@@ -1085,6 +1246,30 @@ public final class ChatModule implements AtriumModule, Listener {
             runFilterActions(player, raw, verdict);
         }
         return verdict.text();
+    }
+
+    ChatConfig.Content contentSettings() {
+        ChatConfig.Content content = config().content;
+        return content == null ? new ChatConfig.Content() : content;
+    }
+
+    /** Entity/region event context only; never interprets player content as MiniMessage. */
+    @Nullable String filterContent(Player player, String raw) {
+        return filterText(player, raw, "chat.content-blocked");
+    }
+
+    /** Anvil previews may repeat on every keystroke: no alerts, actions or messages here. */
+    @Nullable String previewContent(Player player, String raw) {
+        if (player.hasPermission("atrium.chat.filter.bypass")) {
+            return raw;
+        }
+        AdFilter.Verdict ads = AdFilter.apply(raw, adSettings);
+        if (ads.blocked()) {
+            return null;
+        }
+        ChatFilter.Verdict verdict = ChatFilter.apply(ads.text(), filterRules, config().filter.replacement,
+                group -> player.hasPermission("atrium.chat.filter.bypass." + group));
+        return verdict.blocked() ? null : verdict.text();
     }
 
     // ---- private messages ----
@@ -1199,11 +1384,16 @@ public final class ChatModule implements AtriumModule, Listener {
                 ? formatter.playerMessage(player, Component.text(text), text, !text.equals(expanded), chatColor(player))
                 : Component.text(text);
         String plain = plain(message);
-        if (!current.publishPrivate(senderId, sender.getName(), targetName, plain)) {
+        List<String> mentionNames = mentionNames(
+                ctx.users().online().stream().map(AtriumUser::name).toList());
+        List<String> mentions = config().mentions.enabled
+                ? MentionDetector.find(text, mentionNames, config().mentions.requireAtSign)
+                : List.of();
+        if (!current.publishPrivate(senderId, sender.getName(), targetName, plain, message, mentions)) {
             ctx.messages().send(sender, "chat.cross-server-unavailable");
             return;
         }
-        ctx.messages().send(sender, "chat.msg-sent",
+        ctx.messages().send(sender, "chat.msg-queued-remote",
                 Msg.unparsed("target", targetName), Msg.component("message", message));
         if (player != null) {
             update(player, user -> user.withReplyTo(null, targetName));
@@ -1311,7 +1501,7 @@ public final class ChatModule implements AtriumModule, Listener {
         ChatRelay current = relay;
         if (current != null && config.crossServer != null && config.crossServer.staffChat) {
             UUID id = player == null ? CONSOLE_SENDER : player.getUniqueId();
-            current.publishStaff(id, sender.getName(), finalText);
+            current.publishStaff(id, sender.getName(), finalText, message);
         }
     }
 
@@ -1373,8 +1563,9 @@ public final class ChatModule implements AtriumModule, Listener {
     }
 
     private void deliverRemoteGlobal(ProxyMessage message, CrossServerChat.Payload payload) {
-        Component body = Component.text(payload.text());
-        String server = CrossServerChat.serverLabel(message.server());
+        String server = remoteServer(message, payload);
+        Component body = payload.line() != null ? payload.line() : Component.text(payload.text());
+        boolean rendered = payload.line() != null;
         for (AtriumUser user : ctx.users().online()) {
             Optional<Player> viewer = user.player();
             if (viewer.isEmpty() || user.uuid().equals(payload.sender())) {
@@ -1383,21 +1574,26 @@ public final class ChatModule implements AtriumModule, Listener {
             if (cachedUser(user.uuid()).ignores(payload.sender())) {
                 continue;
             }
-            ctx.messages().send(viewer.get(), "chat.cross-server-format",
-                    Msg.unparsed("server", server),
-                    Msg.unparsed("player", payload.senderName()),
-                    Msg.component("message", body));
+            if (rendered) {
+                viewer.get().sendMessage(serverBadge(server).append(body));
+            } else {
+                ctx.messages().send(viewer.get(), "chat.cross-server-format",
+                        Msg.unparsed("server", server),
+                        Msg.unparsed("player", payload.senderName()),
+                        Msg.component("message", body));
+            }
         }
+        notifyRemoteMentions(payload, server);
     }
 
     private void deliverRemoteStaff(ProxyMessage message, CrossServerChat.Payload payload) {
-        String server = CrossServerChat.serverLabel(message.server());
+        String server = remoteServer(message, payload);
         StaffChatEvent event = new StaffChatEvent(payload.sender(), payload.senderName(), payload.text(),
                 server, true);
         if (fireStaffChat(event)) {
             return;
         }
-        Component body = Component.text(payload.text());
+        Component body = payload.line() != null ? payload.line() : Component.text(payload.text());
         for (AtriumUser user : ctx.users().online()) {
             Optional<Player> viewer = user.player();
             if (viewer.isEmpty() || !viewer.get().hasPermission("atrium.chat.staff")) {
@@ -1419,10 +1615,52 @@ public final class ChatModule implements AtriumModule, Listener {
         if (targetUser.ignores(payload.sender()) || !targetUser.messagesEnabled()) {
             return;
         }
-        Component body = Component.text(payload.text());
+        Component body = payload.line() != null ? payload.line() : Component.text(payload.text());
         ctx.messages().send(target, "chat.msg-received",
                 Msg.unparsed("sender", payload.senderName()), Msg.component("message", body));
         update(target, user -> user.withReplyTo(payload.sender(), payload.senderName()));
+        notifyRemoteMentions(payload, payload.server().isBlank() ? "unknown" : payload.server());
+    }
+
+    /** v2 carries the origin label; v1 falls back to the authenticated envelope. */
+    private static String remoteServer(ProxyMessage message, CrossServerChat.Payload payload) {
+        return payload.server().isBlank() ? CrossServerChat.serverLabel(message.server()) : payload.server();
+    }
+
+    private Component serverBadge(String server) {
+        ChatConfig.CrossServer settings = config().crossServer;
+        String template = settings == null || settings.serverBadge == null
+                ? "<dark_gray>[<server>]</dark_gray> " : settings.serverBadge;
+        if (template.isEmpty()) {
+            return Component.empty();
+        }
+        return ctx.messages().parseTrusted(template, Msg.unparsed("server", server));
+    }
+
+    /**
+     * A mention on another server still plays the mention sound and shows an action bar here. Runs from the
+     * async proxy thread, so every player interaction is scheduled on that player's own thread.
+     */
+    private void notifyRemoteMentions(CrossServerChat.Payload payload, String server) {
+        ChatConfig config = config();
+        if (config.mentions == null || !config.mentions.enabled || payload.mentions().isEmpty()) {
+            return;
+        }
+        for (String name : payload.mentions()) {
+            Player target = findOnline(name);
+            if (target == null) {
+                continue;
+            }
+            ctx.scheduler().entity(target, () -> {
+                if (!target.isOnline()) {
+                    return;
+                }
+                playMentionSound(target);
+                ctx.messages().actionBar(target, "chat.mention-remote",
+                        Msg.unparsed("player", payload.senderName()),
+                        Msg.unparsed("server", server));
+            }, null);
+        }
     }
 
     // ---- /me, /broadcast, /clearchat ----
@@ -1458,11 +1696,12 @@ public final class ChatModule implements AtriumModule, Listener {
             recipients.add(player.get());
         }
         List<String> names = recipients.stream().map(Player::getName).toList();
+        List<String> mentionNames = mentionNames(names);
         List<String> mentioned = config.mentions.enabled
-                ? MentionDetector.find(text, names, config.mentions.requireAtSign)
+                ? MentionDetector.find(text, mentionNames, config.mentions.requireAtSign)
                 : List.of();
-        Pattern mentionPattern = config.mentions.enabled && !names.isEmpty()
-                ? MentionDetector.pattern(names, config.mentions.requireAtSign)
+        Pattern mentionPattern = config.mentions.enabled && !mentionNames.isEmpty()
+                ? MentionDetector.pattern(mentionNames, config.mentions.requireAtSign)
                 : null;
         Component message = formatter.playerMessage(sender, Component.text(text), text, !text.equals(expanded),
                 chatColor(sender));
@@ -1915,8 +2154,63 @@ public final class ChatModule implements AtriumModule, Listener {
         }
         boolean enabled = !user(player).rangeSpy();
         update(player, user -> user.withRangeSpy(enabled));
-        ctx.messages().send(player, enabled ? "chat.rangespy-on" : "chat.rangespy-off");
+        saveThen(player, enabled ? "chat.rangespy-on" : "chat.rangespy-off");
         return Cmds.OK;
+    }
+
+    /** Loads a shared [inv]/[ender] snapshot and opens it as a read-only menu on the viewer's thread. */
+    int chatView(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        Player viewer = cmds.player(context.getSource());
+        String id = StringArgumentType.getString(context, "id").trim();
+        ChatSnapshotStore store = snapshots;
+        if (store == null || !SNAPSHOT_ID.matcher(id).matches()) {
+            ctx.messages().send(viewer, "chat.view-unknown");
+            return Cmds.OK;
+        }
+        long cutoff = System.currentTimeMillis() - SNAPSHOT_TTL_MILLIS;
+        store.load(id, cutoff).whenComplete((found, error) -> {
+            if (error != null) {
+                ctx.logger().warn("Cannot load the chat snapshot {}", id, error);
+                onSender(viewer, () -> ctx.messages().send(viewer, "chat.view-failed"));
+                return;
+            }
+            if (found == null || found.isEmpty()) {
+                onSender(viewer, () -> ctx.messages().send(viewer, "chat.view-unknown"));
+                return;
+            }
+            ChatSnapshotStore.Snapshot snapshot = found.get();
+            ctx.scheduler().entity(viewer, () -> openSnapshot(viewer, snapshot), null);
+        });
+        return Cmds.OK;
+    }
+
+    private void openSnapshot(Player viewer, ChatSnapshotStore.Snapshot snapshot) {
+        if (!viewer.isOnline()) {
+            return;
+        }
+        ItemStack[] items;
+        try {
+            items = ItemStack.deserializeItemsFromBytes(snapshot.payload());
+        } catch (RuntimeException e) {
+            ctx.logger().warn("Cannot decode the chat snapshot {}", snapshot.id(), e);
+            ctx.messages().send(viewer, "chat.view-failed");
+            return;
+        }
+        boolean ender = ChatSnapshotStore.KIND_ENDER.equals(snapshot.kind());
+        int slots = Math.min(items.length, ender ? 27 : 41);
+        int rows = Math.max(1, (int) Math.ceil(slots / 9.0));
+        String owner = snapshot.ownerName() == null || snapshot.ownerName().isBlank() ? "?" : snapshot.ownerName();
+        Component title = ctx.messages().render(viewer,
+                ender ? "chat.view-title-ender" : "chat.view-title-inventory",
+                Msg.unparsed("name", owner));
+        Menu.Builder menu = Menu.builder(title, rows).filler(false);
+        for (int i = 0; i < slots; i++) {
+            ItemStack stack = items[i];
+            if (stack != null && !stack.isEmpty()) {
+                menu.item(i, stack);
+            }
+        }
+        ctx.menus().open(viewer, menu.build());
     }
 
     int deleteMessage(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -2078,7 +2372,7 @@ public final class ChatModule implements AtriumModule, Listener {
         }
         boolean ignored = user(sender).ignores(targetId);
         update(sender, user -> user.withIgnored(targetId, !ignored));
-        ctx.messages().send(sender, ignored ? "chat.ignore-removed" : "chat.ignore-added",
+        saveThen(sender, ignored ? "chat.ignore-removed" : "chat.ignore-added",
                 Msg.unparsed("player", targetName));
     }
 
@@ -2086,7 +2380,7 @@ public final class ChatModule implements AtriumModule, Listener {
         Player player = cmds.player(context.getSource());
         boolean enabled = !user(player).messagesEnabled();
         update(player, user -> user.withMessagesEnabled(enabled));
-        ctx.messages().send(player, enabled ? "chat.msgtoggle-on" : "chat.msgtoggle-off");
+        saveThen(player, enabled ? "chat.msgtoggle-on" : "chat.msgtoggle-off");
         return Cmds.OK;
     }
 
@@ -2094,7 +2388,7 @@ public final class ChatModule implements AtriumModule, Listener {
         Player player = cmds.player(context.getSource());
         boolean enabled = !user(player).socialSpy();
         update(player, user -> user.withSocialSpy(enabled));
-        ctx.messages().send(player, enabled ? "chat.socialspy-on" : "chat.socialspy-off");
+        saveThen(player, enabled ? "chat.socialspy-on" : "chat.socialspy-off");
         return Cmds.OK;
     }
 
@@ -2102,7 +2396,7 @@ public final class ChatModule implements AtriumModule, Listener {
         Player player = cmds.player(context.getSource());
         boolean enabled = !user(player).staffChat();
         update(player, user -> user.withStaffChat(enabled));
-        ctx.messages().send(player, enabled ? "chat.staff-on" : "chat.staff-off");
+        saveThen(player, enabled ? "chat.staff-on" : "chat.staff-off");
         return Cmds.OK;
     }
 
@@ -2226,7 +2520,7 @@ public final class ChatModule implements AtriumModule, Listener {
                 .exceptionally(throwable -> {
                     ctx.logger().warn("Could not save the chat settings of {}", player.getName(), throwable);
                     ctx.scheduler().entity(player,
-                            () -> ctx.messages().send(player, "chat.chatcolor-save-failed"), null);
+                            () -> ctx.messages().send(player, "chat.save-failed"), null);
                     return null;
                 });
     }

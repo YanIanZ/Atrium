@@ -47,10 +47,22 @@ final class StaffManager {
     private final @Nullable VanishService vanish;
     private final @Nullable FlightService flight;
     private final @Nullable PunishmentService punishments;
+    /**
+     * Backend identity frozen when the manager was created (validated by the module). Never read
+     * from the config again: a reload cannot null it out or reassign the origin of live rows.
+     */
+    private final String serverId;
     private final Set<UUID> active = ConcurrentHashMap.newKeySet();
     private final Set<UUID> busy = ConcurrentHashMap.newKeySet();
+    /**
+     * Players whose restore may have changed the inventory. They are not in staff mode, but the
+     * inventory stays locked until the held row is applied or discarded by an operator.
+     */
+    private final Set<UUID> held = ConcurrentHashMap.newKeySet();
     /** Rows confirmed RESTORING whose inventory task has not started yet. Claimed by the task or by disable. */
-    private final Set<UUID> pendingApply = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, StaffStore.Stored> pendingApply = new ConcurrentHashMap<>();
+    /** Reviewed rows were already uncertain before this attempt; disable must never reactivate them. */
+    private final Set<UUID> reviewedRestores = ConcurrentHashMap.newKeySet();
     /** Snapshots that exist only in memory: the inventory was cleared but storing failed and the player left. */
     private final Map<UUID, StaffSnapshot> orphans = new ConcurrentHashMap<>();
     /** Set when the module is being disabled: from then on nothing is scheduled, state is only persisted. */
@@ -64,6 +76,7 @@ final class StaffManager {
         this.vanish = ctx.services().get(VanishService.class).orElse(null);
         this.flight = ctx.services().get(FlightService.class).orElse(null);
         this.punishments = ctx.services().get(PunishmentService.class).orElse(null);
+        this.serverId = config.get().serverId;
     }
 
     boolean isActive(UUID uuid) {
@@ -74,10 +87,10 @@ final class StaffManager {
         return isActive(player.getUniqueId());
     }
 
-    /** In staff mode or in the middle of entering/leaving it: the inventory must not change. */
+    /** In staff mode, in the middle of entering/leaving it, or holding a partial restore. */
     boolean isLocked(Player player) {
         UUID uuid = player.getUniqueId();
-        return active.contains(uuid) || busy.contains(uuid);
+        return active.contains(uuid) || busy.contains(uuid) || held.contains(uuid);
     }
 
     // ---- staff mode ----
@@ -269,6 +282,12 @@ final class StaffManager {
                 }, () -> busy.remove(uuid));
                 return;
             }
+            if (!StaffRestorePolicy.originAllowed(serverId, stored.origin())) {
+                busy.remove(uuid);
+                reply(sender, "staff.snapshot-foreign",
+                        Msg.unparsed("origin", StaffRestorePolicy.displayOrigin(stored.origin())));
+                return;
+            }
             if (stored.corrupt() || stored.state() != SnapshotLifecycle.State.ACTIVE) {
                 busy.remove(uuid);
                 ctx.logger().error("The staff snapshot of {} is {}; staff mode stays on until it is reviewed with"
@@ -276,7 +295,7 @@ final class StaffManager {
                 reply(sender, "staff.recover-held", Msg.unparsed("player", player.getName()));
                 return;
             }
-            store.transition(uuid, SnapshotLifecycle.State.ACTIVE, SnapshotLifecycle.State.RESTORING)
+            store.transition(uuid, stored, SnapshotLifecycle.State.ACTIVE, SnapshotLifecycle.State.RESTORING)
                     .whenComplete((marked, markError) -> {
                         if (markError != null || !Boolean.TRUE.equals(marked)) {
                             busy.remove(uuid);
@@ -285,67 +304,145 @@ final class StaffManager {
                             reply(sender, "staff.restore-failed", Msg.unparsed("player", player.getName()));
                             return;
                         }
-                        applyRestore(player, stored.snapshot(), sender, announce, false);
+                        applyRestore(player, stored, sender, announce, false);
                     });
         });
     }
 
     /**
-     * The row is RESTORING (confirmed). Applies it on the player's thread and deletes the row afterwards.
-     * If the task never runs (player left, module disabled) the inventory was not touched, so the row is
-     * put back to ACTIVE and restored on the next join.
+     * The row is RESTORING (confirmed). Applies it on the player's thread and deletes the row
+     * afterwards. Ownership ({@code pendingApply}) is kept through the teleport and only released
+     * the moment the inventory may change, so a disable in between still reverts the untouched row
+     * to ACTIVE instead of stranding it.
      */
-    private void applyRestore(Player player, StaffSnapshot snapshot, @Nullable CommandSender sender,
+    private void applyRestore(Player player, StaffStore.Stored stored, @Nullable CommandSender sender,
             boolean announce, boolean onJoin) {
         UUID uuid = player.getUniqueId();
-        pendingApply.add(uuid);
+        pendingApply.put(uuid, stored);
         runOn(player, () -> {
-            if (!pendingApply.remove(uuid)) {
-                busy.remove(uuid); // disable already reverted the row to ACTIVE
+            if (!stored.equals(pendingApply.get(uuid))) {
+                busy.remove(uuid);
                 return;
             }
-            ExtraItemsMode mode = SnapshotLifecycle.restoreMode(config.get().extraItemsOnExit, onJoin,
-                    tools.holdsStaffTool(player));
-            if (!applySnapshot(player, snapshot, mode, sender)) {
-                active.remove(uuid);
-                busy.remove(uuid);
-                reply(sender, "staff.restore-failed", Msg.unparsed("player", player.getName()));
-                ctx.messages().send(player, "staff.recover-held-self");
-                notifyReviewers(player.getName());
-                return;
-            }
-            active.remove(uuid);
-            store.finish(uuid).whenComplete((deleted, deleteError) -> {
-                busy.remove(uuid);
-                if (deleteError != null || !Boolean.TRUE.equals(deleted)) {
-                    // Safe: a RESTORING row is never applied again blindly; the next join compares it.
-                    ctx.logger().error("Deleting the restored staff snapshot of {} failed; the row stays RESTORING"
-                            + " and is verified on the next join", player.getName(), deleteError);
-                } else {
-                    ctx.logger().info("{} left staff mode", player.getName());
-                }
-                if (onJoin) {
-                    tell(player, "staff.restored-on-join");
-                } else if (announce) {
-                    tell(player, "staff.mode-disabled");
-                    if (sender != null && !player.equals(sender)) {
-                        reply(sender, "staff.mode-disabled-other", Msg.unparsed("player", player.getName()));
-                    }
-                }
-            });
+            applySnapshot(player, stored, config.get().extraItemsOnExit, sender, onJoin)
+                    .whenComplete((outcome, applyError) -> {
+                        StaffRestorePolicy.RestoreOutcome result = outcome;
+                        if (applyError != null) {
+                            result = unwrap(applyError) instanceof Scheduler.EntityRetiredException
+                                    ? StaffRestorePolicy.RestoreOutcome.NOT_APPLIED
+                                    : StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                        }
+                        if (result == null) {
+                            result = StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                        }
+                        switch (result) {
+                            case APPLIED -> {
+                                active.remove(uuid);
+                                held.add(uuid);
+                                store.finish(uuid, stored).whenComplete((deleted, deleteError) -> {
+                                    busy.remove(uuid);
+                                    if (deleteError != null || !Boolean.TRUE.equals(deleted)) {
+                                        ctx.logger().error(
+                                                "Archiving/finishing the staff snapshot failed for {}; row retained",
+                                                player.getName(), deleteError);
+                                        tell(player, "staff.delete-failed", Msg.unparsed("player", player.getName()));
+                                        return;
+                                    }
+                                    held.remove(uuid);
+                                    ctx.logger().info("{} left staff mode", player.getName());
+                                    if (onJoin) tell(player, "staff.restored-on-join");
+                                    else if (announce) {
+                                        tell(player, "staff.mode-disabled");
+                                        if (sender != null && !player.equals(sender)) reply(sender,
+                                                "staff.mode-disabled-other",
+                                                Msg.unparsed("player", player.getName()));
+                                    }
+                                });
+                            }
+                            case NOT_APPLIED -> handleNotApplied(uuid, player, stored, sender, onJoin);
+                            case PARTIAL -> handlePartial(uuid, player, sender, onJoin);
+                        }
+                    });
         }, () -> {
-            if (pendingApply.remove(uuid)) {
-                revertToActive(uuid, player.getName());
-            } else {
-                busy.remove(uuid);
-            }
+            if (pendingApply.remove(uuid, stored)) revertToActive(uuid, player.getName(), stored);
+            else busy.remove(uuid);
         });
     }
 
+    /**
+     * Pre-apply failure: the inventory was provably not touched (teleport failed, the entity was
+     * retired, the token changed, the world is missing), so one exact-token CAS back to ACTIVE is
+     * safe and the row is not stranded as RESTORING. A single attempt only: no retries, no timers.
+     */
+    private void handleNotApplied(UUID uuid, Player context, StaffStore.Stored stored,
+            @Nullable CommandSender sender, boolean onJoin) {
+        pendingApply.remove(uuid, stored);
+        if (onJoin) held.add(uuid);
+        String name = context.getName();
+        if (closing) {
+            try {
+                if (Boolean.TRUE.equals(store.transition(uuid, stored,
+                        SnapshotLifecycle.State.RESTORING, SnapshotLifecycle.State.ACTIVE).get(5, TimeUnit.SECONDS))) {
+                    ctx.logger().info("Staff restore of {} did not reach the inventory; row reverted to ACTIVE",
+                            name);
+                } else {
+                    ctx.logger().warn("Staff restore of {} did not reach the inventory but the row changed;"
+                            + " it is reviewed on the next join", name);
+                }
+            } catch (Exception e) {
+                ctx.logger().error("Reverting the staff snapshot of {} to ACTIVE failed; it is reviewed on the next"
+                        + " join", name, e);
+            }
+            busy.remove(uuid);
+            return;
+        }
+        store.transition(uuid, stored, SnapshotLifecycle.State.RESTORING, SnapshotLifecycle.State.ACTIVE)
+                .whenComplete((ok, error) -> {
+                    if (error != null || !Boolean.TRUE.equals(ok)) {
+                        busy.remove(uuid);
+                        ctx.logger().error("Reverting the staff snapshot of {} to ACTIVE failed; the row stays"
+                                + " RESTORING for the next join", name, error);
+                        notifyReviewers(name);
+                        return;
+                    }
+                    if (!onJoin) {
+                        busy.remove(uuid);
+                        ctx.logger().info("Staff restore of {} did not reach the inventory; staff mode stays on",
+                                name);
+                        reply(sender, "staff.restore-failed", Msg.unparsed("player", name));
+                        return;
+                    }
+                    busy.remove(uuid);
+                    // The same session with a persistent failure must not spin: only a session that
+                    // rejoined meanwhile is retried now, anything else waits for the next join.
+                    Player again = Bukkit.getPlayer(uuid);
+                    if (again != null && again != context && !isActive(uuid)) {
+                        restoreOnJoin(again);
+                    }
+                });
+    }
+
+    /**
+     * The inventory may have been changed: never revert, never unlock. Move to the held lock so an
+     * operator can use reviewed recovery without treating the damaged state as a live staff kit. The row stays
+     * RESTORING for {@code /staffmode recover}.
+     */
+    private void handlePartial(UUID uuid, Player player, @Nullable CommandSender sender, boolean onJoin) {
+        pendingApply.remove(uuid);
+        active.remove(uuid);
+        held.add(uuid);
+        busy.remove(uuid);
+        ctx.logger().error("Staff restore of {} may have reached the inventory; the row is kept as RESTORING"
+                + " for /staffmode recover", player.getName());
+        reply(sender, "staff.restore-failed", Msg.unparsed("player", player.getName()));
+        tell(player, "staff.recover-held-self");
+        notifyReviewers(player.getName());
+    }
+
     /** RESTORING → ACTIVE for a restore whose inventory task never ran. Releases busy when done. */
-    private void revertToActive(UUID uuid, String name) {
+    private void revertToActive(UUID uuid, String name, StaffStore.Stored stored) {
         CompletableFuture<Boolean> reverted =
-                store.transition(uuid, SnapshotLifecycle.State.RESTORING, SnapshotLifecycle.State.ACTIVE);
+                store.transition(uuid, stored, SnapshotLifecycle.State.RESTORING, SnapshotLifecycle.State.ACTIVE);
         if (closing) {
             try {
                 reverted.get(5, TimeUnit.SECONDS);
@@ -378,10 +475,92 @@ final class StaffManager {
     }
 
     /**
-     * Applies a snapshot on the player's own thread. Returns false (and logs) when it failed part way; the
-     * row then stays RESTORING for manual review.
+     * Restores a snapshot with an exact outcome. The teleport future alone proves nothing about the
+     * inventory: after it completes the row is reloaded and the token plus creation time are checked
+     * again, and the merge proof (staff tools still held) is read at the destination, on the
+     * entity's thread, just before anything is applied. Never merges an unrelated destination
+     * profile inventory, never replays a row automatically, never deletes anything here.
      */
-    private boolean applySnapshot(Player player, StaffSnapshot snapshot, ExtraItemsMode mode,
+    private CompletableFuture<StaffRestorePolicy.RestoreOutcome> applySnapshot(Player player,
+            StaffStore.Stored stored, ExtraItemsMode configuredMode, @Nullable CommandSender actor, boolean onJoin) {
+        UUID uuid = player.getUniqueId();
+        StaffSnapshot snapshot = stored.snapshot();
+        // Profile/world attachment can replace inventory during a teleport. Complete the move before
+        // applying any items, and retain the row until the final entity-owned restore has succeeded.
+        Location location = StaffSnapshots.location(snapshot);
+        if (closing || !player.isOnline() || location == null) {
+            if (location == null) tell(player, "staff.world-missing");
+            return CompletableFuture.completedFuture(StaffRestorePolicy.RestoreOutcome.NOT_APPLIED);
+        }
+        CompletableFuture<Boolean> moved;
+        try {
+            moved = player.teleportAsync(location, PlayerTeleportEvent.TeleportCause.PLUGIN);
+        } catch (RuntimeException error) {
+            ctx.logger().warn("Staff restore teleport of {} failed before the inventory was touched",
+                    player.getName(), error);
+            return CompletableFuture.completedFuture(StaffRestorePolicy.RestoreOutcome.NOT_APPLIED);
+        }
+        return moved.thenCompose(ok -> {
+            if (!Boolean.TRUE.equals(ok) || closing) {
+                return CompletableFuture.completedFuture(StaffRestorePolicy.RestoreOutcome.NOT_APPLIED);
+            }
+            return store.load(player.getUniqueId()).thenCompose(current -> {
+                if (current == null || current.state() != SnapshotLifecycle.State.RESTORING
+                        || !current.token().equals(stored.token()) || current.created() != stored.created()) {
+                    ctx.logger().warn("Staff snapshot of {} changed during teleport; inventory was not touched",
+                            player.getName());
+                    return CompletableFuture.completedFuture(StaffRestorePolicy.RestoreOutcome.NOT_APPLIED);
+                }
+                CompletableFuture<StaffRestorePolicy.RestoreOutcome> applied;
+                try {
+                    applied = ctx.scheduler().supplyOnEntity(player, () -> {
+                        // Ownership is released only here, the first moment the inventory may change,
+                        // so a disable during the teleport still reverts the untouched row to ACTIVE.
+                        if (!pendingApply.remove(uuid, stored)) {
+                            return StaffRestorePolicy.RestoreOutcome.NOT_APPLIED;
+                        }
+                        if (closing || !player.isOnline()) {
+                            return StaffRestorePolicy.RestoreOutcome.NOT_APPLIED;
+                        }
+                        ExtraItemsMode mode = StaffRestorePolicy.restoreMode(configuredMode, onJoin,
+                                tools.holdsStaffTool(player));
+                        boolean done;
+                        try {
+                            done = applySnapshotHere(player, snapshot, mode, actor);
+                        } catch (RuntimeException e) {
+                            ctx.logger().error("Restoring the staff snapshot of {} failed part way; the row is"
+                                    + " kept as RESTORING for /staffmode recover", player.getName(), e);
+                            return StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                        }
+                        return done ? StaffRestorePolicy.RestoreOutcome.APPLIED
+                                : StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                    });
+                } catch (RuntimeException e) {
+                    ctx.logger().warn("Scheduling the staff restore of {} failed before the inventory was touched",
+                            player.getName(), e);
+                    return CompletableFuture.completedFuture(StaffRestorePolicy.RestoreOutcome.NOT_APPLIED);
+                }
+                return applied.handle((result, error) -> {
+                    if (error != null) {
+                        return unwrap(error) instanceof Scheduler.EntityRetiredException
+                                ? StaffRestorePolicy.RestoreOutcome.NOT_APPLIED
+                                : StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                    }
+                    return result == null ? StaffRestorePolicy.RestoreOutcome.PARTIAL : result;
+                });
+            }).exceptionally(error -> {
+                ctx.logger().warn("Reloading the staff snapshot of {} after teleport failed; inventory was not"
+                        + " touched", player.getName(), error);
+                return StaffRestorePolicy.RestoreOutcome.NOT_APPLIED;
+            });
+        }).exceptionally(error -> {
+            ctx.logger().warn("Staff restore teleport of {} failed before the inventory was touched",
+                    player.getName(), error);
+            return StaffRestorePolicy.RestoreOutcome.NOT_APPLIED;
+        });
+    }
+
+    private boolean applySnapshotHere(Player player, StaffSnapshot snapshot, ExtraItemsMode mode,
             @Nullable CommandSender actor) {
         try {
             ctx.menus().close(player);
@@ -426,19 +605,6 @@ final class StaffManager {
                 });
             }
 
-            Location location = StaffSnapshots.location(snapshot);
-            if (location == null) {
-                ctx.messages().send(player, "staff.world-missing");
-            } else {
-                player.teleportAsync(location, PlayerTeleportEvent.TeleportCause.PLUGIN)
-                        .whenComplete((moved, error) -> {
-                            if (error != null || !Boolean.TRUE.equals(moved)) {
-                                ctx.logger().warn("Teleporting {} back after staff mode failed", player.getName(),
-                                        error);
-                                tell(player, "staff.restore-teleport-failed");
-                            }
-                        });
-            }
             dropLeftovers(player, leftovers);
             return true;
         } catch (RuntimeException e) {
@@ -503,7 +669,14 @@ final class StaffManager {
                 return;
             }
             if (stored == null) {
+                held.remove(uuid);
                 busy.remove(uuid);
+                return;
+            }
+            if (!StaffRestorePolicy.originAllowed(serverId, stored.origin())) {
+                busy.remove(uuid);
+                tell(player, "staff.snapshot-foreign",
+                        Msg.unparsed("origin", StaffRestorePolicy.displayOrigin(stored.origin())));
                 return;
             }
             if (stored.corrupt()) {
@@ -511,7 +684,7 @@ final class StaffManager {
                 return;
             }
             if (stored.state() == SnapshotLifecycle.State.ACTIVE) {
-                store.transition(uuid, SnapshotLifecycle.State.ACTIVE, SnapshotLifecycle.State.RESTORING)
+                store.transition(uuid, stored, SnapshotLifecycle.State.ACTIVE, SnapshotLifecycle.State.RESTORING)
                         .whenComplete((marked, markError) -> {
                             if (markError != null || !Boolean.TRUE.equals(marked)) {
                                 busy.remove(uuid);
@@ -519,7 +692,7 @@ final class StaffManager {
                                         + " tried again on the next join", player.getName(), markError);
                                 return;
                             }
-                            applyRestore(player, stored.snapshot(), null, false, true);
+                            applyRestore(player, stored, null, false, true);
                         });
                 return;
             }
@@ -527,7 +700,7 @@ final class StaffManager {
             runOn(player, () -> {
                 boolean equal = StaffSnapshots.inventoryEquals(player, stored.snapshot());
                 switch (SnapshotLifecycle.onJoin(stored.state(), false, equal)) {
-                    case MARK_RESTORED -> store.finish(uuid).whenComplete((deleted, deleteError) -> {
+                    case MARK_RESTORED -> store.finish(uuid, stored).whenComplete((deleted, deleteError) -> {
                         busy.remove(uuid);
                         if (deleteError != null) {
                             ctx.logger().error("Deleting the already restored staff snapshot of {} failed",
@@ -544,6 +717,7 @@ final class StaffManager {
     }
 
     private void holdForReview(Player player) {
+        held.add(player.getUniqueId());
         busy.remove(player.getUniqueId());
         ctx.logger().warn("The staff snapshot of {} needs a manual review: /staffmode recover {} list",
                 player.getName(), player.getName());
@@ -615,33 +789,70 @@ final class StaffManager {
             reply(sender, "staff.recover-apply-refused", Msg.unparsed("player", name));
             return;
         }
+        // Manual recovery obeys the same backend guard: a foreign or legacy row is preserved and the
+        // operator is told to review it. There is no automatic adoption here.
+        if (!StaffRestorePolicy.originAllowed(serverId, stored.origin())) {
+            reply(sender, "staff.snapshot-foreign",
+                    Msg.unparsed("origin", StaffRestorePolicy.displayOrigin(stored.origin())));
+            return;
+        }
         if (closing || !busy.add(uuid)) {
             reply(sender, "staff.busy");
             return;
         }
-        runOn(target, () -> {
-            // Reviewed by staff: the snapshot replaces the current inventory, nothing is merged (no duplicates).
-            if (!applySnapshot(target, stored.snapshot(), ExtraItemsMode.CLEAR, sender)) {
-                busy.remove(uuid);
-                reply(sender, "staff.recover-failed");
-                return;
-            }
-            ctx.logger().warn("{} applied the held staff snapshot of {}", sender.getName(), name);
-            store.finish(uuid).whenComplete((deleted, deleteError) -> {
-                busy.remove(uuid);
-                if (deleteError != null || !Boolean.TRUE.equals(deleted)) {
-                    ctx.logger().error("Deleting the applied staff snapshot of {} failed; it stays held", name,
-                            deleteError);
-                    reply(sender, "staff.delete-failed", Msg.unparsed("player", name));
-                    return;
-                }
-                tell(target, "staff.restored-on-join");
-                reply(sender, "staff.recover-applied", Msg.unparsed("player", name));
-            });
-        }, () -> {
-            busy.remove(uuid);
-            reply(sender, "staff.player-gone", Msg.unparsed("player", name));
-        });
+        reviewedRestores.add(uuid);
+        pendingApply.put(uuid, stored);
+        runOn(target, () -> applySnapshot(target, stored, ExtraItemsMode.CLEAR, sender, false)
+                .whenComplete((outcome, applyError) -> {
+                    pendingApply.remove(uuid, stored);
+                    reviewedRestores.remove(uuid);
+                    StaffRestorePolicy.RestoreOutcome result = outcome;
+                    if (applyError != null) {
+                        result = unwrap(applyError) instanceof Scheduler.EntityRetiredException
+                                ? StaffRestorePolicy.RestoreOutcome.NOT_APPLIED
+                                : StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                    }
+                    if (result == null) {
+                        result = StaffRestorePolicy.RestoreOutcome.PARTIAL;
+                    }
+                    switch (result) {
+                        case APPLIED -> {
+                            held.add(uuid);
+                            store.finish(uuid, stored).whenComplete((deleted, deleteError) -> {
+                                busy.remove(uuid);
+                                if (deleteError != null || !Boolean.TRUE.equals(deleted)) {
+                                    ctx.logger().error("Archiving the reviewed staff snapshot failed for {}", name,
+                                            deleteError);
+                                    reply(sender, "staff.delete-failed", Msg.unparsed("player", name));
+                                    return;
+                                }
+                                held.remove(uuid);
+                                tell(target, "staff.restored-on-join");
+                                reply(sender, "staff.recover-applied", Msg.unparsed("player", name));
+                            });
+                        }
+                        case NOT_APPLIED -> {
+                            // This row was already held before the reviewed attempt. Its prior application
+                            // is uncertain, so a failed new attempt must never make it auto-replayable.
+                            pendingApply.remove(uuid, stored);
+                            held.add(uuid);
+                            busy.remove(uuid);
+                            reply(sender, "staff.recover-failed");
+                        }
+                        case PARTIAL -> {
+                            held.add(uuid);
+                            busy.remove(uuid);
+                            ctx.logger().warn("Reviewed staff restore failed for {}; snapshot retained", name,
+                                    applyError);
+                            reply(sender, "staff.recover-failed");
+                        }
+                    }
+                }), () -> {
+                    pendingApply.remove(uuid, stored);
+                    reviewedRestores.remove(uuid);
+                    busy.remove(uuid);
+                    reply(sender, "staff.player-gone", Msg.unparsed("player", name));
+                });
     }
 
     private void recoverDiscard(CommandSender sender, UUID uuid, String name, StaffStore.Stored stored) {
@@ -649,12 +860,25 @@ final class StaffManager {
             reply(sender, "staff.recover-discard-refused", Msg.unparsed("player", name));
             return;
         }
-        store.finish(uuid).whenComplete((deleted, error) -> {
+        // Discarding a foreign or legacy row would destroy another backend's (or an unadopted)
+        // recovery copy: refuse and preserve it instead.
+        if (!StaffRestorePolicy.originAllowed(serverId, stored.origin())) {
+            reply(sender, "staff.snapshot-foreign",
+                    Msg.unparsed("origin", StaffRestorePolicy.displayOrigin(stored.origin())));
+            return;
+        }
+        if (closing || !busy.add(uuid)) {
+            reply(sender, "staff.busy");
+            return;
+        }
+        store.finish(uuid, stored).whenComplete((deleted, error) -> {
+            busy.remove(uuid);
             if (error != null || !Boolean.TRUE.equals(deleted)) {
                 ctx.logger().error("Discarding the staff snapshot of {} failed", name, error);
                 reply(sender, "staff.recover-failed");
                 return;
             }
+            held.remove(uuid);
             ctx.logger().warn("{} discarded the held staff snapshot of {}", sender.getName(), name);
             reply(sender, "staff.recover-discarded", Msg.unparsed("player", name));
         });
@@ -664,22 +888,27 @@ final class StaffManager {
 
     void handleQuit(Player player) {
         // busy is released by the operation that holds it (its retired callback), never here: releasing it
-        // early would let a quick rejoin start a second restore of the same row.
+        // early would let a quick rejoin start a second restore of the same row. held persists too: a
+        // partial restore stays locked until an operator applies or discards it.
         active.remove(player.getUniqueId());
     }
 
     /**
      * Module disable / server shutdown: never schedules anything. Rows stay ACTIVE (restored on the next join
      * or when the module starts again), restores that did not reach the inventory are reverted to ACTIVE
-     * and in-memory snapshots are written, all synchronously.
+     * and in-memory snapshots are written, all synchronously. Entries already past ownership release
+     * (the inventory may be changing) are never reverted.
      */
     void disable() {
         closing = true;
-        for (UUID uuid : List.copyOf(pendingApply)) {
-            if (pendingApply.remove(uuid)) {
-                revertToActive(uuid, uuid.toString());
+        for (var entry : Map.copyOf(pendingApply).entrySet()) {
+            if (pendingApply.remove(entry.getKey(), entry.getValue())) {
+                if (!reviewedRestores.remove(entry.getKey())) {
+                    revertToActive(entry.getKey(), entry.getKey().toString(), entry.getValue());
+                }
             }
         }
+        reviewedRestores.clear();
         for (Map.Entry<UUID, StaffSnapshot> entry : Map.copyOf(orphans).entrySet()) {
             try {
                 if (Boolean.TRUE.equals(store.begin(entry.getKey(), entry.getValue()).get(5, TimeUnit.SECONDS))) {
@@ -710,6 +939,7 @@ final class StaffManager {
             }
         }
         active.clear();
+        held.clear();
         busy.clear();
     }
 

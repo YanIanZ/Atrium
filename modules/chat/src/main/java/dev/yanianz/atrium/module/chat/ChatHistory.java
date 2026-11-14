@@ -15,7 +15,7 @@ import org.jspecify.annotations.Nullable;
 final class ChatHistory {
     record Entry(UUID id, UUID sender, String senderName, String plain, @Nullable SignedMessage signed, long at) {}
 
-    private final int capacity;
+    private int capacity;
     private final Map<UUID, Entry> entries = new LinkedHashMap<>();
 
     ChatHistory(int capacity) {
@@ -26,12 +26,21 @@ final class ChatHistory {
         Entry entry = new Entry(UUID.randomUUID(), sender, senderName == null ? "?" : senderName,
                 plain == null ? "" : plain, signed, now);
         entries.put(entry.id(), entry);
+        trim();
+        return entry;
+    }
+
+    synchronized void resize(int capacity) {
+        this.capacity = Math.max(1, capacity);
+        trim();
+    }
+
+    private void trim() {
         Iterator<UUID> iterator = entries.keySet().iterator();
         while (entries.size() > capacity && iterator.hasNext()) {
             iterator.next();
             iterator.remove();
         }
-        return entry;
     }
 
     synchronized Optional<Entry> get(UUID id) {

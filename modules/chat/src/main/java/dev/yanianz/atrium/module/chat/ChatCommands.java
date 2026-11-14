@@ -153,5 +153,11 @@ final class ChatCommands {
                 .then(Commands.argument("id", word())
                         .executes(module::deleteMessage))
                 .build(), "Delete a chat message for everyone"));
+
+        ctx.command(CommandSpec.of(Cmds.literal("chatview", "atrium.chat.view")
+                .executes(context -> module.usage(context, "chat.usage-chatview"))
+                .then(Commands.argument("id", word())
+                        .executes(module::chatView))
+                .build(), "View a shared [inv] or [ender] chat snapshot"));
     }
 }

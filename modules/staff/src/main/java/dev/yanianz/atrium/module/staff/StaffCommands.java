@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
 
 /** {@code /staffmode}, {@code /sudo}, {@code /commandspy} and {@code /spectate}. */
 final class StaffCommands {
-    private static final java.util.List<String> RECOVER_ACTIONS = java.util.List.of("list", "apply", "discard");
+    private static final java.util.List<String> RECOVER_ACTIONS = java.util.List.of("list", "apply", "discard", "adopt");
     private final ModuleContext ctx;
     private final Cmds cmds;
     private final StaffManager manager;
@@ -29,9 +29,10 @@ final class StaffCommands {
     private final StaffStore store;
     private final Patrol patrol;
     private final SpeedMeter speedMeter;
+    private final String backendId;
 
     StaffCommands(ModuleContext ctx, StaffManager manager, SpectateManager spectate, StaffStore store,
-            Patrol patrol, SpeedMeter speedMeter) {
+            Patrol patrol, SpeedMeter speedMeter, String backendId) {
         this.ctx = ctx;
         this.cmds = ctx.commands();
         this.manager = manager;
@@ -39,6 +40,7 @@ final class StaffCommands {
         this.store = store;
         this.patrol = patrol;
         this.speedMeter = speedMeter;
+        this.backendId = backendId;
     }
 
     void register() {
@@ -107,6 +109,10 @@ final class StaffCommands {
         }
         CommandSender sender = c.getSource().getSender();
         String name = StringArgumentType.getString(c, "player");
+        if (action.equals("adopt") && !(sender instanceof ConsoleCommandSender)) {
+            reply(sender, "staff.recover-adopt-console");
+            return Cmds.OK;
+        }
         // Only accounts that joined before can have a snapshot: no profile lookup for unknown names.
         ctx.users().resolveAccount(name, false).whenComplete((ref, error) -> {
             if (error != null) {
@@ -118,9 +124,42 @@ final class StaffCommands {
                 reply(sender, "staff.recover-empty", Msg.unparsed("player", name));
                 return;
             }
-            manager.recover(sender, ref.get().uuid(), ref.get().name(), action);
+            if (action.equals("adopt")) adoptLegacy(sender, ref.get().uuid(), ref.get().name());
+            else manager.recover(sender, ref.get().uuid(), ref.get().name(), action);
         });
         return Cmds.OK;
+    }
+
+    /** Explicit console review only: binds a legacy row, never applies or clears an inventory. */
+    private void adoptLegacy(CommandSender sender, java.util.UUID uuid, String name) {
+        boolean knownOnline = org.bukkit.Bukkit.getPlayer(uuid) != null || manager.isActive(uuid)
+                || ctx.services().get(dev.yanianz.atrium.api.proxy.ProxyService.class)
+                        .map(proxy -> proxy.networkPlayers().stream().anyMatch(p -> p.name().equalsIgnoreCase(name)))
+                        .orElse(false);
+        if (knownOnline) {
+            reply(sender, "staff.recover-adopt-refused", Msg.unparsed("player", name));
+            return;
+        }
+        store.load(uuid).whenComplete((stored, loadError) -> {
+            if (loadError != null) {
+                ctx.logger().error("Loading legacy staff snapshot for {} failed", name, loadError);
+                reply(sender, "staff.recover-failed");
+                return;
+            }
+            if (stored == null || stored.corrupt() || !stored.origin().isBlank()) {
+                reply(sender, "staff.recover-adopt-refused", Msg.unparsed("player", name));
+                return;
+            }
+            store.adoptLegacy(uuid, stored, backendId).whenComplete((adopted, adoptError) -> {
+                if (adoptError != null || !Boolean.TRUE.equals(adopted)) {
+                    ctx.logger().warn("Binding legacy staff snapshot for {} failed or row changed", name, adoptError);
+                    reply(sender, "staff.recover-failed");
+                    return;
+                }
+                ctx.logger().warn("Console explicitly bound legacy staff snapshot of {} to backend {}", name, backendId);
+                reply(sender, "staff.recover-adopted", Msg.unparsed("player", name), Msg.unparsed("origin", backendId));
+            });
+        });
     }
 
     private int sudoUsage(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {

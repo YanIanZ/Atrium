@@ -582,6 +582,12 @@ Commands disabled in `config.yml` are marked ~~struck through~~.
 | `/warpgroups` | `warpgroup` | List the warp groups (categories) with their warp counts | `/warpgroups`<br>`/warpgroups <group>` |
 | `/warps` |  | Open the warp menu (or list warps in chat), optionally for one category | `/warps`<br>`/warps <category>` |
 
+## webstore
+
+| Command | Aliases | Description | Usage |
+|---|---|---|---|
+| `/webstore` |  | Webstore delivery queue: counts by status and retrying failed orders | `/webstore`<br>`/webstore status`<br>`/webstore retry`<br>`/webstore retry <order_id>` |
+
 ## worldrules
 
 | Command | Aliases | Description | Usage |
