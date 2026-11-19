@@ -49,6 +49,7 @@ public final class Messages {
     private volatile boolean perPlayerLocale = true;
     private volatile TagResolver globalResolver = TagResolver.empty();
     private volatile Theme theme = Theme.defaults();
+    private volatile Map<String, TagResolver> bundlePrefixes = Map.of();
 
     public Messages(Path langDirectory, Function<String, InputStream> resources, Logger logger) {
         this.langDirectory = langDirectory;
@@ -169,6 +170,10 @@ public final class Messages {
         // Order matters: per-call placeholders are checked first (see render), then <prefix>, then theme tags.
         globalResolver = TagResolver.resolver(
                 TagResolver.resolver("prefix", Tag.selfClosingInserting(prefixComponent)), themeTags);
+        Map<String, TagResolver> own = new ConcurrentHashMap<>();
+        current.prefixes().forEach((bundle, template) -> own.put(bundle,
+                TagResolver.resolver("prefix", Tag.selfClosingInserting(mini.deserialize(template, themeTags)))));
+        bundlePrefixes = own;
     }
 
     /**
@@ -276,7 +281,31 @@ public final class Messages {
         if (template.isEmpty()) {
             return Component.empty();
         }
-        return mini.deserialize(template, withGlobals(resolvers));
+        return mini.deserialize(template, withGlobals(withBundlePrefix(key, resolvers)));
+    }
+
+    /**
+     * Adds the bundle's own {@code <prefix>} (theme setting {@code prefixes}) in front of the global one. A
+     * placeholder named {@code prefix} that the caller passed still wins.
+     */
+    private TagResolver[] withBundlePrefix(String key, TagResolver[] resolvers) {
+        Map<String, TagResolver> own = bundlePrefixes;
+        if (own.isEmpty() || key == null) {
+            return resolvers;
+        }
+        int dot = key.indexOf('.');
+        TagResolver prefix = own.get((dot < 0 ? key : key.substring(0, dot)).toLowerCase(Locale.ROOT));
+        if (prefix == null) {
+            return resolvers;
+        }
+        for (TagResolver resolver : resolvers) {
+            if (resolver != null && resolver.has("prefix")) {
+                return resolvers;
+            }
+        }
+        TagResolver[] out = java.util.Arrays.copyOf(resolvers, resolvers.length + 1);
+        out[resolvers.length] = prefix;
+        return out;
     }
 
     public Component render(Audience audience, String key, TagResolver... resolvers) {

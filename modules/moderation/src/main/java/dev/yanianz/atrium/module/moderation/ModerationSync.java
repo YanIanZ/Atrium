@@ -22,6 +22,9 @@ import org.jspecify.annotations.Nullable;
  */
 final class ModerationSync {
     static final String TOPIC = "moderation";
+    /** "The server-wide chat mute changed": no content, receivers read the state from the shared database. */
+    static final String MUTECHAT_TOPIC = "moderation:mutechat";
+    private static final java.time.Duration MUTECHAT_POLL = java.time.Duration.ofSeconds(10);
 
     private final ModuleContext ctx;
     private final ConfigHandle<ModerationConfig> config;
@@ -29,6 +32,7 @@ final class ModerationSync {
     private final boolean sharedDatabase;
     private volatile @Nullable ProxyService proxy;
     private volatile ProxyService.Subscription subscription;
+    private volatile ProxyService.Subscription muteChatSubscription;
 
     ModerationSync(ModuleContext ctx, ConfigHandle<ModerationConfig> config, PunishmentManager manager) {
         this.ctx = ctx;
@@ -39,11 +43,67 @@ final class ModerationSync {
     }
 
     void enable() {
+        if (sharedDatabase) {
+            // The poll also reaches a server that had nobody online when the mute changed: the proxy channel
+            // needs a player on both ends, the database does not.
+            ctx.track(ctx.scheduler().asyncTimer(this::refreshMuteChat, MUTECHAT_POLL, MUTECHAT_POLL));
+        }
         ProxyService service = proxy;
         if (service == null) {
             return;
         }
         subscription = service.subscribe(TOPIC, this::receive);
+        if (sharedDatabase) {
+            muteChatSubscription = service.subscribe(MUTECHAT_TOPIC, message -> refreshMuteChat());
+        }
+    }
+
+    /** Tells the other servers at once that /mutechat or /unmutechat ran here. */
+    void publishMuteChat() {
+        ProxyService service = proxy;
+        if (service == null || !sharedDatabase) {
+            return;
+        }
+        try {
+            service.publish(MUTECHAT_TOPIC, new byte[] {1});
+        } catch (RuntimeException e) {
+            ctx.logger().warn("Cannot tell the other servers about the chat mute: {}", e.getMessage());
+        }
+    }
+
+    /** Applies a chat mute another server set or lifted and announces it here once. */
+    private void refreshMuteChat() {
+        manager.refreshMuteChat().thenAccept(change -> {
+            Instant now = Instant.now();
+            MuteChatState before = change[0];
+            MuteChatState after = change[1];
+            if (before.muted(now) == after.muted(now)) {
+                return;
+            }
+            String fallback = config.get().chatMute.reason;
+            if (after.muted(now)) {
+                java.time.Duration left = after.remaining(now).orElse(java.time.Duration.ZERO);
+                net.kyori.adventure.text.minimessage.tag.resolver.TagResolver tags =
+                        net.kyori.adventure.text.minimessage.tag.resolver.TagResolver.resolver(
+                                dev.yanianz.atrium.core.message.Msg.unparsed("reason", after.reasonOr(fallback)),
+                                dev.yanianz.atrium.core.message.Msg.unparsed("actor", after.actorName()),
+                                dev.yanianz.atrium.core.message.Msg.duration("duration", left),
+                                dev.yanianz.atrium.core.message.Msg.duration("remaining", left));
+                manager.announce("moderation.broadcast.mutechat", false, null, viewer -> tags, viewer -> tags);
+            } else {
+                java.time.Duration left = before.remaining(now).orElse(java.time.Duration.ZERO);
+                net.kyori.adventure.text.minimessage.tag.resolver.TagResolver tags =
+                        net.kyori.adventure.text.minimessage.tag.resolver.TagResolver.resolver(
+                                dev.yanianz.atrium.core.message.Msg.unparsed("actor", "staff"),
+                                dev.yanianz.atrium.core.message.Msg.unparsed("previous", before.actorName()),
+                                dev.yanianz.atrium.core.message.Msg.duration("remaining", left),
+                                dev.yanianz.atrium.core.message.Msg.unparsed("reason", before.reasonOr(fallback)));
+                manager.announce("moderation.broadcast.unmutechat", false, null, viewer -> tags, viewer -> tags);
+            }
+        }).exceptionally(t -> {
+            ctx.logger().warn("Cannot read the chat mute state: {}", t.getMessage());
+            return null;
+        });
     }
 
     private final java.util.concurrent.atomic.AtomicBoolean sqliteWarned = new java.util.concurrent.atomic.AtomicBoolean();
@@ -61,6 +121,11 @@ final class ModerationSync {
         subscription = null;
         if (current != null) {
             current.close();
+        }
+        ProxyService.Subscription muteChat = muteChatSubscription;
+        muteChatSubscription = null;
+        if (muteChat != null) {
+            muteChat.close();
         }
     }
 

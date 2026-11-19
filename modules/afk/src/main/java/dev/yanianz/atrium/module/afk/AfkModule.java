@@ -353,7 +353,7 @@ public final class AfkModule implements AtriumModule, Listener, AfkService {
                 ? (message.isBlank() ? "afk.broadcast-enter" : "afk.broadcast-enter-reason")
                 : "afk.broadcast-leave";
         TagResolver[] resolvers = {
-                Msg.unparsed("player", player.getName()),
+                Msg.unparsed("player", Msg.shownName(player)),
                 Msg.unparsed("message", message),
                 Msg.unparsed("reason", reason.name().toLowerCase(Locale.ROOT))
         };

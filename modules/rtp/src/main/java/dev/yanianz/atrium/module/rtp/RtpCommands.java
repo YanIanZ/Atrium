@@ -180,7 +180,7 @@ final class RtpCommands implements Listener, RandomTeleportService {
         RtpSearcher.Refusal refusal = searcher.reserve(uuid, sender != null);
         if (refusal != null) {
             String key = refusal == RtpSearcher.Refusal.PLAYER_BUSY ? "rtp.busy-player" : "rtp.busy-server";
-            messages.send(sender != null ? sender : target, key, Msg.unparsed("player", target.getName()));
+            messages.send(sender != null ? sender : target, key, Msg.unparsed("player", Msg.shownName(target)));
             return;
         }
         EconomyService economy = cost.signum() > 0 ? ctx.services().get(EconomyService.class).orElse(null) : null;
@@ -199,7 +199,7 @@ final class RtpCommands implements Listener, RandomTeleportService {
                 if (found.isEmpty()) {
                     messages.send(target, "rtp.not-found", worldName);
                     if (sender != null && !sender.equals(target)) {
-                        messages.send(sender, "rtp.not-found-other", worldName, Msg.unparsed("player", target.getName()));
+                        messages.send(sender, "rtp.not-found-other", worldName, Msg.unparsed("player", Msg.shownName(target)));
                     }
                 }
                 return found;
@@ -275,7 +275,7 @@ final class RtpCommands implements Listener, RandomTeleportService {
             messages.send(target, "rtp.charged", Msg.unparsed("cost", economy.format(charge)));
         }
         if (sender != null && !sender.equals(target)) {
-            messages.send(sender, "rtp.teleported-other", Msg.unparsed("player", target.getName()), Msg.location("to", destination));
+            messages.send(sender, "rtp.teleported-other", Msg.unparsed("player", Msg.shownName(target)), Msg.location("to", destination));
         }
     }
 

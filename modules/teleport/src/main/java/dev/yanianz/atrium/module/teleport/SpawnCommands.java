@@ -151,10 +151,10 @@ final class SpawnCommands implements Listener {
             if (result == TeleportResult.SUCCESS) {
                 messages.send(target, "teleport.spawn");
                 if (!self) {
-                    messages.send(sender, "teleport.spawn-other", Msg.unparsed("player", target.getName()));
+                    messages.send(sender, "teleport.spawn-other", Msg.unparsed("player", Msg.shownName(target)));
                 }
             } else if (!self) {
-                messages.send(sender, "teleport.spawn-other-failed", Msg.unparsed("player", target.getName()),
+                messages.send(sender, "teleport.spawn-other-failed", Msg.unparsed("player", Msg.shownName(target)),
                         Msg.unparsed("spawn", choice.label()), Msg.unparsed("result", result.name().toLowerCase(Locale.ROOT)));
             }
         });
@@ -194,7 +194,7 @@ final class SpawnCommands implements Listener {
         if (player != null) {
             World world = player.getWorld();
             SpawnResolver.Choice choice = service.spawnChoice(player, world);
-            messages.send(sender, "teleport.spawn-info-resolved", Msg.unparsed("player", player.getName()),
+            messages.send(sender, "teleport.spawn-info-resolved", Msg.unparsed("player", Msg.shownName(player)),
                     Msg.unparsed("world", world.getName()), Msg.unparsed("spawn", choice.label()),
                     value(sender, choice.location()));
             order = RespawnPriority.orderFor(cfg.respawnOrder, world.getName());

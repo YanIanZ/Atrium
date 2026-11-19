@@ -256,10 +256,10 @@ final class CombatListener implements Listener {
         }
         if (logout.broadcast) {
             for (Player online : Bukkit.getOnlinePlayers()) {
-                ctx.messages().send(online, "combat.logout-broadcast", Msg.unparsed("player", player.getName()));
+                ctx.messages().send(online, "combat.logout-broadcast", Msg.unparsed("player", Msg.shownName(player)));
             }
             ctx.messages().send(Bukkit.getConsoleSender(), "combat.logout-broadcast",
-                    Msg.unparsed("player", player.getName()));
+                    Msg.unparsed("player", Msg.shownName(player)));
         }
         ctx.logger().info("Combat log by {} in {} at {}, {}, {} ({} carried stack(s) dropped, mode {})",
                 player.getName(), location.getWorld() == null ? "?" : location.getWorld().getName(),

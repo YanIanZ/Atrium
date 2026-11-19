@@ -190,7 +190,7 @@ final class NickCommands implements TaskHandle {
                         module.apply(target, display);
                         ctx.messages().send(target, "nick.changed", Msg.component("nick", display));
                         if (!sender.equals(target)) {
-                            reply(sender, "changed-other", Msg.unparsed("player", target.getName()),
+                            reply(sender, "changed-other", Msg.unparsed("player", Msg.shownName(target)),
                                     Msg.component("nick", display));
                         }
                     } catch (RuntimeException e) {
@@ -219,7 +219,7 @@ final class NickCommands implements TaskHandle {
                     module.reset(target);
                     ctx.messages().send(target, "nick.cleared");
                     if (!sender.equals(target)) {
-                        reply(sender, "cleared-other", Msg.unparsed("player", target.getName()));
+                        reply(sender, "cleared-other", Msg.unparsed("player", Msg.shownName(target)));
                     }
                 } catch (RuntimeException e) {
                     failed(sender, "Clear nickname", e);
@@ -255,7 +255,7 @@ final class NickCommands implements TaskHandle {
                 if (state != null && state.hasNick()) {
                     sendResult(sender, player.getName(), state, color, format, gradient);
                 } else {
-                    reply(sender, "realname-no-nick", Msg.unparsed("player", player.getName()));
+                    reply(sender, "realname-no-nick", Msg.unparsed("player", Msg.shownName(player)));
                 }
                 return Cmds.OK;
             }

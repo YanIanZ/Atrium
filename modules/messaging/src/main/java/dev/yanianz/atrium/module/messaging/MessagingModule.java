@@ -255,7 +255,7 @@ public final class MessagingModule implements AtriumModule, Listener {
                         Msg.number("count", targets.size()), Msg.number("seconds", flags.seconds()));
             } else if (targets.size() == 1) {
                 reply(sender, "messaging.actionbar-sent",
-                        Msg.unparsed("player", targets.getFirst().getName()),
+                        Msg.unparsed("player", Msg.shownName(targets.getFirst())),
                         Msg.number("seconds", flags.secondsFor(targets.getFirst().getName())));
             } else {
                 reply(sender, "messaging.actionbar-sent-many", Msg.number("count", targets.size()),
@@ -295,7 +295,7 @@ public final class MessagingModule implements AtriumModule, Listener {
                 reply(sender, "messaging.tellraw-sent-all", Msg.number("count", targets.size()));
             } else {
                 reply(sender, "messaging.tellraw-sent",
-                        Msg.unparsed("player", targets.getFirst().getName()));
+                        Msg.unparsed("player", Msg.shownName(targets.getFirst())));
             }
         }
         return Cmds.OK;
@@ -808,7 +808,7 @@ public final class MessagingModule implements AtriumModule, Listener {
      * @param consoleClicks whether the sender may use {@code <cc>}; without it the tag renders as plain text
      */
     private Component render(String template, Player target, boolean consoleClicks) {
-        return ctx.messages().parseTrusted(template, Msg.unparsed("player", target.getName()),
+        return ctx.messages().parseTrusted(template, Msg.unparsed("player", Msg.shownName(target)),
                 clickTags(consoleClicks));
     }
 
@@ -1058,7 +1058,7 @@ public final class MessagingModule implements AtriumModule, Listener {
                             return;
                         }
                         ctx.messages().send(staff, "messaging.alert-join-header",
-                                Msg.unparsed("player", joined.getName()), Msg.number("count", found.size()));
+                                Msg.unparsed("player", Msg.shownName(joined)), Msg.number("count", found.size()));
                         for (AlertStore.Alert alert : found) {
                             ctx.messages().send(staff, "messaging.alert-join-entry",
                                     Msg.number("id", alert.id()),

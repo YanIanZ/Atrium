@@ -134,7 +134,7 @@ final class ChatFormatter {
         ChatConfig.FormatEntry entry = pick(sender);
         Component player = playerName(sender);
         return messages.parseTrusted(entry.format,
-                player == null ? Msg.unparsed("player", sender.getName()) : Msg.component("player", player),
+                player == null ? Msg.unparsed("player", Msg.shownName(sender)) : Msg.component("player", player),
                 Msg.component("display_name", sender.displayName()),
                 Msg.unparsed("world", world == null || world.isBlank() ? "?" : world),
                 Msg.component("tag_prefix", tagPrefix == null ? Component.empty() : tagPrefix),
@@ -152,6 +152,12 @@ final class ChatFormatter {
         if (lines == null || lines.isEmpty()) {
             return null;
         }
+        // A disguised player (WuretaDisguise marks them with this metadata) never shows the account name:
+        // the card and the /msg suggestion use the shown name instead.
+        String shown = sender.hasMetadata("wureta_disguised")
+                ? net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                        .serialize(sender.displayName())
+                : sender.getName();
         Component card = Component.empty();
         boolean first = true;
         for (String line : lines) {
@@ -159,7 +165,7 @@ final class ChatFormatter {
                 continue;
             }
             Component parsed = messages.parseTrusted(line, papi.resolver(sender),
-                    Msg.unparsed("player", sender.getName()));
+                    Msg.unparsed("player", shown));
             if (!first) {
                 card = card.append(Component.text("\n"));
             }
@@ -169,9 +175,11 @@ final class ChatFormatter {
         if (first) {
             return null;
         }
-        return Component.text(sender.getName())
+        // The nickname (display name) is what the format shows; the card and the /msg click keep the real name,
+        // except for a disguised player (see above).
+        return sender.displayName()
                 .hoverEvent(HoverEvent.showText(card))
-                .clickEvent(ClickEvent.suggestCommand("/msg " + sender.getName() + " "));
+                .clickEvent(ClickEvent.suggestCommand("/msg " + shown + " "));
     }
 
     private ChatConfig.FormatEntry pick(Player sender) {

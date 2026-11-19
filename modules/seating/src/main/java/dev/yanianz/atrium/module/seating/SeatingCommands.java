@@ -156,12 +156,12 @@ final class SeatingCommands {
         Player target = cmds.argPlayer(c, "target");
         CommandSender sender = c.getSource().getSender();
         if (target.getVehicle() == null) {
-            ctx.messages().send(sender, "seating.ride-not-riding-other", Msg.unparsed("player", target.getName()));
+            ctx.messages().send(sender, "seating.ride-not-riding-other", Msg.unparsed("player", Msg.shownName(target)));
             return Cmds.OK;
         }
         onPlayer(target, sender, () -> dismount(target));
         if (!target.equals(sender)) {
-            ctx.messages().send(sender, "seating.ride-stopped-other", Msg.unparsed("player", target.getName()));
+            ctx.messages().send(sender, "seating.ride-stopped-other", Msg.unparsed("player", Msg.shownName(target)));
         }
         return Cmds.OK;
     }

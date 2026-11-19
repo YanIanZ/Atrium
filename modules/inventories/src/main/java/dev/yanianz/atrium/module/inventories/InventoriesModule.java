@@ -28,6 +28,7 @@ public final class InventoriesModule implements AtriumModule {
     private PendingReturnApplier returnApplier;
     private VaultStore vaultStore;
     private VaultMenu vaultMenu;
+    private EnderPages enderPages;
 
     @Override
     public String id() {
@@ -36,7 +37,8 @@ public final class InventoriesModule implements AtriumModule {
 
     @Override
     public String description() {
-        return "Saved inventory snapshots and personal vaults (/pv): capture, preview, load, remove, clear";
+        return "Saved inventory snapshots, personal vaults (/pv) and the ender chest as pages: capture, preview, "
+                + "load, remove, clear";
     }
 
     @Override
@@ -76,6 +78,11 @@ public final class InventoriesModule implements AtriumModule {
         ctx.permission(VaultCommands.VAULT_LIMIT + ".unlimited", PermissionDefault.OP, "Own unlimited vaults");
         ctx.permission(VaultCommands.SIZE_LIMIT + ".unlimited", PermissionDefault.OP,
                 "Use full-size (six-row) vaults");
+        // The ender chest as pages; the listener does nothing while ender-pages-enabled is false.
+        this.enderPages = new EnderPages(ctx, vaultStore, returnStore, config::get);
+        ctx.listen(enderPages);
+        ctx.permission(EnderPages.PAGE_LIMIT + ".unlimited", PermissionDefault.OP,
+                "Own every ender chest page (" + EnderPages.MAX_PAGES + ")");
         // Age retention is applied now and periodically; no per-tick work when nobody uses the module.
         ctx.track(ctx.scheduler().asyncTimer(this::purgeExpired, PURGE_INTERVAL, PURGE_INTERVAL));
         purgeExpired();
@@ -108,6 +115,9 @@ public final class InventoriesModule implements AtriumModule {
 
     @Override
     public void disable() {
+        if (enderPages != null) {
+            enderPages.shutdown();
+        }
         if (vaultMenu != null) {
             vaultMenu.shutdown();
         }

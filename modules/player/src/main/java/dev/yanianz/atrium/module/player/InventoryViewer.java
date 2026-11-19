@@ -194,11 +194,11 @@ final class InventoryViewer implements Listener, TaskHandle {
     private void showLive(Player viewer, Player target, boolean ender, int liveSlots) {
         var session = new Session(viewer, target, ender, liveSlots);
         session.display = Bukkit.createInventory(session, InventoryLayout.displaySize(ender, liveSlots),
-                ctx.messages().render(viewer, "player.inventory-title", Msg.unparsed("player", target.getName())));
+                ctx.messages().render(viewer, "player.inventory-title", Msg.unparsed("player", Msg.shownName(target))));
         if (!ender) {
             session.info = ItemBuilder.of(Material.BOOK)
                     .name(ctx.messages().render(viewer, "player.inventory-info-name",
-                            Msg.unparsed("player", target.getName())))
+                            Msg.unparsed("player", Msg.shownName(target))))
                     .lore(ctx.messages().render(viewer, "player.inventory-info-lore"))
                     .build();
             decorate(session);

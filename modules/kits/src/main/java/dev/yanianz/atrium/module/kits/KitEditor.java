@@ -182,7 +182,7 @@ final class KitEditor implements Listener {
             Optional<Session> holder = locks.tryAcquire(kit.name(), session);
             if (holder.isPresent()) {
                 ctx.messages().send(admin, "kits.editor-in-use", Msg.unparsed("kit", kit.name()),
-                        Msg.unparsed("player", holder.get().admin.getName()));
+                        Msg.unparsed("player", Msg.shownName(holder.get().admin)));
                 return;
             }
             boolean shown;

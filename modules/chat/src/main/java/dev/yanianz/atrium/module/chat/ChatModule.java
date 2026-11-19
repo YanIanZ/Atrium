@@ -102,6 +102,14 @@ public final class ChatModule implements AtriumModule, Listener {
     private volatile Component deleteHover = Component.empty();
     private volatile Sound mentionSound;
     private volatile ChatRelay relay;
+    private volatile dev.yanianz.atrium.core.scheduler.TaskHandle namesTimer;
+    private volatile boolean namesSent;
+    /** Shown names of disguised players on other servers, by lower-case account name. */
+    private final Map<String, RemoteName> remoteNames = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long REMOTE_NAME_TTL_MILLIS = 45_000L;
+    private static final int MAX_REMOTE_NAMES = 200;
+
+    private record RemoteName(String account, String shown, boolean full, String server, long seenAt) {}
     private final SpamGuard spam = new SpamGuard();
     private final CommandSpamGuard commandSpam = new CommandSpamGuard();
     private final ChatHistory history = new ChatHistory(200);
@@ -272,6 +280,10 @@ public final class ChatModule implements AtriumModule, Listener {
         ChatRelay created = new ChatRelay(ctx, proxy.get(), this);
         created.start();
         this.relay = created;
+        if (namesTimer == null) {
+            namesTimer = ctx.track(ctx.scheduler().asyncTimer(this::publishShownNames,
+                    Duration.ofSeconds(5), Duration.ofSeconds(10)));
+        }
     }
 
     private void stopRelay() {
@@ -535,7 +547,7 @@ public final class ChatModule implements AtriumModule, Listener {
         List<String> mentions = config.mentions.enabled
                 ? MentionDetector.find(relayed.text(), mentionNames, config.mentions.requireAtSign)
                 : List.of();
-        current.publishGlobal(senderId, sender.getName(), plain(relayed.body()), line, mentions);
+        current.publishGlobal(senderId, shown(sender), plain(relayed.body()), line, mentions);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -593,7 +605,7 @@ public final class ChatModule implements AtriumModule, Listener {
             return;
         }
         event.joinMessage(ctx.messages().parseTrusted(format,
-                Msg.unparsed("player", player.getName()),
+                Msg.unparsed("player", Msg.shownName(player)),
                 Msg.component("display_name", player.displayName()),
                 Msg.unparsed("world", worldNames.getOrDefault(player.getUniqueId(), "?"))));
     }
@@ -611,7 +623,7 @@ public final class ChatModule implements AtriumModule, Listener {
         }
         Player player = event.getPlayer();
         event.quitMessage(ctx.messages().parseTrusted(format,
-                Msg.unparsed("player", player.getName()),
+                Msg.unparsed("player", Msg.shownName(player)),
                 Msg.component("display_name", player.displayName()),
                 Msg.unparsed("world", worldNames.getOrDefault(player.getUniqueId(), "?"))));
     }
@@ -666,7 +678,7 @@ public final class ChatModule implements AtriumModule, Listener {
                 continue;
             }
             ctx.messages().send(viewer.get(), "chat.sign-spy",
-                    Msg.unparsed("player", author.getName()),
+                    Msg.unparsed("player", Msg.shownName(author)),
                     Msg.unparsed("lines", String.join(" | ", lines)));
         }
     }
@@ -1009,13 +1021,13 @@ public final class ChatModule implements AtriumModule, Listener {
 
     private Component tagPrefix(Player player) {
         return selectedTag(player)
-                .map(tag -> ctx.messages().parseTrusted(tag.prefix(), Msg.unparsed("player", player.getName())))
+                .map(tag -> ctx.messages().parseTrusted(tag.prefix(), Msg.unparsed("player", Msg.shownName(player))))
                 .orElse(Component.empty());
     }
 
     private Component tagSuffix(Player player) {
         return selectedTag(player)
-                .map(tag -> ctx.messages().parseTrusted(tag.suffix(), Msg.unparsed("player", player.getName())))
+                .map(tag -> ctx.messages().parseTrusted(tag.suffix(), Msg.unparsed("player", Msg.shownName(player))))
                 .orElse(Component.empty());
     }
 
@@ -1152,7 +1164,7 @@ public final class ChatModule implements AtriumModule, Listener {
                 continue;
             }
             ctx.messages().send(player.get(), "chat.filter-alert",
-                    Msg.unparsed("player", sender.getName()),
+                    Msg.unparsed("player", Msg.shownName(sender)),
                     Msg.unparsed("rules", joined),
                     Msg.unparsed("message", message));
         }
@@ -1300,25 +1312,27 @@ public final class ChatModule implements AtriumModule, Listener {
         }
         ChatUser targetUser = user(target);
         if (senderId != null && targetUser.ignores(senderId)) {
-            ctx.messages().send(sender, "chat.msg-ignored", Msg.unparsed("player", target.getName()));
+            ctx.messages().send(sender, "chat.msg-ignored", Msg.unparsed("player", shown(target)));
             return;
         }
         if (senderId != null && !targetUser.messagesEnabled()) {
-            ctx.messages().send(sender, "chat.msg-disabled", Msg.unparsed("player", target.getName()));
+            ctx.messages().send(sender, "chat.msg-disabled", Msg.unparsed("player", shown(target)));
             return;
         }
 
         Component message = sender instanceof Player player
                 ? formatter.playerMessage(player, Component.text(text), text, !text.equals(expanded), chatColor(player))
                 : Component.text(text);
+        // A fully disguised player (WuretaDisguise) is named by the disguise on both sides; social spy below
+        // keeps the account names, it is a staff tool.
         ctx.messages().send(target, "chat.msg-received",
-                Msg.unparsed("sender", sender.getName()), Msg.component("message", message));
+                Msg.unparsed("sender", shown(sender)), Msg.component("message", message));
         ctx.messages().send(sender, "chat.msg-sent",
-                Msg.unparsed("target", target.getName()), Msg.component("message", message));
+                Msg.unparsed("target", shown(target)), Msg.component("message", message));
 
         if (sender instanceof Player player) {
-            update(player, user -> user.withReplyTo(target.getUniqueId(), target.getName()));
-            update(target, user -> user.withReplyTo(player.getUniqueId(), player.getName()));
+            update(player, user -> user.withReplyTo(target.getUniqueId(), shown(target)));
+            update(target, user -> user.withReplyTo(player.getUniqueId(), shown(player)));
         }
 
         for (AtriumUser user : ctx.users().online()) {
@@ -1334,8 +1348,8 @@ public final class ChatModule implements AtriumModule, Listener {
                 continue;
             }
             ctx.messages().send(viewer.get(), "chat.social-spy",
-                    Msg.unparsed("sender", sender.getName()),
-                    Msg.unparsed("target", target.getName()),
+                    Msg.unparsed("sender", Msg.shownName(sender)),
+                    Msg.unparsed("target", Msg.shownName(target)),
                     Msg.component("message", message));
         }
     }
@@ -1389,22 +1403,33 @@ public final class ChatModule implements AtriumModule, Listener {
         List<String> mentions = config().mentions.enabled
                 ? MentionDetector.find(text, mentionNames, config().mentions.requireAtSign)
                 : List.of();
-        if (!current.publishPrivate(senderId, sender.getName(), targetName, plain, message, mentions)) {
+        if (!current.publishPrivate(senderId, shown(sender), targetName, plain, message, mentions)) {
             ctx.messages().send(sender, "chat.cross-server-unavailable");
             return;
         }
+        String shownTarget = shownRemote(targetName);
         ctx.messages().send(sender, "chat.msg-queued-remote",
-                Msg.unparsed("target", targetName), Msg.component("message", message));
+                Msg.unparsed("target", shownTarget), Msg.component("message", message));
         if (player != null) {
-            update(player, user -> user.withReplyTo(null, targetName));
+            update(player, user -> user.withReplyTo(null, shownTarget));
         }
     }
 
     /** Cached proxy player on another server, or empty when the name is local/unknown/stale. */
-    Optional<NetworkPlayer> remotePlayer(String name) {
-        if (!CrossServerChat.validName(name)) {
+    Optional<NetworkPlayer> remotePlayer(CommandSender sender, String typed) {
+        if (!CrossServerChat.validName(typed)) {
             return Optional.empty();
         }
+        // A disguised player on another server is addressed by the shown name; the account name of a fully
+        // disguised one does not exist for a sender who may not look behind disguises.
+        RemoteName byShown = remoteByShown(typed);
+        if (byShown == null) {
+            RemoteName own = remoteName(typed);
+            if (own != null && own.full() && !sender.hasPermission(REVEAL_PERMISSION)) {
+                return Optional.empty();
+            }
+        }
+        String name = byShown == null ? typed : byShown.account();
         Optional<ProxyService> proxy = ctx.services().get(ProxyService.class);
         if (proxy.isEmpty()) {
             return Optional.empty();
@@ -1418,16 +1443,25 @@ public final class ChatModule implements AtriumModule, Listener {
 
     List<String> messageTargets() {
         Set<String> names = new LinkedHashSet<>();
+        // A fully disguised player is offered under the disguise name only; the account name is never suggested.
+        Set<String> hidden = new java.util.HashSet<>();
         for (AtriumUser user : ctx.users().online()) {
-            names.add(user.name());
+            Player online = user.player().orElse(null);
+            if (online != null && online.hasMetadata(DISGUISE_KEY)) {
+                names.add(shown(online));
+                hidden.add(user.name().toLowerCase(java.util.Locale.ROOT));
+            } else {
+                names.add(user.name());
+            }
         }
         ctx.services().get(ProxyService.class).ifPresent(proxy -> {
             String own = proxy.serverName();
             List<NetworkPlayer> remote = new ArrayList<>(proxy.networkPlayers());
             remote.sort((a, b) -> String.CASE_INSENSITIVE_ORDER.compare(a.name(), b.name()));
             for (NetworkPlayer candidate : remote) {
-                if (!candidate.server().equalsIgnoreCase(own) && CrossServerChat.validName(candidate.name())) {
-                    names.add(candidate.name());
+                if (!candidate.server().equalsIgnoreCase(own) && CrossServerChat.validName(candidate.name())
+                        && !hidden.contains(candidate.name().toLowerCase(java.util.Locale.ROOT))) {
+                    names.add(shownRemote(candidate.name()));
                 }
             }
         });
@@ -1492,10 +1526,10 @@ public final class ChatModule implements AtriumModule, Listener {
                 continue;
             }
             ctx.messages().send(viewer.get(), "chat.staff-format",
-                    Msg.unparsed("player", sender.getName()), Msg.component("message", message));
+                    Msg.unparsed("player", Msg.shownName(sender)), Msg.component("message", message));
         }
         ctx.messages().send(ctx.plugin().getServer().getConsoleSender(), "chat.staff-format",
-                Msg.unparsed("player", sender.getName()), Msg.component("message", message));
+                Msg.unparsed("player", Msg.shownName(sender)), Msg.component("message", message));
 
         ChatConfig config = config();
         ChatRelay current = relay;
@@ -1708,14 +1742,14 @@ public final class ChatModule implements AtriumModule, Listener {
         message = formatter.withMentions(message, mentionPattern);
         for (Player recipient : recipients) {
             ctx.messages().send(recipient, "chat.me-format",
-                    Msg.unparsed("player", sender.getName()), Msg.component("message", message));
+                    Msg.unparsed("player", Msg.shownName(sender)), Msg.component("message", message));
             if (!recipient.getUniqueId().equals(sender.getUniqueId())
                     && mentioned.stream().anyMatch(name -> name.equalsIgnoreCase(recipient.getName()))) {
                 playMentionSoundLater(recipient);
             }
         }
         ctx.messages().send(ctx.plugin().getServer().getConsoleSender(), "chat.me-format",
-                Msg.unparsed("player", sender.getName()), Msg.component("message", message));
+                Msg.unparsed("player", Msg.shownName(sender)), Msg.component("message", message));
     }
 
     void sendBroadcast(CommandSender sender, String raw) {
@@ -1762,10 +1796,10 @@ public final class ChatModule implements AtriumModule, Listener {
             if (!value.hasPermission("atrium.chat.clearchat.exempt")) {
                 value.sendMessage(blank);
             }
-            ctx.messages().send(value, "chat.clearchat-broadcast", Msg.unparsed("player", sender.getName()));
+            ctx.messages().send(value, "chat.clearchat-broadcast", Msg.unparsed("player", Msg.shownName(sender)));
         }
         ctx.messages().send(ctx.plugin().getServer().getConsoleSender(), "chat.clearchat-broadcast",
-                Msg.unparsed("player", sender.getName()));
+                Msg.unparsed("player", Msg.shownName(sender)));
         return Cmds.OK;
     }
 
@@ -1801,12 +1835,12 @@ public final class ChatModule implements AtriumModule, Listener {
             }
             ctx.messages().send(viewer.get(), "chat.room-format",
                     Msg.unparsed("room", room.name()),
-                    Msg.unparsed("player", sender.getName()),
+                    Msg.unparsed("player", Msg.shownName(sender)),
                     Msg.component("message", message));
         }
         ctx.messages().send(ctx.plugin().getServer().getConsoleSender(), "chat.room-format",
                 Msg.unparsed("room", room.name()),
-                Msg.unparsed("player", sender.getName()),
+                Msg.unparsed("player", Msg.shownName(sender)),
                 Msg.component("message", message));
     }
 
@@ -1933,15 +1967,15 @@ public final class ChatModule implements AtriumModule, Listener {
             throw cmds.fail(context.getSource(), "core.player-not-found");
         }
         if (room.isMember(target.getUniqueId())) {
-            ctx.messages().send(player, "chat.room-already-member", Msg.unparsed("player", target.getName()));
+            ctx.messages().send(player, "chat.room-already-member", Msg.unparsed("player", Msg.shownName(target)));
             return Cmds.OK;
         }
         ChatRoom updated = room.withInvited(target.getUniqueId());
         roomStore.put(updated);
         persistRoom(player, updated);
-        ctx.messages().send(player, "chat.room-invited", Msg.unparsed("player", target.getName()),
+        ctx.messages().send(player, "chat.room-invited", Msg.unparsed("player", Msg.shownName(target)),
                 Msg.unparsed("room", updated.name()));
-        ctx.messages().send(target, "chat.room-invite-received", Msg.unparsed("player", player.getName()),
+        ctx.messages().send(target, "chat.room-invite-received", Msg.unparsed("player", Msg.shownName(player)),
                 Msg.unparsed("room", updated.name()));
         return Cmds.OK;
     }
@@ -1958,15 +1992,15 @@ public final class ChatModule implements AtriumModule, Listener {
             throw cmds.fail(context.getSource(), "chat.room-kick-self");
         }
         if (!room.isMember(target.getUniqueId())) {
-            throw cmds.fail(context.getSource(), "chat.room-target-not-member", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(context.getSource(), "chat.room-target-not-member", Msg.unparsed("player", Msg.shownName(target)));
         }
         ChatRoom updated = room.withoutMember(target.getUniqueId());
         roomStore.put(updated);
         persistRoom(player, updated);
         update(target, user -> user.withChatRoom(null));
-        ctx.messages().send(player, "chat.room-kicked", Msg.unparsed("player", target.getName()));
+        ctx.messages().send(player, "chat.room-kicked", Msg.unparsed("player", Msg.shownName(target)));
         ctx.messages().send(target, "chat.room-kicked-self",
-                Msg.unparsed("room", updated.name()), Msg.unparsed("player", player.getName()));
+                Msg.unparsed("room", updated.name()), Msg.unparsed("player", Msg.shownName(player)));
         return Cmds.OK;
     }
 
@@ -2257,12 +2291,16 @@ public final class ChatModule implements AtriumModule, Listener {
         String name = StringArgumentType.getString(context, "target");
         String message = StringArgumentType.getString(context, "message");
         CommandSender sender = context.getSource().getSender();
-        Player local = findOnline(name);
+        Player local = findForMessage(sender, name);
         if (local != null) {
             sendPrivate(sender, local, message);
             return Cmds.OK;
         }
-        Optional<NetworkPlayer> remote = remotePlayer(name);
+        if (hiddenHere(sender, name)) {
+            // The account is online here but fully disguised: to this sender it does not exist under that name.
+            throw cmds.fail(context.getSource(), "chat.msg-unknown", Msg.unparsed("player", name));
+        }
+        Optional<NetworkPlayer> remote = remotePlayer(sender, name);
         if (remote.isPresent()) {
             sendPrivateRemote(sender, remote.get().name(), message);
             return Cmds.OK;
@@ -2283,12 +2321,12 @@ public final class ChatModule implements AtriumModule, Listener {
         }
         String name = user.replyToName();
         if (name != null) {
-            Player local = findOnline(name);
+            Player local = findForMessage(sender, name);
             if (local != null) {
                 sendPrivate(sender, local, StringArgumentType.getString(context, "message"));
                 return Cmds.OK;
             }
-            Optional<NetworkPlayer> remote = remotePlayer(name);
+            Optional<NetworkPlayer> remote = remotePlayer(sender, name);
             if (remote.isPresent()) {
                 sendPrivateRemote(sender, remote.get().name(), StringArgumentType.getString(context, "message"));
                 return Cmds.OK;
@@ -2346,6 +2384,153 @@ public final class ChatModule implements AtriumModule, Listener {
                 Msg.number("count", names.size()),
                 Msg.unparsed("players", String.join(", ", names)));
         return Cmds.OK;
+    }
+
+    /** Metadata WuretaDisguise sets on a fully disguised player; its value is the disguise name. */
+    private static final String DISGUISE_KEY = "wureta_disguised";
+    /** Metadata of a name-only disguise (the account is not hidden, but the shown name is the nickname). */
+    private static final String NICK_KEY = "wureta_nick";
+    private static final String REVEAL_PERMISSION = "wureta.disguise.reveal";
+
+    /** The name others see: the disguise name (full or name-only) of a disguised player, else the account name. */
+    static String shown(CommandSender who) {
+        if (who instanceof Player player) {
+            for (String key : new String[] {DISGUISE_KEY, NICK_KEY}) {
+                if (!player.hasMetadata(key)) {
+                    continue;
+                }
+                for (org.bukkit.metadata.MetadataValue value : player.getMetadata(key)) {
+                    String name = value.asString();
+                    if (name != null && !name.isBlank()) {
+                        return name;
+                    }
+                }
+            }
+        }
+        return who.getName();
+    }
+
+    /** Every 10 s: tells the other servers which local players show another name than their account name. */
+    private void publishShownNames() {
+        ChatRelay current = relay;
+        if (current == null || !current.available()) {
+            return;
+        }
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            List<String[]> rows = new ArrayList<>();
+            for (Player online : ctx.plugin().getServer().getOnlinePlayers()) {
+                boolean full = online.hasMetadata(DISGUISE_KEY);
+                if (!full && !online.hasMetadata(NICK_KEY)) {
+                    continue;
+                }
+                String name = shown(online);
+                if (name.equalsIgnoreCase(online.getName()) || !CrossServerChat.validName(name)
+                        || !CrossServerChat.validName(online.getName()) || rows.size() >= MAX_REMOTE_NAMES) {
+                    continue;
+                }
+                rows.add(new String[] {online.getName(), name, full ? "1" : "0"});
+            }
+            if (rows.isEmpty() && !namesSent) {
+                return; // nothing to say and nothing to clear
+            }
+            out.writeByte(1);
+            out.writeShort(rows.size());
+            for (String[] row : rows) {
+                out.writeUTF(row[0]);
+                out.writeUTF(row[1]);
+                out.writeBoolean(row[2].equals("1"));
+            }
+            if (current.publishNames(bytes.toByteArray())) {
+                namesSent = !rows.isEmpty();
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            ctx.logger().debug("Cannot publish the shown names", e);
+        }
+    }
+
+    /** Replaces what is known about the sending server's disguised players. Untrusted input: validated. */
+    void onRemoteNames(ProxyMessage message) {
+        String server = message.server();
+        Map<String, RemoteName> fresh = new java.util.HashMap<>();
+        try (java.io.DataInputStream in = new java.io.DataInputStream(
+                new java.io.ByteArrayInputStream(message.payload()))) {
+            if (in.readByte() != 1) {
+                return;
+            }
+            int count = in.readUnsignedShort();
+            if (count > MAX_REMOTE_NAMES) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < count; i++) {
+                String account = in.readUTF();
+                String name = in.readUTF();
+                boolean full = in.readBoolean();
+                if (CrossServerChat.validName(account) && CrossServerChat.validName(name)) {
+                    fresh.put(account.toLowerCase(java.util.Locale.ROOT), new RemoteName(account, name, full, server, now));
+                }
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            return;
+        }
+        remoteNames.values().removeIf(entry -> entry.server().equalsIgnoreCase(server));
+        remoteNames.putAll(fresh);
+    }
+
+    private @Nullable RemoteName remoteName(String account) {
+        RemoteName entry = remoteNames.get(account.toLowerCase(java.util.Locale.ROOT));
+        if (entry == null) {
+            return null;
+        }
+        if (System.currentTimeMillis() - entry.seenAt() > REMOTE_NAME_TTL_MILLIS) {
+            remoteNames.remove(account.toLowerCase(java.util.Locale.ROOT), entry);
+            return null;
+        }
+        return entry;
+    }
+
+    private @Nullable RemoteName remoteByShown(String name) {
+        long now = System.currentTimeMillis();
+        for (RemoteName entry : remoteNames.values()) {
+            if (entry.shown().equalsIgnoreCase(name) && now - entry.seenAt() <= REMOTE_NAME_TTL_MILLIS) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    /** The name to print for an account on another server: its disguise or nickname when it has one. */
+    private String shownRemote(String account) {
+        RemoteName entry = remoteName(account);
+        return entry == null ? account : entry.shown();
+    }
+
+    /**
+     * The local target of a private message: a player whose disguise name was typed, else the account with that
+     * name unless it is fully disguised and the sender may not look behind disguises.
+     */
+    private @Nullable Player findForMessage(CommandSender sender, String name) {
+        for (Player online : ctx.plugin().getServer().getOnlinePlayers()) {
+            if ((online.hasMetadata(DISGUISE_KEY) || online.hasMetadata(NICK_KEY))
+                    && shown(online).equalsIgnoreCase(name)) {
+                return online;
+            }
+        }
+        Player account = findOnline(name);
+        if (account != null && account.hasMetadata(DISGUISE_KEY) && !sender.equals(account)
+                && !sender.hasPermission(REVEAL_PERMISSION)) {
+            return null;
+        }
+        return account;
+    }
+
+    /** Whether {@code name} is the account name of a fully disguised local player this sender may not see through. */
+    private boolean hiddenHere(CommandSender sender, String name) {
+        Player account = findOnline(name);
+        return account != null && account.hasMetadata(DISGUISE_KEY) && !sender.equals(account)
+                && !sender.hasPermission(REVEAL_PERMISSION);
     }
 
     private Player findOnline(String name) {

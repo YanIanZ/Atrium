@@ -17,7 +17,11 @@ final class PlayerStore {
                     "ALTER TABLE {prefix}player_state ADD COLUMN god BOOLEAN NOT NULL DEFAULT FALSE"),
             Migration.of(3, "player_identity",
                     "CREATE TABLE {prefix}player_identity (uuid CHAR(36) NOT NULL PRIMARY KEY,"
-                            + " last_name VARCHAR(16) NOT NULL, changed_at BIGINT NOT NULL)"));
+                            + " last_name VARCHAR(16) NOT NULL, changed_at BIGINT NOT NULL)"),
+            Migration.of(4, "player_tempfly",
+                    // IF NOT EXISTS: servers that share one database may run this migration at the same time.
+                    "CREATE TABLE IF NOT EXISTS {prefix}player_tempfly (uuid CHAR(36) NOT NULL PRIMARY KEY,"
+                            + " seconds BIGINT NOT NULL, active BOOLEAN NOT NULL)"));
 
     private final Database db;
     final UserComponentType<PlayerState> component;

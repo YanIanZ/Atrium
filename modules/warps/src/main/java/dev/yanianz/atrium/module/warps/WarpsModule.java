@@ -507,7 +507,7 @@ public final class WarpsModule implements AtriumModule, WarpService, WarpAdminSe
                 messages.send(target, "warps.teleported", Msg.unparsed("warp", warp.name()));
                 if (!self && actor != null) {
                     reply(actor, "warps.teleported-other", Msg.unparsed("warp", warp.name()),
-                            Msg.unparsed("player", target.getName()));
+                            Msg.unparsed("player", Msg.shownName(target)));
                 }
             });
         });
