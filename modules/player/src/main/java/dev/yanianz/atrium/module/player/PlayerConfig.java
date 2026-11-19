@@ -44,6 +44,13 @@ public class PlayerConfig {
             + "and the armour/enchanted filters above are skipped. Use material keys such as minecraft:pumpkin.")
     public List<String> hatWhitelist = List.of();
 
+    @Comment("Timed flight (/tempfly): players spend a balance of flight time that staff, shops or rewards\n"
+            + "give with /tempfly give <player> <duration>. false = the balance cannot be used on this server.")
+    public boolean timedFlightEnabled = true;
+
+    @Comment("Worlds where timed flight is paused (no flight, no time spent). World names, not case sensitive.")
+    public List<String> timedFlightBlockedWorlds = List.of();
+
     @Comment("Maximum duration accepted by /tgod, in seconds (clamped to 1-31536000).")
     public int maxTimedGodSeconds = 86400;
 

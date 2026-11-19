@@ -197,7 +197,7 @@ final class TeleportCommands {
             throws CommandSyntaxException {
         boolean accepts = service.state(target).map(TeleportState::acceptsRequests).orElse(true);
         if (!accepts && !sender.hasPermission(PERM_TOGGLE_BYPASS) && !sender.equals(target)) {
-            throw cmds.fail(c.getSource(), "teleport.target-toggled", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(c.getSource(), "teleport.target-toggled", Msg.unparsed("player", Msg.shownName(target)));
         }
     }
 
@@ -219,10 +219,10 @@ final class TeleportCommands {
                     if (result != TeleportResult.SUCCESS) {
                         return;
                     }
-                    messages.send(who, "teleport.tp-to-player", Msg.unparsed("player", destination.getName()));
+                    messages.send(who, "teleport.tp-to-player", Msg.unparsed("player", Msg.shownName(destination)));
                     if (!sender.equals(who)) {
-                        messages.send(sender, "teleport.tp-other-to-player", Msg.unparsed("player", who.getName()),
-                                Msg.unparsed("target", destination.getName()));
+                        messages.send(sender, "teleport.tp-other-to-player", Msg.unparsed("player", Msg.shownName(who)),
+                                Msg.unparsed("target", Msg.shownName(destination)));
                     }
                 });
     }
@@ -258,7 +258,7 @@ final class TeleportCommands {
                             messages.send(who, "teleport.tp-to-position", placeholders);
                             if (!sender.equals(who)) {
                                 messages.send(sender, "teleport.tp-other-to-position", placeholders,
-                                        Msg.unparsed("player", who.getName()));
+                                        Msg.unparsed("player", Msg.shownName(who)));
                             }
                         }
                         return result;
@@ -281,8 +281,8 @@ final class TeleportCommands {
         Location here = self.getLocation();
         service.teleport(target, here, TeleportCause.COMMAND, TeleportOptions.IMMEDIATE).thenAccept(result -> {
             if (result == TeleportResult.SUCCESS) {
-                messages.send(self, "teleport.tphere", Msg.unparsed("player", target.getName()));
-                messages.send(target, "teleport.tphere-target", Msg.unparsed("player", self.getName()));
+                messages.send(self, "teleport.tphere", Msg.unparsed("player", Msg.shownName(target)));
+                messages.send(target, "teleport.tphere-target", Msg.unparsed("player", Msg.shownName(self)));
             }
         });
         return Cmds.OK;
@@ -299,7 +299,7 @@ final class TeleportCommands {
             count++;
             service.teleport(other, here, TeleportCause.COMMAND, TeleportOptions.IMMEDIATE).thenAccept(result -> {
                 if (result == TeleportResult.SUCCESS) {
-                    messages.send(other, "teleport.tphere-target", Msg.unparsed("player", self.getName()));
+                    messages.send(other, "teleport.tphere-target", Msg.unparsed("player", Msg.shownName(self)));
                 }
             });
         }

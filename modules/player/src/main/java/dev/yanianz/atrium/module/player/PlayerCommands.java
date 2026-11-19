@@ -164,7 +164,7 @@ final class PlayerCommands implements Listener, TaskHandle {
         reply(target, key, tags);
         if (!sender.equals(target)) {
             reply(sender, key + "-other", TagResolver.resolver(
-                    Msg.unparsed("player", target.getName()), TagResolver.resolver(tags)));
+                    Msg.unparsed("player", Msg.shownName(target)), TagResolver.resolver(tags)));
         }
     }
 
@@ -349,7 +349,7 @@ final class PlayerCommands implements Listener, TaskHandle {
             throws CommandSyntaxException {
         return run(c, "exp", (s, p) -> {
             if (operation.equals("show")) {
-                reply(s, "exp-show", Msg.unparsed("player", p.getName()), Msg.number("levels", p.getLevel()),
+                reply(s, "exp-show", Msg.unparsed("player", Msg.shownName(p)), Msg.number("levels", p.getLevel()),
                         Msg.number("points", p.calculateTotalExperiencePoints()));
                 return;
             }

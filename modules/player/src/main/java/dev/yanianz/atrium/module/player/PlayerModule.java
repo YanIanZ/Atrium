@@ -32,6 +32,7 @@ public final class PlayerModule implements AtriumModule, Listener {
     private ConfigHandle<PlayerConfig> config;
     private PlayerStore store;
     private FlightManager flight;
+    private TimedFlight timedFlight;
     private NameChangeWatcher nameChanges;
 
     @Override
@@ -57,6 +58,8 @@ public final class PlayerModule implements AtriumModule, Listener {
         ctx.listen(flight);
         ctx.service(FlightService.class, flight);
         ctx.listen(this);
+        this.timedFlight = new TimedFlight(ctx, config, flight);
+        this.timedFlight.register();
         new PlayerCommands(ctx, config, store).register();
         new InventoryCommands(ctx, config).register();
         new UtilityCommands(ctx, config, store).register();
@@ -70,8 +73,14 @@ public final class PlayerModule implements AtriumModule, Listener {
 
         ctx.command(CommandSpec.of(Cmds.literal("fly", "atrium.fly")
                 .executes(this::fly)
-                .then(Commands.argument("target", ArgumentTypes.player()).executes(this::fly))
-                .build(), "Toggle flight"));
+                .then(Commands.argument("target", ArgumentTypes.player()).executes(this::fly)
+                        // /fly <player> <duration>: flight for a limited time (adds to the player's timed
+                        // flight balance and switches it on); the same right as /tempfly give.
+                        .then(Commands.argument("duration", com.mojang.brigadier.arguments.StringArgumentType.word())
+                                .requires(Cmds.permission("atrium.tempfly.admin"))
+                                .suggests(Cmds.suggest(() -> java.util.List.of("10m", "30m", "1h", "6h", "1d")))
+                                .executes(c -> timedFlight.grantAndStart(c))))
+                .build(), "Toggle flight, or give flight for a duration"));
         ctx.command(CommandSpec.of(Cmds.literal("heal", "atrium.heal")
                 .executes(this::heal)
                 .then(Commands.argument("target", ArgumentTypes.player()).executes(this::heal))
@@ -95,7 +104,7 @@ public final class PlayerModule implements AtriumModule, Listener {
             String key = enable ? "player.fly-enabled" : "player.fly-disabled";
             ctx.messages().send(target, key);
             if (!target.equals(sender)) {
-                reply(sender, key + "-other", Msg.unparsed("player", target.getName()));
+                reply(sender, key + "-other", Msg.unparsed("player", Msg.shownName(target)));
             }
         }, null);
         return Cmds.OK;
@@ -120,7 +129,7 @@ public final class PlayerModule implements AtriumModule, Listener {
             }
             ctx.messages().send(target, "player.healed");
             if (!target.equals(sender)) {
-                reply(sender, "player.healed-other", Msg.unparsed("player", target.getName()));
+                reply(sender, "player.healed-other", Msg.unparsed("player", Msg.shownName(target)));
             }
         }, null);
         return Cmds.OK;

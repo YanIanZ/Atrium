@@ -327,7 +327,7 @@ final class UtilityCommands implements Listener, TaskHandle {
             } else {
                 at.getWorld().strikeLightning(at);
             }
-            done(sender, target, safe ? "smite-safe" : "smite", Msg.unparsed("player", target.getName()));
+            done(sender, target, safe ? "smite-safe" : "smite", Msg.unparsed("player", Msg.shownName(target)));
         });
     }
 
@@ -451,7 +451,7 @@ final class UtilityCommands implements Listener, TaskHandle {
         reply(target, key, tags);
         if (!sender.equals(target)) {
             reply(sender, key + "-other", TagResolver.resolver(
-                    Msg.unparsed("player", target.getName()), TagResolver.resolver(tags)));
+                    Msg.unparsed("player", Msg.shownName(target)), TagResolver.resolver(tags)));
         }
     }
 

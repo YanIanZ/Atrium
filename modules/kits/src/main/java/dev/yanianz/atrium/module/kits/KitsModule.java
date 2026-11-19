@@ -108,7 +108,21 @@ public final class KitsModule implements AtriumModule, Listener {
         ctx.permission("atrium.kit.bypass.maxuses", PermissionDefault.OP, "Ignore per-kit maximum uses");
         for (Kit kit : kits.kits()) registerPermission(kit);
         registerCommands();
-        ctx.service(dev.yanianz.atrium.api.kits.KitAdminService.class, new KitAdmin(kits, kit -> ctx.scheduler().global(() -> registerPermission(kit))));
+        KitAdmin kitAdmin = new KitAdmin(kits, kit -> ctx.scheduler().global(() -> registerPermission(kit)));
+        ctx.service(dev.yanianz.atrium.api.kits.KitAdminService.class, kitAdmin);
+        // WuretaMC: one-time import of the PlayerKits2 kits (console or an admin): /kitimport playerkits2 [overwrite]
+        PlayerKitsImport playerKits = new PlayerKitsImport(ctx, kitAdmin);
+        ctx.command(CommandSpec.of(Cmds.literal("kitimport", "atrium.kit.admin")
+                .then(Cmds.literal("playerkits2")
+                        .executes(c -> {
+                            playerKits.run(c.getSource().getSender(), false);
+                            return Cmds.OK;
+                        })
+                        .then(Cmds.literal("overwrite").executes(c -> {
+                            playerKits.run(c.getSource().getSender(), true);
+                            return Cmds.OK;
+                        })))
+                .build(), "Import the kits of the PlayerKits2 plugin"));
         ctx.logger().info("Loaded {} kits", kits.kits().size());
     }
 
@@ -527,7 +541,7 @@ public final class KitsModule implements AtriumModule, Listener {
         var holder = editor.editing(kit.name());
         if (holder.isPresent()) {
             throw fail(c, "kits.editor-in-use", Msg.unparsed("kit", kit.name()),
-                    Msg.unparsed("player", holder.get().getName()));
+                    Msg.unparsed("player", Msg.shownName(holder.get())));
         }
     }
 

@@ -88,12 +88,12 @@ final class CombatCommands {
             int seconds = CombatTiming.secondsLeft(remaining);
             if (remaining > 0) {
                 Reply.send(ctx, sender, other ? "combat.tag-status-other" : "combat.tag-status-self",
-                        Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
+                        Msg.unparsed("player", Msg.shownName(target)), Msg.number("seconds", seconds));
             } else {
                 Reply.send(ctx, sender, other ? "combat.tag-status-none-other" : "combat.tag-status-none-self",
-                        Msg.unparsed("player", target.getName()));
+                        Msg.unparsed("player", Msg.shownName(target)));
             }
-        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", target.getName())));
+        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", Msg.shownName(target))));
     }
 
     private int tag(CommandContext<CommandSourceStack> c, int seconds) throws CommandSyntaxException {
@@ -101,13 +101,13 @@ final class CombatCommands {
         CommandSender sender = c.getSource().getSender();
         ctx.scheduler().entity(target, () -> {
             if (!tracker.canTag(target)) {
-                Reply.send(ctx, sender, "combat.tag-not-applied", Msg.unparsed("player", target.getName()));
+                Reply.send(ctx, sender, "combat.tag-not-applied", Msg.unparsed("player", Msg.shownName(target)));
                 return;
             }
             tracker.tagNow(target, seconds * 1000L);
             Reply.send(ctx, sender, "combat.tagged-other",
-                    Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
-        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", target.getName())));
+                    Msg.unparsed("player", Msg.shownName(target)), Msg.number("seconds", seconds));
+        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", Msg.shownName(target))));
         return Cmds.OK;
     }
 
@@ -117,8 +117,8 @@ final class CombatCommands {
         ctx.scheduler().entity(target, () -> {
             boolean wasTagged = tracker.clearNow(target);
             Reply.send(ctx, sender, wasTagged ? "combat.untagged-other" : "combat.untagged-none",
-                    Msg.unparsed("player", target.getName()));
-        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", target.getName())));
+                    Msg.unparsed("player", Msg.shownName(target)));
+        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", Msg.shownName(target))));
         return Cmds.OK;
     }
 
@@ -144,8 +144,8 @@ final class CombatCommands {
             String key = enabled ? "combat.notarget-on" : "combat.notarget-off";
             ctx.messages().send(target, key);
             if (!target.equals(sender)) {
-                Reply.send(ctx, sender, key + "-other", Msg.unparsed("player", target.getName()));
+                Reply.send(ctx, sender, key + "-other", Msg.unparsed("player", Msg.shownName(target)));
             }
-        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", target.getName())));
+        }, () -> Reply.send(ctx, sender, "combat.target-left", Msg.unparsed("player", Msg.shownName(target))));
     }
 }

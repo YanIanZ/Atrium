@@ -53,6 +53,7 @@ public final class ModerationModule implements AtriumModule {
 
     private ConfigHandle<ModerationConfig> config;
     private ModerationSync sync;
+    private @org.jspecify.annotations.Nullable StaffMenus staffMenus;
     private @org.jspecify.annotations.Nullable JailBossbar bossbar;
 
     @Override
@@ -75,7 +76,9 @@ public final class ModerationModule implements AtriumModule {
     @Override
     public void enable(ModuleContext ctx) throws Exception {
         this.config = ctx.config(ModerationConfig.class, ModerationConfig::new);
-        ctx.migrate(PunishmentStore.MIGRATIONS);
+        java.util.List<dev.yanianz.atrium.core.storage.Migration> migrations = new java.util.ArrayList<>(PunishmentStore.MIGRATIONS);
+        migrations.add(ReportStore.MIGRATION);
+        ctx.migrate(migrations);
         // v4 of the jail schema is applied separately: it inspects the table so it can be re-run after a
         // partially applied MySQL migration (see JailStore.ensureEditorColumns).
         JailStore.ensureEditorColumns(ctx.database()).get(30, TimeUnit.SECONDS);
@@ -134,6 +137,8 @@ public final class ModerationModule implements AtriumModule {
         listener.bossbar(bossbar);
         ctx.listen(listener);
         new ModerationCommands(ctx, config, manager).register();
+        staffMenus = new StaffMenus(ctx, config, new ReportStore(ctx.database()));
+        staffMenus.register();
         scheduleAfkPauses(ctx, manager);
         ctx.logger().info("Moderation ready: {} jails, {} escalation rules", jails.all().size(),
                 cfg().warnings.escalation.size());
@@ -155,6 +160,10 @@ public final class ModerationModule implements AtriumModule {
 
     @Override
     public void disable() {
+        if (staffMenus != null) {
+            staffMenus.disable();
+            staffMenus = null;
+        }
         if (sync != null) {
             sync.disable();
         }

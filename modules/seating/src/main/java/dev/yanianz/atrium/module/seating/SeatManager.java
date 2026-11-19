@@ -658,7 +658,7 @@ final class SeatManager {
         send(player, key, tags);
         if (!sender.equals(player)) {
             send(sender, key + "-other", TagResolver.resolver(
-                    Msg.unparsed("player", player.getName()), TagResolver.resolver(tags)));
+                    Msg.unparsed("player", Msg.shownName(player)), TagResolver.resolver(tags)));
         }
     }
 

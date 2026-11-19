@@ -12,6 +12,38 @@ import org.bukkit.Location;
 public final class Msg {
     private Msg() {}
 
+    /**
+     * The name other players may see for someone: the account name, or for a disguised player (WuretaDisguise
+     * marks them with the metadata {@code wureta_disguised}, or {@code wureta_nick} for a name-only disguise) the
+     * name they show. Use it for every name that goes
+     * into a message; keep {@code getName()} for logs, storage and command arguments.
+     */
+    public static String shownName(org.bukkit.entity.Player player) {
+        if (player == null) return "";
+        try {
+            if (player.hasMetadata("wureta_disguised") || player.hasMetadata("wureta_nick")) {
+                String shown = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                        .serialize(player.displayName());
+                if (!shown.isBlank()) return shown;
+            }
+        } catch (RuntimeException ignored) {
+            // fall through to the account name
+        }
+        return player.getName();
+    }
+
+    public static String shownName(org.bukkit.command.CommandSender sender) {
+        return sender instanceof org.bukkit.entity.Player player ? shownName(player) : sender == null ? "" : sender.getName();
+    }
+
+    public static String shownName(org.bukkit.OfflinePlayer player) {
+        if (player == null) return "";
+        org.bukkit.entity.Player online = player.getPlayer();
+        if (online != null) return shownName(online);
+        String name = player.getName();
+        return name == null ? "" : name;
+    }
+
     /** Untrusted text (player names, chat, item names typed by players): inserted literally. */
     public static TagResolver unparsed(String name, String value) {
         return Placeholder.unparsed(name, value == null ? "" : value);

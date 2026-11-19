@@ -128,7 +128,7 @@ final class KitService {
             @Nullable UUID payer, boolean firstJoin, CompletableFuture<Outcome> result) {
         CommandSender reply = notify == null ? target : notify;
         if (!target.isOnline() || target.isDead()) {
-            tell(reply, "target-unavailable", Msg.unparsed("player", target.getName()));
+            tell(reply, "target-unavailable", Msg.unparsed("player", Msg.shownName(target)));
             result.complete(Outcome.REFUSED);
             return;
         }
@@ -176,7 +176,7 @@ final class KitService {
             return;
         }
         if (!dropOverflow() && !KitGiver.fits(target.getInventory(), items)) {
-            tell(reply, "no-space", Msg.unparsed("player", target.getName()));
+            tell(reply, "no-space", Msg.unparsed("player", Msg.shownName(target)));
             result.complete(Outcome.REFUSED);
             return;
         }
@@ -214,7 +214,7 @@ final class KitService {
                     () -> {
                         refund(eco, payerId, tx.amount(), current.name());
                         undo.run();
-                        tell(reply, "target-unavailable", Msg.unparsed("player", target.getName()));
+                        tell(reply, "target-unavailable", Msg.unparsed("player", Msg.shownName(target)));
                         result.complete(Outcome.REFUSED);
                     });
         });
@@ -227,7 +227,7 @@ final class KitService {
             if (!target.isOnline() || target.isDead()) {
                 if (refundNeeded) refund(eco, payer, charged, kit.name());
                 undo.run();
-                tell(reply, "target-unavailable", Msg.unparsed("player", target.getName()));
+                tell(reply, "target-unavailable", Msg.unparsed("player", Msg.shownName(target)));
                 result.complete(Outcome.REFUSED);
                 return;
             }
@@ -235,7 +235,7 @@ final class KitService {
             if (!drop && !KitGiver.fits(target.getInventory(), items)) {
                 if (refundNeeded) refund(eco, payer, charged, kit.name());
                 undo.run();
-                tell(reply, "no-space", Msg.unparsed("player", target.getName()));
+                tell(reply, "no-space", Msg.unparsed("player", Msg.shownName(target)));
                 result.complete(Outcome.REFUSED);
                 return;
             }
@@ -259,7 +259,7 @@ final class KitService {
         });
         ctx.messages().send(target, "kits.received", Msg.unparsed("kit", kit.name()));
         if (!reply.equals(target)) {
-            tell(reply, "given", Msg.unparsed("kit", kit.name()), Msg.unparsed("player", target.getName()));
+            tell(reply, "given", Msg.unparsed("kit", kit.name()), Msg.unparsed("player", Msg.shownName(target)));
         }
         if (eco != null && charged.signum() > 0 && payer != null) {
             tell(reply, "charged", Msg.unparsed("cost", eco.format(charged)));

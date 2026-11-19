@@ -51,16 +51,17 @@ final class CrossServerChat {
     /** Rendered-line JSON is capped; above this the line is sent without item hovers, then as plain text. */
     static final int MAX_JSON_BYTES = 24 * 1024;
     static final int MAX_TEXT_CHARS = 256;
-    static final int MAX_NAME_CHARS = 16;
+    static final int MAX_NAME_CHARS = 17;
     static final int MAX_SERVER_CHARS = 64;
     static final int MAX_MENTIONS = 16;
 
-    private static final Pattern NAME = Pattern.compile("[A-Za-z0-9_]{1,16}");
+    /** Java account names, and Bedrock ones behind the network's "." prefix. */
+    private static final Pattern NAME = Pattern.compile("\\.?[A-Za-z0-9_]{1,16}");
     private static final Pattern SERVER = Pattern.compile("[A-Za-z0-9_.-]{1,64}");
     /** A click on a received line may only open a shared snapshot, never run an arbitrary command. */
     private static final Pattern SAFE_COMMAND = Pattern.compile("/chatview [A-Za-z0-9]{12}");
     /** The sender-name hover card suggests a private message; nothing else may be suggested. */
-    private static final Pattern SAFE_SUGGEST = Pattern.compile("/msg [A-Za-z0-9_]{1,16} ?");
+    private static final Pattern SAFE_SUGGEST = Pattern.compile("/msg \\.?[A-Za-z0-9_]{1,16} ?");
     private static final UUID ZERO = new UUID(0, 0);
     private static final GsonComponentSerializer GSON = GsonComponentSerializer.gson();
 

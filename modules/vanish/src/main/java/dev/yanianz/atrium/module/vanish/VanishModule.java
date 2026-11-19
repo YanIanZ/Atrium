@@ -130,7 +130,7 @@ public final class VanishModule implements AtriumModule {
         boolean self = target.equals(sender);
         // Staff may only change players whose vanish level they can see.
         if (!self && !manager.seesWhenVanished(sender, target)) {
-            throw cmds.fail(c.getSource(), "vanish.level-too-high", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(c.getSource(), "vanish.level-too-high", Msg.unparsed("player", Msg.shownName(target)));
         }
         String name = target.getName();
         UUID uuid = target.getUniqueId();

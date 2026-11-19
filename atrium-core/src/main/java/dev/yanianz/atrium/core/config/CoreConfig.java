@@ -76,6 +76,9 @@ public class CoreConfig {
         public String highlight = "white";
         @Comment("MiniMessage for the <prefix> tag (theme tags work here). Empty = use 'prefix' from lang/<locale>/core.yml.")
         public String prefix = "";
+        @Comment("<prefix> per message bundle: the part of a message key before the first dot (economy, afk, homes, ...).\n"
+                + "A bundle without an entry uses 'prefix'. MiniMessage; theme tags work here.")
+        public java.util.Map<String, String> prefixes = new java.util.LinkedHashMap<>();
         @Comment("Defaults for chest menus.")
         public GuiSettings gui = new GuiSettings();
     }

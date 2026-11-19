@@ -127,7 +127,7 @@ final class PlayerPlusCommands {
                 ctx.messages().send(target, "playerplus.tfly-started", Msg.duration("time", Duration.ofMillis(total)));
             }
             if (!target.equals(sender)) {
-                reply(sender, "tfly-started-other", Msg.unparsed("player", target.getName()),
+                reply(sender, "tfly-started-other", Msg.unparsed("player", Msg.shownName(target)),
                         Msg.duration("time", Duration.ofMillis(total)));
             }
         }, () -> reply(sender, "target-left"));
@@ -144,7 +144,7 @@ final class PlayerPlusCommands {
                 ctx.messages().send(target, "playerplus.tfly-stopped");
             }
             if (!target.equals(sender)) {
-                reply(sender, "tfly-stopped-other", Msg.unparsed("player", target.getName()));
+                reply(sender, "tfly-stopped-other", Msg.unparsed("player", Msg.shownName(target)));
             }
         }, () -> reply(sender, "target-left"));
         return Cmds.OK;
@@ -297,7 +297,7 @@ final class PlayerPlusCommands {
                             Msg.number("charge", value), Msg.number("max", charge.maxSeconds()));
                 }
                 if (!target.equals(sender)) {
-                    reply(sender, "charge-admin-set", Msg.unparsed("player", target.getName()),
+                    reply(sender, "charge-admin-set", Msg.unparsed("player", Msg.shownName(target)),
                             Msg.number("charge", value), Msg.number("max", charge.maxSeconds()));
                 }
             }, error -> reply(sender, "save-failed"));
@@ -483,11 +483,11 @@ final class PlayerPlusCommands {
         }
         if (!target.isOnline()) {
             throw cmds.fail(c.getSource(), "playerplus.giftpet-target-left",
-                    Msg.unparsed("player", target.getName()));
+                    Msg.unparsed("player", Msg.shownName(target)));
         }
         giftPet.arm(owner, target);
         ctx.messages().send(owner, "playerplus.giftpet-armed",
-                Msg.unparsed("player", target.getName()),
+                Msg.unparsed("player", Msg.shownName(target)),
                 Msg.number("seconds", Math.max(1, config.get().giftPet.windowSeconds)));
         return Cmds.OK;
     }
@@ -516,7 +516,7 @@ final class PlayerPlusCommands {
                 ctx.messages().send(target, "playerplus.hunger-set", Msg.number("level", level));
             }
             if (!target.equals(sender)) {
-                reply(sender, "hunger-set-other", Msg.unparsed("player", target.getName()),
+                reply(sender, "hunger-set-other", Msg.unparsed("player", Msg.shownName(target)),
                         Msg.number("level", level));
             }
         }, () -> reply(sender, "target-left"));
@@ -563,7 +563,7 @@ final class PlayerPlusCommands {
                 ctx.messages().send(target, "playerplus.saturation-set", Msg.number("saturation", applied));
             }
             if (!target.equals(sender)) {
-                reply(sender, "saturation-set-other", Msg.unparsed("player", target.getName()),
+                reply(sender, "saturation-set-other", Msg.unparsed("player", Msg.shownName(target)),
                         Msg.number("saturation", applied));
             }
         }, () -> reply(sender, "target-left"));

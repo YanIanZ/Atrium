@@ -255,7 +255,7 @@ final class InventoryCommands implements Listener, TaskHandle {
                         now + TimeUnit.SECONDS.toNanos(seconds));
                 confirmations.put(sender, pending);
                 ctx.scheduler().globalLater(() -> confirmations.remove(sender, pending), seconds * 20L);
-                reply(sender, "clear-confirm", Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
+                reply(sender, "clear-confirm", Msg.unparsed("player", Msg.shownName(target)), Msg.number("seconds", seconds));
                 return Cmds.OK;
             }
         }
@@ -272,7 +272,7 @@ final class InventoryCommands implements Listener, TaskHandle {
                     inventory.setItem(slot, stack.isEmpty() ? null : stack);
                     removed += take;
                 }
-                reply(sender, "cleared", Msg.unparsed("player", target.getName()), Msg.number("count", removed));
+                reply(sender, "cleared", Msg.unparsed("player", Msg.shownName(target)), Msg.number("count", removed));
                 if (!sender.equals(target)) reply(target, "cleared-target", Msg.number("count", removed));
             } catch (RuntimeException e) { failed(sender, "Clear inventory", e); }
         }, () -> reply(sender, "target-left"));

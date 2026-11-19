@@ -803,7 +803,26 @@ final class PunishmentManager implements PunishmentService, MuteService {
 
     /** Stores the chat mute deadline; the in-memory copy changes only after the write succeeded. */
     CompletableFuture<Void> setMuteChat(MuteChatState state) {
-        return store.saveState(MuteChatState.stateKey(), state).thenRun(() -> muteChat = state);
+        return store.saveState(MuteChatState.stateKey(), state).thenRun(() -> {
+            muteChat = state;
+            ModerationSync current = sync;
+            if (current != null) {
+                current.publishMuteChat();
+            }
+        });
+    }
+
+    /**
+     * Reads the server-wide chat mute again from the database (another server may have changed it) and returns
+     * the state this server had before and the one it has now.
+     */
+    CompletableFuture<MuteChatState[]> refreshMuteChat() {
+        return store.loadState(MuteChatState.stateKey()).thenApply(found -> {
+            MuteChatState before = muteChat;
+            MuteChatState now = found.orElse(MuteChatState.NONE);
+            muteChat = now;
+            return new MuteChatState[] {before, now};
+        });
     }
 
     /** Reads the stored chat mute at startup. */

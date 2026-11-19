@@ -149,7 +149,7 @@ final class RequestCommands implements Listener {
         }
         boolean accepts = service.state(target).map(TeleportState::acceptsRequests).orElse(true);
         if (!accepts && !self.hasPermission(TeleportCommands.PERM_TOGGLE_BYPASS)) {
-            throw cmds.fail(c.getSource(), "teleport.target-toggled", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(c.getSource(), "teleport.target-toggled", Msg.unparsed("player", Msg.shownName(target)));
         }
         TeleportConfig.Requests cfg = config.get().requests;
         if (!cfg.allowCrossWorld && !self.getWorld().equals(target.getWorld())) {
@@ -157,17 +157,17 @@ final class RequestCommands implements Listener {
         }
         Optional<IgnoreService> ignored = ctx.services().get(IgnoreService.class);
         if (ignored.isPresent() && ignored.get().isIgnoring(target.getUniqueId(), self.getUniqueId())) {
-            throw cmds.fail(c.getSource(), "teleport.request-ignored", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(c.getSource(), "teleport.request-ignored", Msg.unparsed("player", Msg.shownName(target)));
         }
         if (ignored.isPresent() && ignored.get().isIgnoring(self.getUniqueId(), target.getUniqueId())) {
-            throw cmds.fail(c.getSource(), "teleport.request-you-ignore", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(c.getSource(), "teleport.request-you-ignore", Msg.unparsed("player", Msg.shownName(target)));
         }
         String held = self.getInventory().getItemInMainHand().getType().name();
         if (RequestRules.blockedItem(cfg.blockedMaterials, held)) {
             throw cmds.fail(c.getSource(), "teleport.request-blocked-item", Msg.unparsed("item", held));
         }
         if (book.hasPending(self.getUniqueId(), target.getUniqueId(), type)) {
-            throw cmds.fail(c.getSource(), "teleport.request-already", Msg.unparsed("player", target.getName()));
+            throw cmds.fail(c.getSource(), "teleport.request-already", Msg.unparsed("player", Msg.shownName(target)));
         }
         int configured = Math.max(0, cfg.maxDistance);
         int limit = configured <= 0 ? 0 : Permissions.limit(self, PERM_TPA_MAX, configured);
@@ -187,7 +187,7 @@ final class RequestCommands implements Listener {
                     }
                     if (!Boolean.TRUE.equals(allowed)) {
                         messages.send(self, "teleport.request-too-far", Msg.number("distance", limit),
-                                Msg.unparsed("player", target.getName()));
+                                Msg.unparsed("player", Msg.shownName(target)));
                         return;
                     }
                     sendRequest(self, target, type);
@@ -200,14 +200,14 @@ final class RequestCommands implements Listener {
         // A blocked requester gets the same reply as everyone else; the target never sees the request.
         if (blocked(self, target)) {
             long seconds = Math.max(5, config.get().requests.expireSeconds);
-            messages.send(self, "teleport.request-sent", Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
+            messages.send(self, "teleport.request-sent", Msg.unparsed("player", Msg.shownName(target)), Msg.number("seconds", seconds));
             return;
         }
         Request request = book.add(self.getUniqueId(), target.getUniqueId(), type);
         long seconds = Duration.between(request.created(), request.expires()).toSeconds();
-        messages.send(self, "teleport.request-sent", Msg.unparsed("player", target.getName()), Msg.number("seconds", seconds));
+        messages.send(self, "teleport.request-sent", Msg.unparsed("player", Msg.shownName(target)), Msg.number("seconds", seconds));
         messages.send(target, type == Type.TPA ? "teleport.tpa-received" : "teleport.tpahere-received",
-                Msg.unparsed("player", self.getName()), Msg.number("seconds", seconds));
+                Msg.unparsed("player", Msg.shownName(self)), Msg.number("seconds", seconds));
         target.sendMessage(buttons(target, self.getName()));
     }
 
@@ -274,8 +274,8 @@ final class RequestCommands implements Listener {
         if (requester == null) {
             throw cmds.fail(c.getSource(), "teleport.requester-offline");
         }
-        messages.send(self, "teleport.request-accepted-receiver", Msg.unparsed("player", requester.getName()));
-        messages.send(requester, "teleport.request-accepted-sender", Msg.unparsed("player", self.getName()));
+        messages.send(self, "teleport.request-accepted-receiver", Msg.unparsed("player", Msg.shownName(requester)));
+        messages.send(requester, "teleport.request-accepted-sender", Msg.unparsed("player", Msg.shownName(self)));
         if (request.type() == Type.TPA) {
             // The destination is where the accepting player stands now (this is their thread).
             Location destination = self.getLocation();
@@ -297,7 +297,7 @@ final class RequestCommands implements Listener {
 
     private void arrived(TeleportResult result, Player traveller, Player destination) {
         if (result == TeleportResult.SUCCESS) {
-            messages.send(traveller, "teleport.tp-to-player", Msg.unparsed("player", destination.getName()));
+            messages.send(traveller, "teleport.tp-to-player", Msg.unparsed("player", Msg.shownName(destination)));
         }
     }
 
@@ -311,7 +311,7 @@ final class RequestCommands implements Listener {
         String name = requester == null ? "?" : requester.getName();
         messages.send(self, "teleport.request-denied-receiver", Msg.unparsed("player", name));
         if (requester != null) {
-            messages.send(requester, "teleport.request-denied-sender", Msg.unparsed("player", self.getName()));
+            messages.send(requester, "teleport.request-denied-sender", Msg.unparsed("player", Msg.shownName(self)));
         }
         return Cmds.OK;
     }
@@ -325,7 +325,7 @@ final class RequestCommands implements Listener {
         String name = receiver == null ? "?" : receiver.getName();
         messages.send(self, "teleport.request-cancelled-sender", Msg.unparsed("player", name));
         if (receiver != null) {
-            messages.send(receiver, "teleport.request-cancelled-receiver", Msg.unparsed("player", self.getName()));
+            messages.send(receiver, "teleport.request-cancelled-receiver", Msg.unparsed("player", Msg.shownName(self)));
         }
         return Cmds.OK;
     }
@@ -496,7 +496,7 @@ final class RequestCommands implements Listener {
             UUID other = request.sender().equals(quitting.getUniqueId()) ? request.receiver() : request.sender();
             Player online = Bukkit.getPlayer(other);
             if (online != null) {
-                messages.send(online, "teleport.request-cancelled-quit", Msg.unparsed("player", quitting.getName()));
+                messages.send(online, "teleport.request-cancelled-quit", Msg.unparsed("player", Msg.shownName(quitting)));
             }
         }
     }

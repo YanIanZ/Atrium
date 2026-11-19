@@ -40,6 +40,15 @@ public class InventoriesConfig {
     @Comment("Rows of a vault without a numeric atrium.pv.size.<rows> permission (1-6).")
     public int defaultVaultRows = 6;
 
+    @Comment("Open the ender chest as pages: an ender chest block and /enderchest show page one of the player's own\n"
+            + "pages (five rows each) instead of the vanilla 27 slots. Where the server has profiles every profile\n"
+            + "has its own pages. Nothing is moved automatically: items still in the vanilla ender chest stay\n"
+            + "there and a button in the menu opens it.")
+    public boolean enderPagesEnabled = false;
+
+    @Comment("Pages a player has without a numeric atrium.enderchest.pages.<n> permission (1-9).")
+    public int defaultEnderPages = 1;
+
     static int pageSize(InventoriesConfig config) {
         return Math.clamp(config.listPageSize, 1, 20);
     }

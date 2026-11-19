@@ -183,7 +183,7 @@ final class NavigationCommands {
                     messages.send(who, "teleport.tp-to-position", Msg.location("to", target));
                     if (!sender.equals(who)) {
                         messages.send(sender, "teleport.tp-other-to-position", Msg.location("to", target),
-                                Msg.unparsed("player", who.getName()));
+                                Msg.unparsed("player", Msg.shownName(who)));
                     }
                 }
                 return result;
@@ -211,10 +211,10 @@ final class NavigationCommands {
             if (error != null || result != TeleportResult.SUCCESS) {
                 return;
             }
-            messages.send(who, "teleport.tp-to-player", Msg.unparsed("player", destination.getName()));
+            messages.send(who, "teleport.tp-to-player", Msg.unparsed("player", Msg.shownName(destination)));
             if (!sender.equals(who)) {
-                messages.send(sender, "teleport.tp-other-to-player", Msg.unparsed("player", who.getName()),
-                        Msg.unparsed("target", destination.getName()));
+                messages.send(sender, "teleport.tp-other-to-player", Msg.unparsed("player", Msg.shownName(who)),
+                        Msg.unparsed("target", Msg.shownName(destination)));
             }
         });
         return Cmds.OK;

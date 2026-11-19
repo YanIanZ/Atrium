@@ -22,6 +22,8 @@ final class ChatRelay {
     static final String TOPIC_GLOBAL = "chat:global";
     static final String TOPIC_STAFF = "chat:staff";
     static final String TOPIC_PRIVATE = "chat:msg";
+    /** Names shown instead of account names (disguises, nicknames) of the players on the sending server. */
+    static final String TOPIC_NAMES = "chat:names";
 
     private static final long REJECT_LOG_MILLIS = 5000L;
 
@@ -43,6 +45,7 @@ final class ChatRelay {
         subscribe(TOPIC_GLOBAL, message -> module.onRemoteChat(message, CrossServerChat.Kind.GLOBAL));
         subscribe(TOPIC_STAFF, message -> module.onRemoteChat(message, CrossServerChat.Kind.STAFF));
         subscribe(TOPIC_PRIVATE, message -> module.onRemoteChat(message, CrossServerChat.Kind.PRIVATE));
+        subscribe(TOPIC_NAMES, module::onRemoteNames);
     }
 
     private void subscribe(String topic, Consumer<ProxyMessage> consumer) {
@@ -77,6 +80,19 @@ final class ChatRelay {
             @Nullable Component body, List<String> mentions) {
         return publish(new CrossServerChat.Payload(CrossServerChat.Kind.PRIVATE, sender, senderName, targetName,
                 CrossServerChat.outgoingText(text), server(), body, mentions));
+    }
+
+    /** Sends this server's shown-name list; {@code false} when the proxy is not ready. */
+    boolean publishNames(byte[] data) {
+        if (!available()) {
+            return false;
+        }
+        try {
+            proxy.publish(TOPIC_NAMES, data);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private String server() {

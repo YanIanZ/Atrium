@@ -77,10 +77,10 @@ final class GiftPetManager implements Listener {
         // Cancel the interaction so mounting or leashing does not also happen on the transfer click.
         event.setCancelled(true);
         ctx.messages().send(owner, "playerplus.giftpet-transferred",
-                Msg.unparsed("player", target.getName()), Msg.unparsed("pet", pet.getType().name()));
+                Msg.unparsed("player", Msg.shownName(target)), Msg.unparsed("pet", pet.getType().name()));
         ctx.scheduler().supplyOnEntity(target, () -> {
             ctx.messages().send(target, "playerplus.giftpet-received",
-                    Msg.unparsed("player", owner.getName()), Msg.unparsed("pet", pet.getType().name()));
+                    Msg.unparsed("player", Msg.shownName(owner)), Msg.unparsed("pet", pet.getType().name()));
             return null;
         }).exceptionally(error -> {
             if (!(error instanceof dev.yanianz.atrium.core.scheduler.Scheduler.EntityRetiredException)) {

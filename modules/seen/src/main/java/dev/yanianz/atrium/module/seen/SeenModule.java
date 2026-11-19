@@ -451,7 +451,7 @@ public final class SeenModule implements AtriumModule, Listener {
             for (Player member : group.members()) {
                 boolean hidden = vanish.map(v -> v.isVanished(member.getUniqueId())).orElse(false);
                 names.add(ctx.messages().render(sender, hidden ? "seen.list-player-vanished" : "seen.list-player",
-                        Msg.unparsed("player", member.getName())));
+                        Msg.unparsed("player", Msg.shownName(member))));
             }
             Component title = group.group() == null
                     ? ctx.messages().render(sender, "seen.list-other")

@@ -46,12 +46,26 @@ public final class Theme {
 
     private final Map<String, TextColor> colors;
     private final String prefix;
+    private final Map<String, String> prefixes;
     private final Gui gui;
     private final TagResolver tags;
 
     private Theme(Map<String, TextColor> colors, String prefix, Gui gui) {
+        this(colors, prefix, Map.of(), gui);
+    }
+
+    private Theme(Map<String, TextColor> colors, String prefix, Map<String, String> prefixes, Gui gui) {
         this.colors = Collections.unmodifiableMap(new LinkedHashMap<>(colors));
         this.prefix = prefix;
+        Map<String, String> own = new LinkedHashMap<>();
+        if (prefixes != null) {
+            prefixes.forEach((bundle, template) -> {
+                if (bundle != null && template != null && !bundle.isBlank()) {
+                    own.put(bundle.trim().toLowerCase(java.util.Locale.ROOT), template);
+                }
+            });
+        }
+        this.prefixes = Collections.unmodifiableMap(own);
         this.gui = gui;
         TagResolver.Builder builder = TagResolver.builder();
         this.colors.forEach((name, color) -> builder.tag(name, Tag.styling(color)));
@@ -84,7 +98,7 @@ public final class Theme {
             colors.put(name, parsed);
         }
         Gui gui = gui(settings.gui, warn);
-        return new Theme(colors, settings.prefix == null ? "" : settings.prefix, gui);
+        return new Theme(colors, settings.prefix == null ? "" : settings.prefix, settings.prefixes, gui);
     }
 
     private static Gui gui(CoreConfig.@Nullable GuiSettings settings, Consumer<String> warn) {
@@ -152,6 +166,11 @@ public final class Theme {
     /** Admin prefix template; empty means "use the lang file's core.prefix". */
     public String prefix() {
         return prefix;
+    }
+
+    /** Prefix templates per message bundle (lower-case bundle name); a bundle without one uses {@link #prefix()}. */
+    public Map<String, String> prefixes() {
+        return prefixes;
     }
 
     public Gui gui() {

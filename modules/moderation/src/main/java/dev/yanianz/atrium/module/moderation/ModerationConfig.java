@@ -65,6 +65,82 @@ public class ModerationConfig {
     @Comment("Book page limit settings.")
     public Books books = new Books();
 
+    @Comment("The /punish <player> menu: one click applies a preset punishment.")
+    public PunishMenu punishMenu = new PunishMenu();
+
+    @Comment("Player reports: /report <player> [reason] and the staff queue /reports.")
+    public Reports reports = new Reports();
+
+    @ConfigSerializable
+    public static class PunishMenu {
+        @Comment("Ask for a confirmation before a preset is applied.")
+        public boolean confirm = true;
+
+        @Comment("The presets. category: ban, mute, warn or kick (the column of the menu; at most 4 per column).\n"
+                + "command: run as the staff member, so their own permissions, exemptions and warning escalation\n"
+                + "apply; {player} is the target. A preset whose command the staff member may not use is hidden.")
+        public List<Preset> presets = defaultPunishPresets();
+    }
+
+    @ConfigSerializable
+    public static class Preset {
+        public String category = "warn";
+        public String label = "";
+        public String description = "";
+        public String command = "";
+
+        public Preset() {}
+
+        Preset(String category, String label, String description, String command) {
+            this.category = category;
+            this.label = label;
+            this.description = description;
+            this.command = command;
+        }
+    }
+
+    @ConfigSerializable
+    public static class Reports {
+        @Comment("Seconds a player must wait between two reports.")
+        public int cooldownSeconds = 60;
+
+        @Comment("Open reports one player may have at the same time.")
+        public int maxOpenPerPlayer = 3;
+
+        @Comment("Longer report reasons are cut to this many characters (at most 256).")
+        public int maxReasonLength = 120;
+
+        @Comment("Reasons offered by the menu of /report <player> (used without a reason).")
+        public List<String> reasons = new ArrayList<>(List.of("Cheating or hacked client", "Chat abuse or spam",
+                "Scamming", "Bug abuse", "Island griefing", "Inappropriate name or skin"));
+
+        @Comment("Open reports shown by /reports (oldest first).")
+        public int queueSize = 200;
+    }
+
+    private static List<Preset> defaultPunishPresets() {
+        List<Preset> list = new ArrayList<>();
+        list.add(new Preset("ban", "Using hacks or cheats - 15d", "Unauthorised modifications that give an unfair advantage.",
+                "tempban {player} 15d Using hacks or cheats"));
+        list.add(new Preset("ban", "Toxic behavior - 5d", "Repeated insults, threats or harassment.",
+                "tempban {player} 5d Toxic behavior"));
+        list.add(new Preset("ban", "Bug abuse - 30d", "Deliberate use of a game bug to gain an advantage.",
+                "tempban {player} 30d Bug abuse"));
+        list.add(new Preset("ban", "Permanent ban", "For the worst or repeated offences.",
+                "ban {player} Severe or repeated rule breaking"));
+        list.add(new Preset("mute", "Excessive spam - 12h", "Flooding the chat.", "tempmute {player} 12h Excessive spam"));
+        list.add(new Preset("mute", "Inappropriate language - 6h", "Swearing or offensive words.",
+                "tempmute {player} 6h Inappropriate language"));
+        list.add(new Preset("mute", "Server advertising - 3h", "Advertising another server.",
+                "tempmute {player} 3h Server advertising"));
+        list.add(new Preset("warn", "Disruptive behavior", "Disturbing other players.", "warn {player} Disruptive behavior"));
+        list.add(new Preset("warn", "Mild offensive language", "A first reminder about language.",
+                "warn {player} Mild offensive language"));
+        list.add(new Preset("warn", "Breaking minor rules", "A small rule was broken.", "warn {player} Breaking minor rules"));
+        list.add(new Preset("kick", "Kick", "Remove the player from the server once.", "kick {player} Removed by staff"));
+        return list;
+    }
+
     @ConfigSerializable
     public static class Feedback {
         @Comment("Send the issuer a one-line summary (id, type, target, reason, duration) after every punishment\n"

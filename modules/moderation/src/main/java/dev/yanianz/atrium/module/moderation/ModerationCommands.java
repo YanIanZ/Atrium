@@ -195,16 +195,17 @@ final class ModerationCommands {
                 "Restrict the addresses an account may log in from"));
 
         // Server-wide chat mute.
-        ctx.command(spec(Cmds.literal("mutechat", PERM + "mutechat")
+        ctx.command(CommandSpec.of(Cmds.literal("mutechat", PERM + "mutechat")
                 .executes(this::muteChat)
                 .then(Commands.argument("args", StringArgumentType.greedyString())
                         .suggests(Cmds.suggest(() -> List.of("30m", "1h", "6h", "1d", "-s")))
-                        .executes(this::muteChat)), "Mute chat for everyone (bypass with " + ModerationListener.MUTECHAT_BYPASS + ")"));
-        ctx.command(spec(Cmds.literal("unmutechat", PERM + "unmutechat")
+                        .executes(this::muteChat)).build(),
+                "Mute chat for everyone (bypass with " + ModerationListener.MUTECHAT_BYPASS + ")", "lockchat"));
+        ctx.command(CommandSpec.of(Cmds.literal("unmutechat", PERM + "unmutechat")
                 .executes(this::unmuteChat)
                 .then(Commands.argument("args", StringArgumentType.greedyString())
                         .suggests(Cmds.suggest(() -> List.of("-s")))
-                        .executes(this::unmuteChat)), "Lift the server-wide chat mute"));
+                        .executes(this::unmuteChat)).build(), "Lift the server-wide chat mute", "unlockchat"));
 
         // Staff notes.
         ctx.command(spec(Cmds.literal("note", PERM + "note")
@@ -545,8 +546,23 @@ final class ModerationCommands {
         } else if (type == PunishmentType.WARN) {
             duration = warningLifetime();
         }
-        ArgParser.Parsed parsed = flags(c, optional(c, "reason"), type == PunishmentType.MUTE || type == PunishmentType.TEMPMUTE);
-        PunishmentType finalType = parsed.shadow() ? PunishmentType.SHADOWMUTE : type;
+        // WuretaMC: "/ban Steve 7d reason" and "/mute Steve 12h reason" are timed (the network's Discord bot and
+        // staff habits write the duration first); a reason that merely starts with a number stays a reason.
+        String rawReason = optional(c, "reason");
+        PunishmentType timedType = type;
+        if (duration == null && rawReason != null && (type == PunishmentType.BAN || type == PunishmentType.MUTE)) {
+            String[] lead = rawReason.trim().split("\\s+", 2);
+            if (lead[0].matches("(?i)(\\d{1,6}(mo|w|d|h|m|s))+")) {
+                Optional<Duration> timed = Durations.parse(lead[0]).filter(d -> !d.isZero());
+                if (timed.isPresent()) {
+                    duration = timed.get();
+                    timedType = type == PunishmentType.BAN ? PunishmentType.TEMPBAN : PunishmentType.TEMPMUTE;
+                    rawReason = lead.length > 1 ? lead[1] : null;
+                }
+            }
+        }
+        ArgParser.Parsed parsed = flags(c, rawReason, type == PunishmentType.MUTE || type == PunishmentType.TEMPMUTE);
+        PunishmentType finalType = parsed.shadow() ? PunishmentType.SHADOWMUTE : timedType;
         String reason = reason(parsed.text());
         Duration finalDuration = duration;
         resolve(name).thenCompose(target -> {
